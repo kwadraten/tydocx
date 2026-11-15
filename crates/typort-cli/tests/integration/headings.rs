@@ -165,26 +165,35 @@ fn edge_super_sub_in_heading_preserved() {
 }
 
 #[test]
-fn features_chinese_heading_numbering_definition() {
-    let num_xml = fixture_part("complex_paper", "word/numbering.xml");
-
-    // Feature 2: Chinese heading numbering abstract definition exists
-    assert!(
-        num_xml.contains("chineseCountingThousand"),
-        "numbering.xml should contain chineseCountingThousand format"
-    );
-    assert!(
-        num_xml.contains("decimalEnclosedCircleChinese"),
-        "numbering.xml should contain decimalEnclosedCircleChinese for level 4"
-    );
-    assert!(
-        num_xml.contains("w:abstractNumId=\"3\""),
-        "numbering.xml should have abstractNumId 3 for Chinese headings"
-    );
-    assert!(
-        num_xml.contains("w:numId=\"3\""),
-        "numbering.xml should have numId 3 instance for Chinese headings"
-    );
+fn issue_chinese_heading_numbering_not_emitted_when_unreferenced() {
+    // #29: the Chinese five-level abstract numbering (abstractNum 3) was
+    // emitted unconditionally whenever numbering.xml was written, but no
+    // w:numPr ever references numId 3 — heading numbering is literal text,
+    // not linked Word numbering. Both a Chinese paper and a plain nested
+    // list must come out without it, while the real list definitions stay.
+    for fixture in ["complex_paper", "edge_deep_nested_list"] {
+        let num_xml = fixture_part(fixture, "word/numbering.xml");
+        assert!(
+            !num_xml.contains("chineseCountingThousand"),
+            "{fixture}: numbering.xml must not contain chineseCountingThousand"
+        );
+        assert!(
+            !num_xml.contains("decimalEnclosedCircleChinese"),
+            "{fixture}: numbering.xml must not contain decimalEnclosedCircleChinese"
+        );
+        assert!(
+            !num_xml.contains("w:abstractNumId=\"3\""),
+            "{fixture}: numbering.xml must not have abstractNumId 3"
+        );
+        assert!(
+            !num_xml.contains("w:numId=\"3\""),
+            "{fixture}: numbering.xml must not have numId 3 instance"
+        );
+        assert!(
+            num_xml.contains("w:abstractNumId=\"1\"") && num_xml.contains("w:abstractNumId=\"2\""),
+            "{fixture}: ordered/bullet abstract numbering must stay"
+        );
+    }
 }
 
 #[test]

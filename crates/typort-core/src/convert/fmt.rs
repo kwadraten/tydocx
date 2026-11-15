@@ -64,6 +64,21 @@ impl InlineFmt {
         run.superscript = self.superscript;
         run.subscript = self.subscript;
     }
+
+    /// Merge these flags onto a [`Run`] without clearing flags it already
+    /// carries. Use this when the run was produced by another walk (e.g.
+    /// `extract_runs`, which preserves nested smallcaps/super/sub) and this
+    /// `InlineFmt` is an *additional* layer (e.g. emphasis wrapping the
+    /// content). `apply_to` instead overwrites every flag and would clobber
+    /// the inner formatting — see #20.
+    pub fn or_into(self, run: &mut Run) {
+        run.bold |= self.bold;
+        run.italic |= self.italic;
+        run.monospace |= self.monospace;
+        run.smallcaps |= self.smallcaps;
+        run.superscript |= self.superscript;
+        run.subscript |= self.subscript;
+    }
 }
 
 #[cfg(test)]
@@ -109,5 +124,21 @@ mod tests {
                 && run.superscript
                 && run.subscript
         );
+    }
+
+    #[test]
+    fn or_into_preserves_existing_flags() {
+        let fmt = InlineFmt::italic();
+        let mut run = typort_ooxml::document::Run::new("x");
+        run.monospace = true;
+        run.superscript = true;
+        fmt.or_into(&mut run);
+        assert!(run.italic && run.monospace && run.superscript && !run.bold);
+        // apply_to would have cleared the inner flags — the reason or_into
+        // exists (see #20).
+        let mut run = typort_ooxml::document::Run::new("x");
+        run.monospace = true;
+        fmt.apply_to(&mut run);
+        assert!(!run.monospace);
     }
 }

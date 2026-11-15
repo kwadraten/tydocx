@@ -146,6 +146,12 @@ pub(super) fn write_run<W: Write>(
                         .with_attribute(("w:val", hl_color.as_str()))
                         .write_empty()?;
                 }
+                if let Some(shading) = &run.shading {
+                    rpr.create_element("w:shd")
+                        .with_attribute(("w:val", "clear"))
+                        .with_attribute(("w:fill", shading.as_str()))
+                        .write_empty()?;
+                }
                 if run.superscript {
                     rpr.create_element("w:vertAlign")
                         .with_attribute(("w:val", "superscript"))

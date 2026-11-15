@@ -220,6 +220,10 @@ pub struct Run {
     /// Highlight color name (e.g. "yellow", "green", "cyan").
     /// `Some(...)` activates highlighting; `None` means no highlight.
     pub highlight_color: Option<String>,
+    /// Character shading fill as a 6-digit hex string (e.g. "FFCCCC").
+    /// Used for highlight fills that are not one of the sixteen named
+    /// `w:highlight` colors; `None` means no shading.
+    pub shading: Option<String>,
     pub smallcaps: bool,
     /// Text color as a 6-digit hex string (e.g. "FF0000" for red).
     /// `None` means inherit the default (black).
@@ -252,6 +256,7 @@ impl Run {
             underline: false,
             strikethrough: false,
             highlight_color: None,
+            shading: None,
             smallcaps: false,
             color: None,
             font_ascii: None,
@@ -288,6 +293,7 @@ impl Run {
             underline,
             strikethrough,
             highlight_color,
+            shading,
             smallcaps,
             color,
             font_ascii,
@@ -303,6 +309,7 @@ impl Run {
             underline: *underline,
             strikethrough: *strikethrough,
             highlight_color: highlight_color.as_deref(),
+            shading: shading.as_deref(),
             smallcaps: *smallcaps,
             color: color.as_deref(),
             font_ascii: font_ascii.as_deref(),
@@ -332,6 +339,7 @@ pub struct RunFormat<'a> {
     underline: bool,
     strikethrough: bool,
     highlight_color: Option<&'a str>,
+    shading: Option<&'a str>,
     smallcaps: bool,
     color: Option<&'a str>,
     font_ascii: Option<&'a str>,

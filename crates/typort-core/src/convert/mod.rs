@@ -14,6 +14,7 @@ mod fmt;
 mod footnote;
 mod frames;
 mod headings;
+mod highlight;
 mod image;
 pub mod inline;
 mod inline_walk;
@@ -48,7 +49,7 @@ use typst_library::model::{
     CiteElem, CiteGroup, EmphElem, HeadingElem, LinkElem, OutlineElem, RefElem, StrongElem,
     TableElem,
 };
-use typst_library::text::{Lang, Region, SmartQuoteElem, SmartQuoter, SmartQuotes};
+use typst_library::text::{HighlightElem, Lang, Region, SmartQuoteElem, SmartQuoter, SmartQuotes};
 
 use crate::world::TyportWorld;
 use fmt::InlineFmt;
@@ -62,6 +63,7 @@ use dom::{
     subtree_has_element, tag_name,
 };
 use headings::handle_heading;
+use highlight::{HighlightStyle, highlight_style};
 use inline_walk::{InlineOptions, collect_inlines};
 use lists::{convert_html_list, convert_html_list_to_paragraphs, handle_list_tag};
 use postprocess::{apply_paragraph_formatting, extract_document_metadata};

@@ -928,6 +928,46 @@ fn issue_smallcaps_whitespace_run_not_marked() {
 }
 
 #[test]
+fn issue_emphasis_nested_format_keeps_inner_flags() {
+    let xml = fixture_doc_xml("issue_emphasis_nested_format");
+    // The fixture only contains the two nested cases, so every marker here
+    // comes from a run that must carry both flags: italic + superscript for
+    // "sup", bold + smallcaps for "sc".
+    assert!(xml.contains("<w:i/>"), "emphasis should produce w:i");
+    assert!(
+        xml.contains("w:vertAlign w:val=\"superscript\""),
+        "superscript inside emphasis should keep its vertAlign"
+    );
+    assert!(xml.contains("<w:b/>"), "strong should produce w:b");
+    assert!(
+        xml.contains("<w:smallCaps/>"),
+        "smallcaps inside strong should keep its smallCaps"
+    );
+}
+
+#[test]
+fn issue_highlight_color_passthrough() {
+    let xml = fixture_doc_xml("issue_highlight_color");
+    // Default fill and the gradient fallback are the two yellow highlights.
+    assert_eq!(
+        xml.matches("<w:highlight w:val=\"yellow\"/>").count(),
+        2,
+        "default and gradient highlights should be yellow"
+    );
+    assert!(
+        xml.contains("<w:highlight w:val=\"blue\"/>"),
+        "named blue fill should pass through as w:highlight blue"
+    );
+    assert!(
+        xml.contains("<w:shd w:val=\"clear\" w:fill=\"FFCCCC\"/>"),
+        "arbitrary pink fill should pass through as character shading"
+    );
+    for text in ["default text", "pink text", "blue text", "gradient text"] {
+        assert!(xml.contains(text), "highlight text '{text}' present");
+    }
+}
+
+#[test]
 fn issue_highlight_space_preserved() {
     let xml = fixture_doc_xml("issue_highlight_space");
     assert!(xml.contains("Hello"), "highlight text present");

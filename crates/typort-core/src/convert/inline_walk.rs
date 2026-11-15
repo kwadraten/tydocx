@@ -1,9 +1,10 @@
 use super::{
-    Alignment, CiteElem, CiteGroup, EmphElem, EquationElem, HtmlDocument, HtmlElement, HtmlNode,
-    InlineFmt, LinkElem, Paragraph, RefElem, Run, StrongElem, Tag, WalkCtx, collect_flat_text,
-    content_at_location, drain_text_runs, element_at_location, emit_block_equation, find_img_src,
-    find_tag_end, first_biblioref_href, footnote, get_attr_value, has_attr_value, image, inline,
-    is_block_equation, run_with_span, sanitize_anchor, subtree_has_element, tag_name,
+    Alignment, CiteElem, CiteGroup, EmphElem, EquationElem, HighlightElem, HighlightStyle,
+    HtmlDocument, HtmlElement, HtmlNode, InlineFmt, LinkElem, Paragraph, RefElem, Run, StrongElem,
+    Tag, WalkCtx, collect_flat_text, content_at_location, drain_text_runs, element_at_location,
+    emit_block_equation, find_img_src, find_tag_end, first_biblioref_href, footnote,
+    get_attr_value, has_attr_value, highlight_style, image, inline, is_block_equation,
+    run_with_span, sanitize_anchor, subtree_has_element, tag_name,
 };
 
 /// The behavior needed by a caller of the shared HTML inline collector.
@@ -253,7 +254,7 @@ pub(super) fn handle_inline_tag(
         "ref" => handle_inline_ref_tag(tag, children, i, ctx, para),
         "link" => handle_inline_link_tag(tag, children, i, ctx, para),
         "super" | "sub" | "raw" | "underline" | "strike" | "highlight" | "overline"
-        | "smallcaps" => handle_inline_format_tag(tag, children, i, para),
+        | "smallcaps" => handle_inline_format_tag(tag, children, i, ctx, para),
         "cite-group" => handle_inline_cite_group_tag(tag, children, i, ctx, para),
         "par" | "context" => handle_nested_inline_tag(tag, children, i, ctx, para),
         "caption" => handle_inline_caption_tag(tag, children, i, ctx, para),
@@ -299,11 +300,10 @@ pub(super) fn handle_emphasis_tag(
         para.inlines.append(&mut tmp.inlines);
     } else if let Some(body) = body {
         for mut run in inline::extract_runs(&body) {
-            if fmt.bold {
-                run.bold = true;
-            } else {
-                run.italic = true;
-            }
+            // The runs already carry formatting from nested elements
+            // (smallcaps/super/sub); merge the emphasis flag instead of
+            // overwriting them (see #20).
+            fmt.or_into(&mut run);
             para.push_run(run);
         }
     }
@@ -422,6 +422,7 @@ pub(super) fn handle_inline_format_tag(
     tag: &Tag,
     children: &[HtmlNode],
     i: usize,
+    ctx: &WalkCtx,
     para: &mut Paragraph,
 ) -> usize {
     let end = find_tag_end(children, i, tag.location());
@@ -429,11 +430,40 @@ pub(super) fn handle_inline_format_tag(
     if !text.is_empty() {
         let mut run = Run::new(&text);
         if let Tag::Start(content, _) = tag {
-            apply_inline_format(content.elem().name(), &mut run);
+            let name = content.elem().name();
+            if name == "highlight" {
+                apply_highlight_fill(ctx, tag, &mut run);
+            } else {
+                apply_inline_format(name, &mut run);
+            }
         }
         para.push_run(run);
     }
     end
+}
+
+/// Resolve a highlight's declared fill and write its OOXML form onto the
+/// run. Falls back to the historical yellow when the element can't be
+/// resolved at this location, or when the fill is unset (Typst's default).
+fn apply_highlight_fill(ctx: &WalkCtx, tag: &Tag, run: &mut Run) {
+    let Some(highlight) = element_at_location::<HighlightElem>(ctx.html_doc, tag.location()) else {
+        run.highlight_color = Some("yellow".into());
+        return;
+    };
+    // `fill` is a settable field: `as_option` reads the value stored on the
+    // realized element. An explicitly set `none` means no highlight; an
+    // unset fill means Typst's default yellow — the same pattern
+    // `is_block_equation` uses for `block`.
+    let style = match highlight.fill.as_option() {
+        Some(Some(paint)) => highlight_style(Some(paint)),
+        Some(None) => HighlightStyle::None,
+        None => HighlightStyle::Named("yellow"),
+    };
+    match style {
+        HighlightStyle::Named(name) => run.highlight_color = Some(name.into()),
+        HighlightStyle::Shading(hex) => run.shading = Some(hex),
+        HighlightStyle::None => {}
+    }
 }
 
 pub(super) fn handle_inline_cite_group_tag(
@@ -498,6 +528,8 @@ pub(super) fn handle_inline_caption_tag(
 }
 
 /// Apply the appropriate formatting flag to a `Run` based on the inline tag name.
+/// Highlight is not handled here: its declared fill is resolved with the
+/// element in `apply_highlight_fill`.
 pub(super) fn apply_inline_format(tag_name: &str, run: &mut Run) {
     match tag_name {
         "super" => run.superscript = true,
@@ -505,7 +537,6 @@ pub(super) fn apply_inline_format(tag_name: &str, run: &mut Run) {
         "raw" => run.monospace = true,
         "underline" | "overline" => run.underline = true,
         "strike" => run.strikethrough = true,
-        "highlight" => run.highlight_color = Some("yellow".into()),
         "smallcaps" => run.smallcaps = true,
         _ => {}
     }

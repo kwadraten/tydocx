@@ -54,50 +54,15 @@ pub(super) fn generate_numbering_xml(
                     }
                     Ok(())
                 })?;
-            // Abstract numbering 3: Chinese five-level heading numbering
-            // Available for opt-in use; not auto-linked to heading styles.
-            w.create_element("w:abstractNum")
-                .with_attribute(("w:abstractNumId", "3"))
-                .write_inner_content(|abs| {
-                    // Level 0: 一、二、三、 (chineseCountingThousand)
-                    write_numbering_level(
-                        abs,
-                        "0",
-                        "1",
-                        "chineseCountingThousand",
-                        "%1\u{3001}",
-                        "left",
-                    )?;
-                    // Level 1: （一）（二）（三）
-                    write_numbering_level(
-                        abs,
-                        "1",
-                        "1",
-                        "chineseCountingThousand",
-                        "\u{ff08}%2\u{ff09}",
-                        "left",
-                    )?;
-                    // Level 2: 1. 2. 3.
-                    write_numbering_level(abs, "2", "1", "decimal", "%3.", "left")?;
-                    // Level 3: （1）（2）（3）
-                    write_numbering_level(abs, "3", "1", "decimal", "\u{ff08}%4\u{ff09}", "left")?;
-                    // Level 4: ① ② ③
-                    write_numbering_level(
-                        abs,
-                        "4",
-                        "1",
-                        "decimalEnclosedCircleChinese",
-                        "%5",
-                        "left",
-                    )?;
-                    Ok(())
-                })?;
             // Numbering instance 1 -> abstractNum 1 (ordered)
             write_numbering_instance(w, "1", "1", None)?;
             // Numbering instance 2 -> abstractNum 2 (unordered)
             write_numbering_instance(w, "2", "2", None)?;
-            // Numbering instance 3 -> abstractNum 3 (Chinese headings, opt-in)
-            write_numbering_instance(w, "3", "3", None)?;
+            // No abstractNum 3: the Chinese five-level heading numbering
+            // definition was emitted unconditionally but never referenced by
+            // any w:numPr — heading numbering is literal text, not linked
+            // Word numbering (see #29). It returns if heading numbering is
+            // ever linked to a numId.
             // Dynamic numbering instances for each top-level list
             for &(num_id, abstract_num_id, start) in &doc.list_num_instances {
                 let num_id_str = num_id.to_string();
