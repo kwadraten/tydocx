@@ -1,13 +1,13 @@
 # Typst ↔ OOXML 交集调查
 
-日期：2026-11-16。基线：`feature/docx-backend` @ `b5c5345`，Typst 0.15.1。
+日期：2026-11-16。基线：`feature/docx-backend` @ `31c886c` + 步骤 1 未提交改动，Typst 0.15.1。
 方法：逐项对代码核实（`crates/typort-core/src/convert/`、`crates/typort-ooxml/src/`），
 辅以 golden 快照（`tests/snapshots/*.document.xml`，即已固定的真实输出）与现有集成测试断言。
-实测转换因本机正在构建 CLI 而尚未跑通（构建仍在后台进行，见末节）；下表凡标“快照证实”的，
-均有快照文件或测试断言作证据，其余为代码级核实。
+2026-11-16 实测：16 个 conformance fixture 全部用新编 CLI（步骤 1 后的树）转换成功，
+逐项核对输出；下表凡标“实测证实”的，均有真实输出作证据。
 
 证据分级：**代码** = 实现位置可查；**快照** = golden 快照或集成测试断言证实；
-**待实测** = 代码与快照互相矛盾，需跑一次转换才能定论。
+**实测证实** = 本次跑转换核对输出所得。
 
 ## 回退层级与优先级
 
@@ -53,26 +53,26 @@ A 级（原生语义对象）最优先：标题、脚注、OMML、表格、编�
 
 | 编号 | Typst 功能 | 现状 | 证据 | Fixture |
 | --- | --- | --- | --- | --- |
-| M1 | enum 编号样式（`"a)"`、`"i."`、`"1.1"` 等） | 丢弃。只读 `<ol start>`，其余一律 decimal `"%1."` | 代码：`convert/lists.rs`（只读 `start`）；`writer/numbering.rs`（abstractNum 1 只有 decimal） | `conf-enum-numbering.typ` |
-| M2 | 单元格背景（`table(fill:)` / `table.cell(fill:)`） | 缺失。`TableCell` 无 shading 字段；`w:shd` 只在 CodeBlock 样式里写出，单元格不写 | 代码：`typort-ooxml/src/document.rs`（`TableCell` 字段）；`w:shd` 只见于 CodeBlock 样式（`typort-ooxml/src/styles.rs`） | `conf-cell-fill.typ` |
-| M3 | 浮动图形（`#place(..., float: true)`） | 缺失。writer 只有 `wp:inline`，无 `wp:anchor`；内容只靠 recovery 以纯文本存活 | 代码：`writer/image.rs`（仅 `wp:inline`）；`convert/` 全仓无 `PlaceElem` 处理 | `conf-place-float.typ` |
-| M4 | 网格布局（`#grid`） | 缺失（降级为 B 级 tab 恢复）。不转表；文本以制表位拼回 | 代码：`convert/` 全仓无 `GridElem` 处理；测试已确认现状：`recovery.rs`（`grid_content_recovered_in_output`、`grid_multi_column_has_tab_stops`）只断言文本与 tab 存在 | `conf-grid.typ` |
-| M5 | 图形与简单形状（`rect`/`line`/`circle` 等） | 缺失。无 DrawingML shapes；裸形状直接丢弃，只有放进 figure 的画布才栅格化为 PNG | 代码：`convert/` 全仓无 `RectElem`/`CircleElem`/`LineElem` 处理；`convert/image.rs`（`extract_figure_rasters`，只处理 figure 画布） | `conf-shapes.typ` |
-| M6 | 分节（栏数/边距变化） | 缺失。只检测页尺寸变化；栏数变化不产生 section；`SectionBreakType::Continuous`/`EvenPage`/`OddPage` 在 IR 里存在但 convert 从不构造 | 代码：`convert/page/sections.rs`（只比较宽高，`columns: None`）；`SectionBreakType::Continuous` 全仓零构造 | `conf-section-columns.typ` |
-| M7 | 首页不同 / 奇偶页不同页眉页脚 | 缺失。IR 只有一对 header/footer；只读第一页边区；无 `w:titlePg` | 代码：`typort-ooxml/src/document.rs`（`header`/`footer` 各一个 `Option`）；`convert/page/margin.rs`（只读 `pages()[0]`）；writer 无 `titlePg` | `conf-first-page-header.typ` |
-| M8 | 页码交叉引用（PAGEREF） | 缺失。`counter(page).at(label)` 无对应域；fields 只有 REF/HYPERLINK/TOC/PAGE | 代码：`writer/fields.rs`（无 PAGEREF） | `conf-pageref.typ` |
-| M9 | 上划线（`#overline`） | 缺失且静默错配。映射为 underline（Word 的 `w:rPr` 本无 overline） | 代码：`convert/inline_walk.rs::apply_inline_format`（`"underline" \| "overline" => run.underline = true`） | `conf-overline.typ` |
+| M1 | enum 编号样式（`"a)"`、`"i."`、`"1.1"` 等） | 丢弃。只读 `<ol start>`，其余一律 decimal `"%1."` | 实测证实：`numbering.xml` 里无 `lowerLetter`/`lowerRoman`，只有 decimal/bullet/中文五级；代码：`convert/lists.rs`（只读 `start`）；`writer/numbering.rs`（abstractNum 1 只有 decimal） | `conf-enum-numbering.typ` |
+| M2 | 单元格背景（`table(fill:)` / `table.cell(fill:)`） | 缺失。`TableCell` 无 shading 字段；`w:shd` 只在 CodeBlock 样式里写出，单元格不写 | 实测证实：输出 `w:shd` 出现 0 次，表本身在；代码：`typort-ooxml/src/document.rs`（`TableCell` 字段） | `conf-cell-fill.typ` |
+| M3 | 浮动图形（`#place(..., float: true)`） | 缺失。writer 只有 `wp:inline`，无 `wp:anchor`；实测连 `wp:inline` 都没有，内容只靠 recovery 以纯文本存活 | 实测证实：输出无 `wp:anchor`、无 `wp:inline`，“Floated callout”文本在；代码：`writer/image.rs`（仅 `wp:inline`）；`convert/` 全仓无 `PlaceElem` 处理 | `conf-place-float.typ` |
+| M4 | 网格布局（`#grid`） | 缺失（降级为 B 级 tab 恢复）。不转表；文本以制表位拼回 | 实测证实：输出无 `w:tbl`、有 `w:tab`，6 个单元格文本全在；代码：`convert/` 全仓无 `GridElem` 处理 | `conf-grid.typ` |
+| M5 | 图形与简单形状（`rect`/`line`/`circle` 等） | 缺失。无 DrawingML shapes；实测输出无任何 media part，形状本身丢弃，只有 rect 里的文字以纯文本存活；只有放进 figure 的画布才栅格化为 PNG | 实测证实：输出无 `a:prstGeom`、无 media part，“Text inside a box”文本在；代码：`convert/` 全仓无 `RectElem`/`CircleElem`/`LineElem` 处理；`convert/image.rs`（`extract_figure_rasters`，只处理 figure 画布） | `conf-shapes.typ` |
+| M6 | 分节（栏数/边距变化） | 缺失。只检测页尺寸变化；栏数变化不产生 section；实测整篇只有一个 body 级 `sectPr`，带最后的 `<w:cols w:num="2"/>`——前半篇（columns: 1）也被渲染成两栏。`SectionBreakType::Continuous`/`EvenPage`/`OddPage` 在 IR 里存在但 convert 从不构造 | 实测证实：输出恰一个 `sectPr`，含 `w:cols num=2`；代码：`convert/page/sections.rs`（只比较宽高，`columns: None`） | `conf-section-columns.typ` |
+| M7 | 首页不同 / 奇偶页不同页眉页脚 | 缺失。IR 只有一对 header/footer；只读第一页边区；无 `w:titlePg`；实测唯一的 header 就是首页那个（“First-page header”），running header 丢了 | 实测证实：只一个 `word/header1.xml`，内容为 “First-page header”，`w:headerReference w:type="default"`，无 `titlePg`；代码：`typort-ooxml/src/document.rs`（`header`/`footer` 各一个 `Option`）；`convert/page/margin.rs`（只读 `pages()[0]`） | `conf-first-page-header.typ` |
+| M8 | 页码交叉引用（PAGEREF） | 缺失。`counter(page).at(label)` 无对应域；实测写出字面文本 “The introduction starts on page 1.”；fields 只有 REF/HYPERLINK/TOC/PAGE | 实测证实：输出无 PAGEREF、无 REF；代码：`writer/fields.rs`（无 PAGEREF） | `conf-pageref.typ` |
+| M9 | 上划线（`#overline`） | 缺失且静默错配。映射为 underline（Word 的 `w:rPr` 本无 overline） | 实测证实：overline 文本与 underline 文本的 run 属性完全相同（`<w:u w:val="single"/>`）；代码：`convert/inline_walk.rs::apply_inline_format`（`"underline" \| "overline" => run.underline = true`） | `conf-overline.typ` |
 
 ## 有损
 
 | 编号 | Typst 功能 | 现状 | 证据 | Fixture |
 | --- | --- | --- | --- | --- |
-| L1 | 嵌套列表（2 级及以下） | 有损。段落写出 `w:ilvl` 1–3，但 `numbering.xml` 里有序/无序 abstractNum 只定义了 ilvl 0，嵌套级的标记格式未定义，Word 按自身默认处理 | 代码：`writer/numbering.rs`（abstractNum 1/2 只有 level 0）；快照证实：`edge_deep_nested_list` 含 `w:ilvl` 0/1/2/3 | `conf-nested-list.typ` |
-| L2 | 标题编号（`#set heading(numbering:)`） | 有损。编号以字面文本 run 前置（“一、”“1.1”等原样写出），不是 Word 的链接编号；移动标题后编号不更新。中文五级 abstractNum 3 已定义但“未自动链接到标题样式” | 代码：`convert/headings.rs`（`heading.numbers` 前置为文本）；`writer/numbering.rs`（abstractNum 3 注释） | `conf-heading-numbering.typ` |
-| L3 | 页眉页脚格式 | 有损。边区提取把全部片段拼成一个纯文本段落：字体、字号、颜色、粗体全丢；多行压成一段；对齐只按 x 位置启发式判断 | 代码：`convert/page/margin.rs::extract_margin_zone`（`Run::new(&item.text)`，单段落） | `conf-header-footer-format.typ` |
-| L4 | 矢量图（SVG、GIF/WebP、绘图画布） | 有损（D 级）。SVG 按原生像素尺寸栅格化为 PNG；GIF/WebP 重编码为 PNG；CeTZ / `#place` 曲线画布整体栅格化；一律 `wp:inline` | 代码：`convert/image.rs`（SVG→`resvg` 1x 栅格化；GIF/WebP→PNG；`rasterize_frame`） | `conf-svg-image.typ` |
-| L5 | 高亮颜色 | 有损。颜色写死 yellow，声明的 fill 被忽略（上游 issue #24） | 代码：`convert/inline_walk.rs`（`"highlight" => Some("yellow")`） | `conf-highlight-color.typ` |
-| L6 | 文内引用（`@key`） | 有损，待实测。文内只出字面数字标记 `[1]`；CITATION SDT 的 writer 存在，但 pinned 快照里没有 CITATION 域——代码与快照互相矛盾，须跑一次转换定论 | 代码：`writer/paragraph.rs`（`InlineElement::Citation` → `write_citation_sdt`）；快照：`bibliography_basic` 只有 BIBLIOGRAPHY SDT、无 CITATION、无 `smith2020` 字串；测试只断言标记存在，不区分两者 | `conf-citation-field.typ` |
+| L1 | 嵌套列表（2 级及以下） | 有损。段落写出 `w:ilvl` 1–3，但 `numbering.xml` 里有序/无序 abstractNum 只定义了 ilvl 0，嵌套级的标记格式未定义，Word 按自身默认处理 | 实测证实：输出含 `w:ilvl` 0/1/2，两个在用的 abstractNum 各只有 1 个 level（第 3 个 5 级的是常写的中文五级）；快照证实：`edge_deep_nested_list` 含 `w:ilvl` 0/1/2/3 | `conf-nested-list.typ` |
+| L2 | 标题编号（`#set heading(numbering:)`） | 有损。编号以字面文本 run 前置（“一、”“1.1”等原样写出），不是 Word 的链接编号；移动标题后编号不更新。中文五级 abstractNum 3 已定义但“未自动链接到标题样式” | 实测证实：输出标题文本为 “1 First”“1.1 First One”“2 Second”，标题段落含 `w:numPr` 0 个；代码：`convert/headings.rs`（`heading.numbers` 前置为文本） | `conf-heading-numbering.typ` |
+| L3 | 页眉页脚格式 | 有损。边区提取把全部片段拼成一个纯文本段落：字体、字号、颜色、粗体全丢；多行压成一段；对齐只按 x 位置启发式判断 | 实测证实：header part 只有一个 run “Bold header with red text”，无 `w:b`、无 `w:color`；代码：`convert/page/margin.rs::extract_margin_zone`（`Run::new(&item.text)`，单段落） | `conf-header-footer-format.typ` |
+| L4 | 矢量图（SVG、GIF/WebP、绘图画布） | 有损（D 级）。SVG 按原生像素尺寸栅格化为 PNG；GIF/WebP 重编码为 PNG；CeTZ / `#place` 曲线画布整体栅格化；一律 `wp:inline` | 实测证实：输出 media 只有 `word/media/image1.png`，有 `a:blip`，无 SVG part；代码：`convert/image.rs`（SVG→`resvg` 1x 栅格化；GIF/WebP→PNG；`rasterize_frame`） | `conf-svg-image.typ` |
+| L5 | 高亮颜色 | 有损。颜色写死 yellow，声明的 fill 被忽略（上游 issue #24） | 实测证实：两个 highlight 的值都是 `yellow`（声明的 `#ffcccc` 与默认无区别）；代码：`convert/inline_walk.rs`（`"highlight" => Some("yellow")`） | `conf-highlight-color.typ` |
+| L6 | 文内引用（`@key`） | 有损，定论：文内引用只出字面数字标记 `[1]`，包在指向书目条目书签的内部超链接里；不发 CITATION 域。CITATION SDT 的 writer 存在，但真实转换走不到它（Typst 的 HTML 导出把引用写成带字面文本的超链接，不产生 `cite-group` 标签）；测试套件把“标记而非域”定为预期行为，快照与测试一致。所谓矛盾只是 writer 在 typort-ooxml 层单测可达、转换路径上不可达。真要发 CITATION 域是后续设计决策，不是 bug 修复 | 实测证实：`conf-citation-field.typ` 输出无 CITATION、无 `w:citation`、无 key 字串；有 `w:hyperlink w:anchor="loc_3"/"loc_4"` 与对应书签；`customXml/item1.xml`（`b:Sources`）在；代码：`writer/citation.rs`（`write_citation_sdt`）、`convert/inline_walk.rs`（`handle_inline_cite_group_tag`，仅 `cite-group` 标签触发）；测试：`bibliography.rs`（`bibliography_citations_are_markers_not_field_refs`、`citations_link_to_their_bibliography_entry`） | `conf-citation-field.typ` |
 
 ## 顺带发现的文档与代码漂移（非交集缺口，记下来）
 
@@ -87,12 +87,12 @@ A 级（原生语义对象）最优先：标题、脚注、OMML、表格、编�
 
 | 上游 issue | 对应 | 本次核实 |
 | --- | --- | --- |
-| #24 高亮颜色写死 yellow | L5 | 已核实，代码级 |
-| #29 中文五级编号无条件写出 | numbering.rs 常写 abstractNum 3 | 已核实，代码级 |
-| #30 脚注与页眉页脚段落丢非文本 inline | L3（页眉页脚已核实；脚注体走 inline 收集，需另核） | 部分核实 |
+| #24 高亮颜色写死 yellow | L5 | 实测证实，仍写死 yellow |
+| #29 中文五级编号无条件写出 | numbering.rs 常写 abstractNum 3 | 实测证实：与中文无关的 fixture 输出里仍有 chineseCountingThousand abstractNum |
+| #30 脚注与页眉页脚段落丢非文本 inline | L3（页眉页脚已核实；脚注体走 inline 收集，需另核） | 部分核实：页眉页脚实测证实；脚注体仍待核 |
 | #31 表格内列表缺少 numbering part 引用 | L1（numbering 完整性） | 相关，待核对 |
-| #33 编译错误丢 span 信息 | 步骤 1（实现代理进行中） | 进行中 |
-| #34 写失败留半截文件 | 步骤 1（实现代理进行中，原子写盘） | 进行中 |
+| #33 编译错误丢 span 信息 | 步骤 1（诊断保留 span，CLI 打印 `file:line:col: message`） | 已修复（独立验收通过：`cargo test --workspace` 全过；新测试 `diagnostics::compile_error_keeps_span`、`cli::cli_reports_compile_error_with_span` 断言 `compile_error_span.typ:3:10:`） |
+| #34 写失败留半截文件 | 步骤 1（原子写盘：同目录 staging + rename） | 已修复（独立验收通过；新测试 `cli::cli_writes_output_atomically`、`cli::cli_failed_write_leaves_no_partial_output`；失败时不留 staging 文件） |
 | #19 / #20 / #21 / #22 / #23 / #25 / #26 / #27 / #28 / #32 / #35 | 行内收集模式统一、emphasis 旁路、preset 脚注字符串匹配、API 整理、空白 run 误标 smallcaps、东亚字体猜测、等宽/数学字体名子串匹配、三个 body-size 检测器直方图不一致、import 相对项目根解析、margin em 值假定 12pt、换行与段落换行语义 | 未逐项核对，留待改造后按 issue 清单确认 |
 
 ## 先补顺序（建议）
@@ -124,12 +124,12 @@ A 级（原生语义对象）最优先：标题、脚注、OMML、表格、编�
 
 ## 本次实测说明
 
-- 构建：`CARGO_BUILD_JOBS=1 cargo build -p typort --bin typort` 跑过一次（约 12 分钟，
-  依赖编译通过），终因步骤 1 实现代理正在改动的诊断重构而失败：`typort` 二进制 crate
-  4 个编译错误（`TyportWorld` 未实现 `std::error::Error`、缺失 import；E0432/E0433/E0599），
-  涉及文件均为该代理在改的文件（`main.rs`、`lib.rs`、`world.rs`、`convert/mod.rs`、新增 `diag.rs`）。
-  本次调查未动生产代码，失败与本次调查无关。树恢复可编译后，我再跑
-  `tests/fixtures/conformance/` 逐项核对输出（尤其 L6 的 CITATION 矛盾），并更新本文档。
+- 实测（2026-11-16）：树已可编译（步骤 1 已实现并独立验收通过：CI 四条全过）。
+  16 个 conformance fixture 用新编 `target/debug/typort` 逐个转换，全部 exit 0；
+  输出逐项核对见上表（凡标“实测证实”）。L6 定论：文内引用是字面标记 + 内部超链接，
+  不发 CITATION 域；所谓“代码与快照矛盾”已消解——CITATION writer 只在
+  typort-ooxml 层单测可达，真实转换走不到它，测试套件把标记行为定为预期。
+  基线：`feature/docx-backend` @ `31c886c` + 步骤 1 未提交改动。
 - Fixture：`tests/fixtures/conformance/` 下新增一批 `.typ`（每项缺口一个复现，
   另加一个 TOC 阳性对照）及支持文件（`conf-image.svg`、`conf-citation.bib`，
   由已有 fixture 复制而来）。未接入测试套件，未改现有测试文件与生产代码。
