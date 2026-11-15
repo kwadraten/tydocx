@@ -55,7 +55,8 @@ anyone "simplify" it back to a dual-compilation description. Full detail in
 - **Edition 2024**, `max_width = 100` (`rustfmt.toml`). Run `cargo fmt` — CI fails
   on unformatted code.
 - **`#![warn(clippy::pedantic)]`** per crate; **CI runs clippy with `-D warnings`**
-  (`--all-targets`). Zero warnings is a hard gate, not an aspiration.
+  (no `--all-targets`; see the verbatim commands in "What must pass"). Zero
+  warnings is a hard gate, not an aspiration.
 - **`#[allow(...)]` policy:** prefer the narrowest scope (item-level over
   file/crate-level) and pair each with a one-line justification. The legitimate
   bulk today is `cast_possible_truncation` / `cast_sign_loss` in layout math
