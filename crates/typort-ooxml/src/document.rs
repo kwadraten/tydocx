@@ -68,7 +68,7 @@ impl ImageFormat {
 }
 
 /// Embedded image data with dimensions in EMU (English Metric Units).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ImageData {
     pub bytes: Vec<u8>,
     pub format: ImageFormat,
@@ -77,7 +77,7 @@ pub struct ImageData {
 }
 
 /// List numbering info for a paragraph that is a list item.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ListInfo {
     /// Nesting level (0-based).
     pub level: u32,
@@ -122,7 +122,7 @@ impl SourceType {
 }
 
 /// A person's name for Word bibliography author fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PersonName {
     pub last: String,
     pub first: Option<String>,
@@ -130,7 +130,7 @@ pub struct PersonName {
 }
 
 /// A citation source entry for Word's bibliography data store (`customXml/item1.xml`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CitationSource {
     /// Word keys sources by tag (and the writer derives the GUID from it), so
     /// tags must be unique within a `Document` — the writer does not dedup;
@@ -153,7 +153,7 @@ pub struct CitationSource {
 }
 
 /// A single inline element within a paragraph.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InlineElement {
     /// Normal text run.
     Text(Run),
@@ -203,7 +203,7 @@ pub enum InlineElement {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "mirrors the independent w:rPr toggles"
@@ -348,7 +348,7 @@ impl RunFormat<'_> {
 }
 
 /// A footnote with its content paragraphs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Footnote {
     /// 1-based footnote ID.
     pub id: u32,
@@ -365,7 +365,7 @@ pub enum HangingIndent {
     Twips(u32),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "mirrors the independent w:pPr toggles"
@@ -603,14 +603,14 @@ impl Paragraph {
 }
 
 /// Content of a table cell: a mix of paragraphs and nested tables in order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CellContent {
     Paragraph(Paragraph),
     Table(Table),
 }
 
 /// A table cell containing paragraphs and optionally nested tables.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableCell {
     pub paragraphs: Vec<Paragraph>,
     /// Ordered cell content (paragraphs + nested tables). When non-empty, this
@@ -668,7 +668,7 @@ pub enum VMerge {
 }
 
 /// A table row containing cells.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableRow {
     pub cells: Vec<TableCell>,
 }
@@ -679,7 +679,7 @@ pub struct TableRow {
 /// three-line tables (`top`/`bottom` plus `header_sep`, everything else `None`).
 /// Derived by reading the rules actually drawn in the `PagedDocument`, so it is
 /// not tied to any particular table style.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TableBorders {
     pub top: Option<u32>,
     pub bottom: Option<u32>,
@@ -697,7 +697,7 @@ pub struct TableBorders {
 }
 
 /// A table with rows and cells.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Table {
     pub rows: Vec<TableRow>,
     /// Table width as percentage (in fiftieths of a percent, e.g. 5000 = 100%).
@@ -712,7 +712,7 @@ pub struct Table {
     pub borders: Option<TableBorders>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BlockElement {
     Paragraph(Paragraph),
     Table(Table),
@@ -788,7 +788,7 @@ fn for_each_paragraph_in_table(table: &Table, f: &mut dyn FnMut(&Paragraph)) {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Body {
     pub elements: Vec<BlockElement>,
 }
@@ -815,19 +815,19 @@ impl SectionBreakType {
 }
 
 /// A section break that ends a section, optionally overriding page settings.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SectionBreak {
     pub break_type: SectionBreakType,
     pub page_settings: Option<PageSettings>,
 }
 
 /// Header or footer content (a sequence of paragraphs).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HeaderFooter {
     pub paragraphs: Vec<Paragraph>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PageSettings {
     pub width_twips: u32,
     pub height_twips: u32,
@@ -856,7 +856,7 @@ impl Default for PageSettings {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DocumentMetadata {
     pub title: Option<String>,
     pub author: Option<String>,
@@ -909,7 +909,7 @@ impl PageNumberFormat {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DocumentStyle {
     pub body_font_ascii: String,
     pub body_font_east_asia: String,
@@ -992,7 +992,7 @@ impl Default for DocumentStyle {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Document {
     pub body: Body,
     pub page_settings: PageSettings,

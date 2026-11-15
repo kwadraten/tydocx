@@ -2,9 +2,10 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod convert;
+pub mod diag;
 pub mod world;
 
-pub use convert::convert;
+pub use convert::{convert, export};
 pub use world::{TyportWorld, compile};
 
 #[cfg(test)]

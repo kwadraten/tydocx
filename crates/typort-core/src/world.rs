@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use typst::diag::FileResult;
+use typst::diag::SourceDiagnostic;
 use typst::foundations::{Bytes, Datetime, Duration};
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook, FontInfo};
@@ -198,11 +199,12 @@ impl World for TyportWorld {
 /// Compile a `.typ` file into a paged document.
 ///
 /// # Errors
-/// Returns compilation errors if the file cannot be compiled.
-pub fn compile(world: &TyportWorld) -> Result<PagedDocument, Vec<String>> {
+/// Returns compilation errors, with their spans, if the file cannot be
+/// compiled.
+pub fn compile(world: &TyportWorld) -> Result<PagedDocument, Vec<SourceDiagnostic>> {
     let result = typst::compile::<PagedDocument>(world);
     match result.output {
         Ok(doc) => Ok(doc),
-        Err(errors) => Err(errors.iter().map(|e| e.message.to_string()).collect()),
+        Err(errors) => Err(errors.into_iter().collect()),
     }
 }

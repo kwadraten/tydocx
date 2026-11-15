@@ -85,17 +85,23 @@ re-parses the main source **and its imports** (template `lib.typ` files often hi
 
 ## The pipeline
 
-`typort_core::convert::convert(world) -> Result<Document, Vec<String>>` is the
-heart of the system. It is a linear, numbered pipeline. The steps are grouped here
-by purpose; see the numbered comments in `crates/typort-core/src/convert/mod.rs`
-for the exact order.
+`typort_core::convert::convert(world) -> Result<Document, Vec<SourceDiagnostic>>`
+is the heart of the system. It is a thin wrapper: it compiles both targets
+(`compile_both_targets`) and hands them to `export`, which runs the pipeline.
+`export(html_doc, paged_doc, world) -> Document` is the backend-shaped entry
+point for the numbered phases 2–5 — callers that already hold compiled documents
+(a host compiler, a test) use it instead of `convert`. Compilation failures keep
+their spans: they are returned as `Vec<SourceDiagnostic>`, never as plain
+strings. The steps are grouped here by purpose; see the numbered comments in
+`crates/typort-core/src/convert/mod.rs` for the exact order.
 
 ```mermaid
 flowchart TD
     INPUT["input.typ"] --> WORLD["TyportWorld (World trait: source, fonts, packages, Feature::Html)"]
-    WORLD -->|compile::&lt;HtmlDocument&gt; — semantics + introspector| CONVERT["convert(): five named phases<br/>1 compile HTML + Paged targets<br/>2 apply page + style, then AST overrides<br/>3 walk HTML body → emit BlockElements; decode &lt;img&gt; data URLs; attach figure rasters by Location<br/>4 apply headers/footers/page numbering<br/>5 run recovery and post-processing passes (metadata, bibliography, per-run styles, source breaks/smallcaps/hanging indents, sections, rules, merging, coalescing)"]
-    WORLD -->|compile::&lt;PagedDocument&gt; — geometry + frames| CONVERT
-    CONVERT --> IR["typort_ooxml::Document (the IR)"]
+    WORLD -->|compile::&lt;HtmlDocument&gt; — semantics + introspector| COMPILE["convert(): thin wrapper<br/>1 compile HTML + Paged targets"]
+    WORLD -->|compile::&lt;PagedDocument&gt; — geometry + frames| COMPILE
+    COMPILE --> EXPORT["export(html_doc, paged_doc, world): phases 2–5<br/>2 apply page + style, then AST overrides<br/>3 walk HTML body → emit BlockElements; decode &lt;img&gt; data URLs; attach figure rasters by Location<br/>4 apply headers/footers/page numbering<br/>5 run recovery and post-processing passes (metadata, bibliography, per-run styles, source breaks/smallcaps/hanging indents, sections, rules, merging, coalescing)"]
+    EXPORT --> IR["typort_ooxml::Document (the IR)"]
     IR --> WRITER["writer → XML parts → ZIP"]
     WRITER --> OUT["output.docx"]
 ```
@@ -144,7 +150,7 @@ they exercise that public API as integration tests.
 | File | Responsibility |
 |------|----------------|
 | `world.rs` | `TyportWorld`: implements Typst's `World` trait (source, system fonts, `@preview` package download, `Feature::Html`). |
-| `convert/mod.rs` | Entry orchestration: module declarations/re-exports, `WalkCtx`, equation state, and the five named pipeline phases. |
+| `convert/mod.rs` | Entry orchestration: `convert` (thin wrapper) and `export` (pipeline phases 2–5), module declarations/re-exports, `WalkCtx`, equation state, and the five named pipeline phases. |
 | `convert/block.rs` | Block-level HTML tag walk and dispatch, paragraphs, equations, figures, code blocks, blockquotes, and term lists. |
 | `convert/inline_walk.rs` | HTML inline traversal: formatted spans, links, citations, footnotes, images, and inline equations. |
 | `convert/headings.rs` | Semantic heading conversion, numbering, smart quotes, and inline heading content. |

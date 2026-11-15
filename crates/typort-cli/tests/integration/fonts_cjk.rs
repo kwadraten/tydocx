@@ -37,7 +37,7 @@ fn issue_cjk_font_east_asia() {
 /// display name (`SimSun` → `宋体`, `SimHei` → `黑体`, `KaiTi` → `楷体`).
 ///
 /// This translation reads each font's own name table, so it only fires when the
-/// font is actually installed. CI installs no CJK fonts (see CLAUDE.md), so the
+/// font is actually installed. CI installs no CJK fonts (see AGENTS.md), so the
 /// test gates each assertion on availability: with the font present it asserts
 /// the localized name; absent, it asserts the documented no-op (the English name
 /// is kept) and notes the skip. Both branches assert — it never silently passes.
@@ -99,7 +99,7 @@ fn issue_cjk_font_localized_name() {
 /// `Noto Serif SC Light`), clobbering the geometry-detected rendered CJK font
 /// (`NSimSun`). The fix cross-checks the declared list against the detected fonts.
 /// The cross-check needs NSimSun to actually render, so the strong assertion is
-/// gated on it being installed (CI has no CJK fonts — see CLAUDE.md, Testing).
+/// gated on it being installed (CI has no CJK fonts — see AGENTS.md, Testing).
 #[test]
 fn issue_cjk_fallback_list_font() {
     use typst::World as _;

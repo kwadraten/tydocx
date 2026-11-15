@@ -2,6 +2,8 @@
 mod common;
 
 mod bibliography;
+mod cli;
+mod diagnostics;
 mod fonts_cjk;
 mod footnotes;
 mod formatting;

@@ -37,6 +37,7 @@ use typort_ooxml::document::{
     ListInfo, Paragraph, ParagraphStyle, Run, Table, TableCell, TableRow, VMerge,
 };
 use typst::comemo::Track;
+use typst::diag::SourceDiagnostic;
 use typst::foundations::{Content, NativeElement, Packed, Selector, Smart, StyleChain};
 use typst::introspection::{Introspector, Location, Tag};
 use typst::model::Numbering;
@@ -125,35 +126,53 @@ impl WalkCtx<'_> {
 
 /// Convert a Typst source file to an OOXML `Document` using the tag-walker approach.
 ///
+/// Compiles both targets, then hands them to [`export`].
+///
 /// # Errors
-/// Returns compilation errors if the Typst source cannot be compiled.
-pub fn convert(world: &TyportWorld) -> Result<Document, Vec<String>> {
+/// Returns compilation errors, with their spans, if the Typst source cannot
+/// be compiled.
+pub fn convert(world: &TyportWorld) -> Result<Document, Vec<SourceDiagnostic>> {
     // 1. Compile both targets.
     let (html_doc, paged_doc) = compile_both_targets(world)?;
+    Ok(export(&html_doc, paged_doc.as_ref(), world))
+}
+
+/// Export already-compiled documents to an OOXML `Document`.
+///
+/// Runs pipeline phases 2–5 (page settings and document style, HTML walk,
+/// headers and footers, post-processing) over the compiled documents. This is
+/// the backend-shaped entry point: callers that already hold compiled
+/// documents (a host compiler, a test) use this instead of [`convert`].
+#[must_use]
+pub fn export(
+    html_doc: &HtmlDocument,
+    paged_doc: Option<&PagedDocument>,
+    world: &TyportWorld,
+) -> Document {
     let mut doc = Document::new();
 
     // 2. Apply page settings and document style.
-    apply_page_and_style(world, paged_doc.as_ref(), &mut doc);
+    apply_page_and_style(world, paged_doc, &mut doc);
 
     // 3. Walk the HTML body.
-    let body = walk_body(world, &html_doc, paged_doc.as_ref(), &mut doc);
+    let body = walk_body(world, html_doc, paged_doc, &mut doc);
 
     // 4. Apply headers and footers.
-    apply_headers_and_footers(paged_doc.as_ref(), &mut doc);
+    apply_headers_and_footers(paged_doc, &mut doc);
 
     // 5. Run post-processing passes.
-    run_post_passes(world, &html_doc, paged_doc.as_ref(), body, &mut doc);
+    run_post_passes(world, html_doc, paged_doc, body, &mut doc);
 
-    Ok(doc)
+    doc
 }
 
 fn compile_both_targets(
     world: &TyportWorld,
-) -> Result<(HtmlDocument, Option<PagedDocument>), Vec<String>> {
+) -> Result<(HtmlDocument, Option<PagedDocument>), Vec<SourceDiagnostic>> {
     let html_result = typst::compile::<HtmlDocument>(world);
     let html_doc = match html_result.output {
         Ok(doc) => doc,
-        Err(errors) => return Err(errors.iter().map(|e| e.message.to_string()).collect()),
+        Err(errors) => return Err(errors.into_iter().collect()),
     };
 
     let paged_result = typst::compile::<PagedDocument>(world);
@@ -344,4 +363,46 @@ fn run_post_passes(
     // Coalesce adjacent equally-formatted text runs last, after every per-run
     // style patch and recovery pass has settled.
     coalesce::coalesce_runs(doc);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn hello_world() -> TyportWorld {
+        TyportWorld::new(Path::new("../../tests/fixtures/hello.typ")).unwrap()
+    }
+
+    #[test]
+    fn export_matches_convert() {
+        let world = hello_world();
+        let via_convert = convert(&world).unwrap();
+        let (html_doc, paged_doc) = compile_both_targets(&world).unwrap();
+        let via_export = export(&html_doc, paged_doc.as_ref(), &world);
+        assert_eq!(via_convert, via_export);
+    }
+
+    #[test]
+    fn export_without_paged_document_still_produces_headings() {
+        let world = hello_world();
+        let (html_doc, _) = compile_both_targets(&world).unwrap();
+        let doc = export(&html_doc, None, &world);
+        let headings = doc
+            .body
+            .elements
+            .iter()
+            .filter(|element| {
+                matches!(
+                    element,
+                    BlockElement::Paragraph(p)
+                        if matches!(p.style, Some(ParagraphStyle::Heading(_)))
+                )
+            })
+            .count();
+        assert!(
+            headings >= 1,
+            "expected at least one heading, got {headings}"
+        );
+    }
 }
