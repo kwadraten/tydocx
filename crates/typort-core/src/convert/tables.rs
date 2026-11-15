@@ -1,9 +1,9 @@
 use super::{
     CellContent, Document, HtmlDocument, HtmlElement, HtmlNode, InlineFmt, InlineOptions, Location,
     Paragraph, StyleChain, Table, TableCell, TableElem, TableRow, Tag, TyportWorld, VMerge,
-    WalkCtx, collect_inlines, content_at_location, element_at_location, find_first_element,
-    find_tag_end, get_attr_value, image, is_inline_equation_at, subtree_has_element, table_align,
-    table_width, tag_name, walk_tags,
+    WalkCtx, collect_inlines, content_at_location, convert_html_list_to_paragraphs,
+    element_at_location, find_first_element, find_tag_end, get_attr_value, image,
+    is_inline_equation_at, subtree_has_element, table_align, table_width, tag_name, walk_tags,
 };
 
 /// Rowspan metadata for a single cell: `(html_cell_index, rowspan, colspan)`.
@@ -41,7 +41,7 @@ pub(super) fn convert_html_table(
     html_doc: &HtmlDocument,
     world: &TyportWorld,
 ) {
-    let Some(mut table) = convert_html_table_to_model(elem, html_doc) else {
+    let Some(mut table) = convert_html_table_to_model(elem, html_doc, doc) else {
         return;
     };
 
@@ -162,7 +162,11 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
 /// Returns `(TableRow, Vec<(cell_index, rowspan, colspan)>)` where the second
 /// element records which cells have `rowspan > 1` so the caller can insert
 /// `VMerge::Continue` cells in subsequent rows.
-pub(super) fn convert_table_row(tr: &HtmlElement, html_doc: &HtmlDocument) -> Option<RawTableRow> {
+pub(super) fn convert_table_row(
+    tr: &HtmlElement,
+    html_doc: &HtmlDocument,
+    doc: &mut Document,
+) -> Option<RawTableRow> {
     let mut cells = Vec::new();
     let mut span_info = Vec::new();
     let mut cell_idx: usize = 0;
@@ -173,7 +177,7 @@ pub(super) fn convert_table_row(tr: &HtmlElement, html_doc: &HtmlDocument) -> Op
             if tag == "td" || tag == "th" {
                 let is_header = tag == "th";
                 // Check if <td> children include <p> elements for multi-paragraph cells
-                let paragraphs = convert_cell_paragraphs(td, is_header, html_doc);
+                let paragraphs = convert_cell_paragraphs(td, is_header, html_doc, doc);
 
                 // Parse colspan and rowspan attributes
                 let colspan = get_attr_value(td, "colspan")
@@ -195,7 +199,7 @@ pub(super) fn convert_table_row(tr: &HtmlElement, html_doc: &HtmlDocument) -> Op
 
                 // Check for nested tables within the cell
                 let (final_paragraphs, cell_content) =
-                    extract_cell_content_with_nested_tables(td, html_doc, paragraphs);
+                    extract_cell_content_with_nested_tables(td, html_doc, paragraphs, doc);
 
                 cells.push(TableCell {
                     paragraphs: final_paragraphs,
@@ -224,6 +228,7 @@ pub(super) fn convert_cell_paragraphs(
     td: &HtmlElement,
     is_header: bool,
     html_doc: &HtmlDocument,
+    doc: &mut Document,
 ) -> Vec<Paragraph> {
     // Every paragraph collected below shares the same formatting: bold iff this
     // is a header cell, nothing else set.
@@ -253,47 +258,72 @@ pub(super) fn convert_cell_paragraphs(
         return vec![para];
     }
 
-    // Check if any direct children are <p> elements
-    let has_p_children = td.children.iter().any(|c| {
-        if let HtmlNode::Element(el) = c {
-            tag_name(el) == "p"
-        } else {
-            false
+    // Walk the cell's children in document order: a `<p>` becomes a paragraph,
+    // a `<ul>`/`<ol>` becomes list paragraphs carrying `w:numPr` (upstream
+    // #31), and contiguous inline content accumulates into one paragraph.
+    // Nested `<table>`s are skipped here — the nested-table path rebuilds them.
+    let mut paragraphs = Vec::new();
+    let mut range_start = 0;
+    for idx in 0..=td.children.len() {
+        if idx == td.children.len() {
+            push_cell_inline_paragraph(
+                &td.children,
+                range_start..idx,
+                fmt,
+                html_doc,
+                &mut paragraphs,
+            );
+            break;
         }
-    });
-
-    if has_p_children {
-        let mut paragraphs = Vec::new();
-        for child in &td.children {
-            if let HtmlNode::Element(el) = child
-                && tag_name(el) == "p"
-            {
-                let mut para = Paragraph::new();
-                collect_inlines(
-                    &el.children,
-                    &mut para,
-                    None,
-                    InlineOptions::generic(fmt, Some(html_doc)),
-                );
-                if !para.inlines.is_empty() {
-                    paragraphs.push(para);
-                }
-            }
-        }
-        if paragraphs.is_empty() {
-            // Fallback: collect all content as one paragraph
+        let HtmlNode::Element(el) = &td.children[idx] else {
+            continue;
+        };
+        let tag = tag_name(el);
+        if tag == "p" {
+            push_cell_inline_paragraph(
+                &td.children,
+                range_start..idx,
+                fmt,
+                html_doc,
+                &mut paragraphs,
+            );
             let mut para = Paragraph::new();
             collect_inlines(
-                &td.children,
+                &el.children,
                 &mut para,
                 None,
                 InlineOptions::generic(fmt, Some(html_doc)),
             );
-            vec![para]
-        } else {
-            paragraphs
+            if !para.inlines.is_empty() {
+                paragraphs.push(para);
+            }
+            range_start = idx + 1;
+        } else if tag == "ul" || tag == "ol" {
+            push_cell_inline_paragraph(
+                &td.children,
+                range_start..idx,
+                fmt,
+                html_doc,
+                &mut paragraphs,
+            );
+            let ordered = tag == "ol";
+            paragraphs.extend(convert_html_list_to_paragraphs(
+                el, doc, ordered, html_doc, fmt,
+            ));
+            range_start = idx + 1;
+        } else if tag == "table" {
+            push_cell_inline_paragraph(
+                &td.children,
+                range_start..idx,
+                fmt,
+                html_doc,
+                &mut paragraphs,
+            );
+            range_start = idx + 1;
         }
-    } else {
+    }
+    if paragraphs.is_empty() {
+        // Fallback: collect all content as one paragraph
         let mut para = Paragraph::new();
         collect_inlines(
             &td.children,
@@ -302,6 +332,32 @@ pub(super) fn convert_cell_paragraphs(
             InlineOptions::generic(fmt, Some(html_doc)),
         );
         vec![para]
+    } else {
+        paragraphs
+    }
+}
+
+/// Collect an inline range of a cell's children into one paragraph (if it has
+/// content) and push it — the shared flush step of the cell walk.
+fn push_cell_inline_paragraph(
+    children: &[HtmlNode],
+    range: std::ops::Range<usize>,
+    fmt: InlineFmt,
+    html_doc: &HtmlDocument,
+    paragraphs: &mut Vec<Paragraph>,
+) {
+    if range.is_empty() {
+        return;
+    }
+    let mut para = Paragraph::new();
+    collect_inlines(
+        &children[range],
+        &mut para,
+        None,
+        InlineOptions::generic(fmt, Some(html_doc)),
+    );
+    if !para.inlines.is_empty() {
+        paragraphs.push(para);
     }
 }
 
@@ -316,6 +372,7 @@ pub(super) fn extract_cell_content_with_nested_tables(
     td: &HtmlElement,
     html_doc: &HtmlDocument,
     paragraphs: Vec<Paragraph>,
+    doc: &mut Document,
 ) -> (Vec<Paragraph>, Vec<CellContent>) {
     // Check if any child (direct or nested in a wrapper div/span) is a <table>
     // `subtree_has_element` also sees tables represented as flattened
@@ -327,7 +384,7 @@ pub(super) fn extract_cell_content_with_nested_tables(
 
     // Walk children in order, collecting paragraphs and nested tables
     let mut content: Vec<CellContent> = Vec::new();
-    collect_cell_content_recursive(&td.children, html_doc, &mut content);
+    collect_cell_content_recursive(&td.children, html_doc, &mut content, doc);
 
     // Also build the flat paragraphs list for backward compat
     let flat_paragraphs: Vec<Paragraph> = content
@@ -356,6 +413,7 @@ pub(super) fn collect_cell_content_recursive(
     children: &[HtmlNode],
     html_doc: &HtmlDocument,
     content: &mut Vec<CellContent>,
+    doc: &mut Document,
 ) {
     for child in children {
         match child {
@@ -363,9 +421,23 @@ pub(super) fn collect_cell_content_recursive(
                 let tag = tag_name(el);
                 if tag == "table" {
                     // Convert this as a nested table
-                    let table = convert_html_table_to_model(el, html_doc);
+                    let table = convert_html_table_to_model(el, html_doc, doc);
                     if let Some(t) = table {
                         content.push(CellContent::Table(t));
+                    }
+                } else if tag == "ul" || tag == "ol" {
+                    // A list inside the cell: same list handling as body
+                    // lists, so its items carry `w:numPr` (upstream #31).
+                    let ordered = tag == "ol";
+                    let paras = convert_html_list_to_paragraphs(
+                        el,
+                        doc,
+                        ordered,
+                        html_doc,
+                        InlineFmt::default(),
+                    );
+                    for para in paras {
+                        content.push(CellContent::Paragraph(para));
                     }
                 } else if tag == "p" {
                     let mut para = Paragraph::new();
@@ -383,7 +455,7 @@ pub(super) fn collect_cell_content_recursive(
                     // `<math>` (equation outside a `<p>`) is skipped: its OMML
                     // comes from the sibling equation Tag below — recursing
                     // would leak the MathML glyphs as literal cell text.
-                    collect_cell_content_recursive(&el.children, html_doc, content);
+                    collect_cell_content_recursive(&el.children, html_doc, content, doc);
                 }
             }
             HtmlNode::Text(text, _) => {
@@ -424,26 +496,31 @@ pub(super) fn collect_cell_content_recursive(
 pub(super) fn convert_html_table_to_model(
     elem: &HtmlElement,
     html_doc: &HtmlDocument,
+    doc: &mut Document,
 ) -> Option<Table> {
-    let raw_rows = collect_table_rows(elem, html_doc);
+    let raw_rows = collect_table_rows(elem, html_doc, doc);
     (!raw_rows.is_empty()).then(|| postprocess_rowspans(raw_rows))
 }
 
 /// Collect direct and section-wrapped HTML table rows once for every table path.
-pub(super) fn collect_table_rows(elem: &HtmlElement, html_doc: &HtmlDocument) -> Vec<RawTableRow> {
+pub(super) fn collect_table_rows(
+    elem: &HtmlElement,
+    html_doc: &HtmlDocument,
+    doc: &mut Document,
+) -> Vec<RawTableRow> {
     let mut raw_rows = Vec::new();
     for child in &elem.children {
         if let HtmlNode::Element(row_or_section) = child {
             let tag = tag_name(row_or_section);
             if tag == "tr" {
-                if let Some(result) = convert_table_row(row_or_section, html_doc) {
+                if let Some(result) = convert_table_row(row_or_section, html_doc, doc) {
                     raw_rows.push(result);
                 }
             } else if tag == "thead" || tag == "tbody" || tag == "tfoot" {
                 for inner in &row_or_section.children {
                     if let HtmlNode::Element(tr) = inner
                         && tag_name(tr) == "tr"
-                        && let Some(result) = convert_table_row(tr, html_doc)
+                        && let Some(result) = convert_table_row(tr, html_doc, doc)
                     {
                         raw_rows.push(result);
                     }

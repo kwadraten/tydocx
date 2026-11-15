@@ -912,6 +912,22 @@ fn issue_smallcaps_text() {
 }
 
 #[test]
+fn issue_smallcaps_whitespace_run_not_marked() {
+    let xml = fixture_doc_xml("issue_smallcaps_whitespace");
+    // "A" and "B" are smallcaps; the space between them is not. Before the
+    // fix the three runs merged into one smallCaps run "A B".
+    let sc_count = xml.matches("<w:smallCaps/>").count();
+    assert_eq!(
+        sc_count, 2,
+        "only the A and B runs should be smallcaps, got {sc_count}"
+    );
+    assert!(
+        !xml.contains(">A B<"),
+        "the A and B runs must stay separate, not merge into one \"A B\" run"
+    );
+}
+
+#[test]
 fn issue_highlight_space_preserved() {
     let xml = fixture_doc_xml("issue_highlight_space");
     assert!(xml.contains("Hello"), "highlight text present");

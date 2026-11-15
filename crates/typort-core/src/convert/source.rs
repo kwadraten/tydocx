@@ -111,20 +111,6 @@ pub(super) fn apply_source_overrides(
     doc: &mut Document,
     has_geometry: bool,
 ) {
-    // Page margins
-    if let Some(v) = ovr.margin_top {
-        doc.page_settings.margin_top = v;
-    }
-    if let Some(v) = ovr.margin_bottom {
-        doc.page_settings.margin_bottom = v;
-    }
-    if let Some(v) = ovr.margin_left {
-        doc.page_settings.margin_left = v;
-    }
-    if let Some(v) = ovr.margin_right {
-        doc.page_settings.margin_right = v;
-    }
-
     // Columns
     if let Some(cols) = ovr.columns {
         doc.page_settings.columns = Some(cols);
@@ -144,6 +130,33 @@ pub(super) fn apply_source_overrides(
 
     // Resolve em-based values using actual body size
     let body_pt = f64::from(doc.style.body_size_half_pt) / 2.0;
+
+    // Page margins — em values resolve against the body size, like par
+    // leading below. Absolute values were already converted in the AST.
+    if let Some(v) = ovr.margin_top {
+        doc.page_settings.margin_top = v;
+    }
+    if let Some(em) = ovr.margin_top_em {
+        doc.page_settings.margin_top = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.margin_bottom {
+        doc.page_settings.margin_bottom = v;
+    }
+    if let Some(em) = ovr.margin_bottom_em {
+        doc.page_settings.margin_bottom = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.margin_left {
+        doc.page_settings.margin_left = v;
+    }
+    if let Some(em) = ovr.margin_left_em {
+        doc.page_settings.margin_left = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.margin_right {
+        doc.page_settings.margin_right = v;
+    }
+    if let Some(em) = ovr.margin_right_em {
+        doc.page_settings.margin_right = page::pt_to_twips(em * body_pt);
+    }
 
     apply_first_line_indent(ovr, doc, body_pt);
     if let Some(all) = ovr.first_line_indent_all {

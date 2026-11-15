@@ -129,6 +129,29 @@ fn columns_detected_in_document_model() {
 }
 
 #[test]
+fn issue_margin_em_resolves_against_body_size() {
+    // 2em at a declared 10.5pt body = 21pt = 420 twips. The old hardcoded
+    // 12pt base produced 480 twips instead (upstream #32).
+    let doc = fixture_document("issue_margin_em");
+    assert_eq!(
+        doc.page_settings.margin_top, 420,
+        "2em margin at 10.5pt body should be 420 twips"
+    );
+    assert_eq!(
+        doc.page_settings.margin_bottom, 420,
+        "2em margin at 10.5pt body should be 420 twips"
+    );
+    assert_eq!(
+        doc.page_settings.margin_left, 420,
+        "2em margin at 10.5pt body should be 420 twips"
+    );
+    assert_eq!(
+        doc.page_settings.margin_right, 420,
+        "2em margin at 10.5pt body should be 420 twips"
+    );
+}
+
+#[test]
 fn wide_table_is_not_misread_as_page_columns() {
     // business_report has a 4-column #table but no page-level columns. The page
     // column count comes only from the source AST, so a wide table's aligned

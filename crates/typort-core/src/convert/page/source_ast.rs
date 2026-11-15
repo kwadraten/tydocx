@@ -9,6 +9,13 @@ pub struct SourceStyleOverrides {
     pub margin_bottom: Option<u32>,
     pub margin_left: Option<u32>,
     pub margin_right: Option<u32>,
+    // #set page(margin: ...) in em — resolved later against the body size,
+    // the same deferred-em pattern as the `par` em fields below. At most one
+    // of the twips / em field per side is set.
+    pub margin_top_em: Option<f64>,
+    pub margin_bottom_em: Option<f64>,
+    pub margin_left_em: Option<f64>,
+    pub margin_right_em: Option<f64>,
     // #set page(columns: N)
     pub columns: Option<u32>,
     // #set page(numbering: "1"/"i"/...)
@@ -47,6 +54,10 @@ impl SourceStyleOverrides {
         fill!(margin_bottom);
         fill!(margin_left);
         fill!(margin_right);
+        fill!(margin_top_em);
+        fill!(margin_bottom_em);
+        fill!(margin_left_em);
+        fill!(margin_right_em);
         fill!(columns);
         fill!(page_numbering);
         fill!(text_font);
@@ -221,74 +232,94 @@ fn parse_page_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverr
     }
 }
 
+/// A `#set page(margin: …)` value as declared: absolute twips, or em to
+/// resolve later against the body size. Zero converts to neither (a zero
+/// margin is treated as unset, like the absolute path below).
+fn margin_amount(n: typst_syntax::ast::Numeric<'_>) -> (Option<u32>, Option<f64>) {
+    let (value, unit) = n.get();
+    if unit == typst_syntax::ast::Unit::Em {
+        (None, if value == 0.0 { None } else { Some(value) })
+    } else {
+        let twips = numeric_to_twips(n);
+        (if twips > 0 { Some(twips) } else { None }, None)
+    }
+}
+
+/// Pick the winning margin value from a priority chain (first = lowest
+/// priority): the last entry carrying a value on either track wins.
+fn pick_margin_amount(chain: &[(Option<u32>, Option<f64>)]) -> (Option<u32>, Option<f64>) {
+    chain
+        .iter()
+        .rev()
+        .find(|(twips, em)| twips.is_some() || em.is_some())
+        .copied()
+        .unwrap_or((None, None))
+}
+
 fn parse_margin_value(expr: typst_syntax::ast::Expr<'_>, ovr: &mut SourceStyleOverrides) {
     match expr {
         typst_syntax::ast::Expr::Numeric(n) => {
-            let twips = numeric_to_twips(n);
-            if twips > 0 {
-                ovr.margin_top = Some(twips);
-                ovr.margin_bottom = Some(twips);
-                ovr.margin_left = Some(twips);
-                ovr.margin_right = Some(twips);
+            let (twips, em) = margin_amount(n);
+            if twips.is_some() || em.is_some() {
+                ovr.margin_top = twips;
+                ovr.margin_bottom = twips;
+                ovr.margin_left = twips;
+                ovr.margin_right = twips;
+                ovr.margin_top_em = em;
+                ovr.margin_bottom_em = em;
+                ovr.margin_left_em = em;
+                ovr.margin_right_em = em;
             }
         }
         typst_syntax::ast::Expr::Dict(dict) => {
             // Collect with Typst priority: rest < x/y < individual sides
-            let mut rest = None;
-            let mut x = None;
-            let mut y = None;
-            let mut top = None;
-            let mut bottom = None;
-            let mut left = None;
-            let mut right = None;
+            let mut rest = (None, None);
+            let mut x = (None, None);
+            let mut y = (None, None);
+            let mut top = (None, None);
+            let mut bottom = (None, None);
+            let mut left = (None, None);
+            let mut right = (None, None);
 
             for item in dict.items() {
                 let typst_syntax::ast::DictItem::Named(entry) = item else {
                     continue;
                 };
                 if let typst_syntax::ast::Expr::Numeric(n) = entry.expr() {
-                    let twips = numeric_to_twips(n);
-                    if twips > 0 {
-                        match entry.name().as_str() {
-                            "rest" => rest = Some(twips),
-                            "x" => x = Some(twips),
-                            "y" => y = Some(twips),
-                            "top" => top = Some(twips),
-                            "bottom" => bottom = Some(twips),
-                            "left" => left = Some(twips),
-                            "right" => right = Some(twips),
-                            _ => {}
-                        }
+                    let amount = margin_amount(n);
+                    match entry.name().as_str() {
+                        "rest" => rest = amount,
+                        "x" => x = amount,
+                        "y" => y = amount,
+                        "top" => top = amount,
+                        "bottom" => bottom = amount,
+                        "left" => left = amount,
+                        "right" => right = amount,
+                        _ => {}
                     }
                 }
             }
 
-            // Resolve in priority order
-            if let Some(v) = rest {
-                ovr.margin_top = Some(v);
-                ovr.margin_bottom = Some(v);
-                ovr.margin_left = Some(v);
-                ovr.margin_right = Some(v);
+            // Resolve in priority order, each track separately.
+            let (top_twips, top_em) = pick_margin_amount(&[rest, y, top]);
+            let (bottom_twips, bottom_em) = pick_margin_amount(&[rest, y, bottom]);
+            let (left_twips, left_em) = pick_margin_amount(&[rest, x, left]);
+            let (right_twips, right_em) = pick_margin_amount(&[rest, x, right]);
+            if top_twips.is_some() || top_em.is_some() {
+                ovr.margin_top = top_twips;
+                ovr.margin_top_em = top_em;
             }
-            if let Some(v) = x {
-                ovr.margin_left = Some(v);
-                ovr.margin_right = Some(v);
+            if bottom_twips.is_some() || bottom_em.is_some() {
+                ovr.margin_bottom = bottom_twips;
+                ovr.margin_bottom_em = bottom_em;
             }
-            if let Some(v) = y {
-                ovr.margin_top = Some(v);
-                ovr.margin_bottom = Some(v);
+            if left_twips.is_some() || left_em.is_some() {
+                ovr.margin_left = left_twips;
+                ovr.margin_left_em = left_em;
             }
-            if let Some(v) = top {
-                ovr.margin_top = Some(v);
-            }
-            if let Some(v) = bottom {
-                ovr.margin_bottom = Some(v);
-            }
-            if let Some(v) = left {
-                ovr.margin_left = Some(v);
-            }
-            if let Some(v) = right {
-                ovr.margin_right = Some(v);
+            if right_twips.is_some() || right_em.is_some() {
+                ovr.margin_right = right_twips;
+                ovr.margin_right_em = right_em;
             }
         }
         _ => {}
@@ -478,6 +509,32 @@ mod tests {
         let expected = pt_to_twips(2.0_f64 * 72.0 / 2.54);
         assert_eq!(ovr.margin_top, Some(expected));
         assert_eq!(ovr.margin_left, Some(expected));
+    }
+
+    #[test]
+    fn source_ast_extracts_page_margin_em_deferred() {
+        // em margins are stored, not converted: the 12pt assumption is gone.
+        let source = r#"#set page(margin: 2em)"#;
+        let ovr = extract_source_style_overrides(source, &[]);
+        assert_eq!(ovr.margin_top_em, Some(2.0));
+        assert_eq!(ovr.margin_bottom_em, Some(2.0));
+        assert_eq!(ovr.margin_left_em, Some(2.0));
+        assert_eq!(ovr.margin_right_em, Some(2.0));
+        assert_eq!(ovr.margin_top, None);
+    }
+
+    #[test]
+    fn source_ast_extracts_page_margin_mixed_units() {
+        let source = r#"#set page(margin: (x: 1em, top: 2cm))"#;
+        let ovr = extract_source_style_overrides(source, &[]);
+        assert_eq!(ovr.margin_left_em, Some(1.0));
+        assert_eq!(ovr.margin_right_em, Some(1.0));
+        assert_eq!(ovr.margin_left, None);
+        let expected = pt_to_twips(2.0_f64 * 72.0 / 2.54);
+        assert_eq!(ovr.margin_top, Some(expected));
+        assert_eq!(ovr.margin_top_em, None);
+        assert_eq!(ovr.margin_bottom, None);
+        assert_eq!(ovr.margin_bottom_em, None);
     }
 
     #[test]

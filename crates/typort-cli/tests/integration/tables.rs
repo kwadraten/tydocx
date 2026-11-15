@@ -810,3 +810,58 @@ fn features_table_width_percentage() {
         "table cells should have w:tcW width elements"
     );
 }
+
+#[test]
+fn issue_table_cell_list_items_keep_num_pr() {
+    let doc_xml = fixture_doc_xml("issue_table_cell_list");
+    let tbl_start = doc_xml.find("<w:tbl>").expect("table present");
+    let tbl_end = doc_xml[tbl_start..]
+        .find("</w:tbl>")
+        .map(|e| tbl_start + e)
+        .expect("table closed");
+    let table = &doc_xml[tbl_start..tbl_end];
+
+    // The cell lists must not merge into one plain-text paragraph.
+    assert!(
+        !table.contains("onetwo"),
+        "cell list items must stay separate paragraphs, not merge into \"onetwo\""
+    );
+    // Six list items (2 bullet + 2 ordered + 2 nested) each carry w:numPr.
+    let num_pr_count = table.matches("w:numPr").count();
+    assert!(
+        num_pr_count >= 6,
+        "all 6 cell list items should carry w:numPr, got {num_pr_count}"
+    );
+    // The nested item sits at level 1.
+    assert!(
+        table.contains("w:ilvl w:val=\"1\""),
+        "nested cell list item should be at level 1"
+    );
+    for text in ["one", "two", "first", "second", "outer", "inner"] {
+        assert!(
+            table.contains(text),
+            "cell list item '{text}' should be present"
+        );
+    }
+}
+
+#[test]
+fn issue_table_cell_list_emits_numbering_part() {
+    let package = fixture_package("issue_table_cell_list");
+    assert!(
+        package
+            .part_names()
+            .any(|name| name == "word/numbering.xml"),
+        "a document whose only list is inside a table cell must still emit numbering.xml"
+    );
+    let numbering = package.part_text("word/numbering.xml");
+    assert!(
+        numbering.contains("w:numId"),
+        "numbering.xml should define instances for the cell lists"
+    );
+    // Nested levels are defined (L1): ilvl 1 exists on the abstractNums.
+    assert!(
+        numbering.contains("w:ilvl=\"1\""),
+        "numbering.xml should define level 1 for nested lists"
+    );
+}

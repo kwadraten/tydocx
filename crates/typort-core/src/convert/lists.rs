@@ -36,21 +36,40 @@ pub(super) fn convert_html_list(
     ordered: bool,
     html_doc: &HtmlDocument,
 ) {
+    let paras = convert_html_list_to_paragraphs(elem, doc, ordered, html_doc, InlineFmt::default());
+    for para in paras {
+        doc.add_paragraph(para);
+    }
+}
+
+/// Convert an HTML `<ol>` or `<ul>` element into list paragraphs, returned
+/// instead of appended to the document — so table cells can reuse the same
+/// list handling for cell paragraphs (upstream #31).
+pub(super) fn convert_html_list_to_paragraphs(
+    elem: &HtmlElement,
+    doc: &mut Document,
+    ordered: bool,
+    html_doc: &HtmlDocument,
+    fmt: InlineFmt,
+) -> Vec<Paragraph> {
     // typst-html carries `#enum(start: N)` as `<ol start="N">`; Word needs it
     // back as the numbering instance's level-0 startOverride.
     let start = get_attr_value(elem, "start")
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(1);
     let list_id = doc.allocate_list_id(ordered, start);
-    convert_html_list_at_level(elem, doc, 0, list_id, html_doc);
+    let mut paras = Vec::new();
+    convert_html_list_at_level(elem, &mut paras, 0, list_id, html_doc, fmt);
+    paras
 }
 
 pub(super) fn convert_html_list_at_level(
     elem: &HtmlElement,
-    doc: &mut Document,
+    sink: &mut Vec<Paragraph>,
     level: u32,
     list_id: u32,
     html_doc: &HtmlDocument,
+    fmt: InlineFmt,
 ) {
     let is_sublist = |c: &HtmlNode| {
         matches!(c, HtmlNode::Element(el) if {
@@ -79,20 +98,20 @@ pub(super) fn convert_html_list_at_level(
                             &li.children[range_start..idx],
                             &mut para,
                             None,
-                            InlineOptions::generic(InlineFmt::default(), Some(html_doc)),
+                            InlineOptions::generic(fmt, Some(html_doc)),
                         );
                     }
                     range_start = idx + 1;
                 }
             }
             if !para.inlines.is_empty() {
-                doc.add_paragraph(para);
+                sink.push(para);
             }
             for li_child in &li.children {
                 if let HtmlNode::Element(sub) = li_child
                     && is_sublist(li_child)
                 {
-                    convert_html_list_at_level(sub, doc, level + 1, list_id, html_doc);
+                    convert_html_list_at_level(sub, sink, level + 1, list_id, html_doc, fmt);
                 }
             }
         }

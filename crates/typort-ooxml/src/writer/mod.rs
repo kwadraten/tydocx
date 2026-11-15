@@ -5,7 +5,7 @@ use std::io::{Seek, Write};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
-use crate::document::{BlockElement, Document, DocumentStyle};
+use crate::document::{BlockElement, CellContent, Document, DocumentStyle, Table};
 use crate::styles;
 
 mod citation;
@@ -179,10 +179,24 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
 fn doc_has_lists(doc: &Document) -> bool {
     doc.body.elements.iter().any(|el| match el {
         BlockElement::Paragraph(p) => p.list_info.is_some(),
-        BlockElement::Table(_) => false,
+        BlockElement::Table(table) => table_has_lists(table),
         BlockElement::BibliographyBlock { paragraphs } => {
             paragraphs.iter().any(|p| p.list_info.is_some())
         }
+    })
+}
+
+/// A list anywhere inside a table — a cell paragraph, a structured cell
+/// paragraph, or a nested table — needs the numbering part too.
+fn table_has_lists(table: &Table) -> bool {
+    table.rows.iter().any(|row| {
+        row.cells.iter().any(|cell| {
+            cell.paragraphs.iter().any(|p| p.list_info.is_some())
+                || cell.content.iter().any(|item| match item {
+                    CellContent::Paragraph(p) => p.list_info.is_some(),
+                    CellContent::Table(nested) => table_has_lists(nested),
+                })
+        })
     })
 }
 /// A fixed (non-image) relationship part of `document.xml.rels`.

@@ -20,18 +20,38 @@ pub(super) fn generate_numbering_xml(
             "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
         ))
         .write_inner_content(|w| {
-            // Abstract numbering 1: ordered list (decimal)
+            // Abstract numbering 1: ordered list (decimal). Levels 0-8: the
+            // body walk emits `w:ilvl` up to the nesting depth, and a level
+            // with no definition here renders with no number (L1).
             w.create_element("w:abstractNum")
                 .with_attribute(("w:abstractNumId", "1"))
                 .write_inner_content(|abs| {
-                    write_numbering_level(abs, "0", "1", "decimal", "%1.", "left")?;
+                    for ilvl in 0..=8 {
+                        write_numbering_level(
+                            abs,
+                            &ilvl.to_string(),
+                            "1",
+                            "decimal",
+                            &format!("%{}.", ilvl + 1),
+                            "left",
+                        )?;
+                    }
                     Ok(())
                 })?;
-            // Abstract numbering 2: unordered list (bullet)
+            // Abstract numbering 2: unordered list (bullet), levels 0-8.
             w.create_element("w:abstractNum")
                 .with_attribute(("w:abstractNumId", "2"))
                 .write_inner_content(|abs| {
-                    write_numbering_level(abs, "0", "1", "bullet", "\u{2022}", "left")?;
+                    for ilvl in 0..=8 {
+                        write_numbering_level(
+                            abs,
+                            &ilvl.to_string(),
+                            "1",
+                            "bullet",
+                            "\u{2022}",
+                            "left",
+                        )?;
+                    }
                     Ok(())
                 })?;
             // Abstract numbering 3: Chinese five-level heading numbering
