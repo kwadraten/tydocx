@@ -87,13 +87,13 @@ A 级（原生语义对象）最优先：标题、脚注、OMML、表格、编�
 
 | 上游 issue | 对应 | 本次核实 |
 | --- | --- | --- |
-| #24 高亮颜色写死 yellow | L5 | 实测证实，仍写死 yellow |
-| #29 中文五级编号无条件写出 | numbering.rs 常写 abstractNum 3 | 实测证实：与中文无关的 fixture 输出里仍有 chineseCountingThousand abstractNum |
+| #24 高亮颜色写死 yellow | L5 | 已修复（batch 2，cf044c5） |
+| #29 中文五级编号无条件写出 | numbering.rs 常写 abstractNum 3 | 已修复（batch 2，cf044c5；无引用路径，不再写出） |
 | #30 脚注与页眉页脚段落丢非文本 inline | L3（页眉页脚已核实；脚注体走 inline 收集，需另核） | 部分修复（审计）：脚注体文本与公式存活，链接退化为纯文本，图片/frame 丢；页眉页脚仍在 |
 | #31 表格内列表缺少 numbering part 引用 | L1（numbering 完整性） | 已修复（batch 1，d4cba26；L1 顺带修了） |
 | #33 编译错误丢 span 信息 | 步骤 1（诊断保留 span，CLI 打印 `file:line:col: message`） | 已修复（独立验收通过：`cargo test --workspace` 全过；新测试 `diagnostics::compile_error_keeps_span`、`cli::cli_reports_compile_error_with_span` 断言 `compile_error_span.typ:3:10:`） |
 | #34 写失败留半截文件 | 步骤 1（原子写盘：同目录 staging + rename） | 已修复（独立验收通过；新测试 `cli::cli_writes_output_atomically`、`cli::cli_failed_write_leaves_no_partial_output`；失败时不留 staging 文件） |
-| #19 / #20 / #21 / #22 / #23 / #25 / #26 / #27 / #28 / #32 / #35 | 行内收集模式统一、emphasis 旁路、preset 脚注字符串匹配、API 整理、空白 run 误标 smallcaps、东亚字体猜测、等宽/数学字体名子串匹配、三个 body-size 检测器直方图不一致、import 相对项目根解析、margin em 值假定 12pt、换行与段落换行语义 | 已逐项核对，见 `docs/audit-upstream-issues.md`：#23、#32 已修复（batch 1，d4cba26）；#25、#28 部分修复；其余仍在 |
+| #19 / #20 / #21 / #22 / #23 / #25 / #26 / #27 / #28 / #32 / #35 | 行内收集模式统一、emphasis 旁路、preset 脚注字符串匹配、API 整理、空白 run 误标 smallcaps、东亚字体猜测、等宽/数学字体名子串匹配、三个 body-size 检测器直方图不一致、import 相对项目根解析、margin em 值假定 12pt、换行与段落换行语义 | 已逐项核对，见 `docs/audit-upstream-issues.md`：#23、#32 已修复（batch 1，d4cba26）；#20 已修复（batch 2，cf044c5）；#25、#28 部分修复；其余仍在 |
 
 ## 先补顺序（建议）
 
