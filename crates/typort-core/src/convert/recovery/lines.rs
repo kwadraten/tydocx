@@ -1,6 +1,6 @@
 //! Rendered-line extraction from paged frames.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use typort_ooxml::document::{BlockElement, Document, ParagraphStyle, Run};
 use typst::layout::{Frame, FrameItem};
@@ -88,26 +88,29 @@ pub(super) fn extract_lines_from_all_pages(
 ) -> Vec<FrameLine> {
     let mut all_lines = Vec::new();
 
-    let body_size = paged
-        .pages()
-        .first()
-        .map_or(DEFAULT_RECOVERY_BODY_SIZE_PT, |p| {
-            let mut items = Vec::new();
-            collect_text_items_with_pos(&p.frame, &mut items);
-            let mut sizes: HashMap<u32, usize> = HashMap::new();
-            for item in &items {
-                *sizes
-                    .entry(super::super::page::pt_to_tenths(item.size_pt))
-                    .or_default() += item.text.len();
-            }
-            // Tie-break on the smaller size so the detected body size is
-            // deterministic (a bare `max_by_key` would pick whichever size the
-            // HashMap iterated first when two tie on glyph count).
-            super::super::stats::dominant_key(sizes.iter().map(|(size, count)| (size, *count)))
-                .map_or(DEFAULT_RECOVERY_BODY_SIZE_PT, |size| {
-                    f64::from(*size) / 10.0
-                })
-        });
+    // The body size is the same one the document-style detector finds (#27):
+    // the shared glyph-weighted half-point detector over the first pages.
+    // The old probe read only the first page, weighted by byte length, and
+    // bucketed in tenths of a point, so a title page or CJK body text could
+    // move it away from the document body size this classification relies on.
+    let body_size = {
+        let mut items = Vec::new();
+        for page in paged
+            .pages()
+            .iter()
+            .take(super::super::page::BODY_SIZE_SAMPLE_PAGES)
+        {
+            collect_text_items_with_pos(&page.frame, &mut items);
+        }
+        super::super::page::dominant_body_size_half_pt(
+            items
+                .iter()
+                .map(|item| (item.size_pt, item.text.chars().count())),
+        )
+        .map_or(DEFAULT_RECOVERY_BODY_SIZE_PT, |half_pt| {
+            f64::from(half_pt) / 2.0
+        })
+    };
 
     for (page_idx, page) in paged.pages().iter().enumerate() {
         let mut text_items = Vec::new();

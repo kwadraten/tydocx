@@ -4,8 +4,10 @@ use typort_ooxml::document::{Alignment, InlineElement, Paragraph, ParagraphStyle
 use typst::layout::{Frame, FrameItem};
 use typst_layout::PagedDocument;
 
+use super::body_size::{
+    BODY_SIZE_SAMPLE_PAGES, DEFAULT_BODY_SIZE_HALF_PT, dominant_body_size_half_pt,
+};
 use super::language::is_cjk_char;
-use super::style::DEFAULT_BODY_SIZE_HALF_PT;
 use super::units::pt_to_half_pt;
 
 /// OpenType weight at which rendered text is treated as bold.
@@ -42,19 +44,27 @@ struct PagedRunStyle {
     x: f64,
     text_width: f64,
     page_width: f64,
+    /// Zero-based page index, for the baseline sampling shared with the
+    /// document-style detector (#27).
+    page_idx: usize,
 }
 
 /// Collect per-run style information from all pages of the `PagedDocument`.
 fn collect_paged_run_styles(paged: &PagedDocument) -> Vec<PagedRunStyle> {
     let mut items = Vec::new();
-    for page in paged.pages() {
+    for (page_idx, page) in paged.pages().iter().enumerate() {
         let page_width = page.frame.width().to_pt();
-        collect_styles_from_frame(&page.frame, page_width, &mut items);
+        collect_styles_from_frame(&page.frame, page_width, page_idx, &mut items);
     }
     items
 }
 
-fn collect_styles_from_frame(frame: &Frame, page_width: f64, items: &mut Vec<PagedRunStyle>) {
+fn collect_styles_from_frame(
+    frame: &Frame,
+    page_width: f64,
+    page_idx: usize,
+    items: &mut Vec<PagedRunStyle>,
+) {
     super::frames::visit_frame_items(frame, false, &mut |position, item| {
         if let FrameItem::Text(text_item) = item {
             let text = text_item.text.to_string();
@@ -86,6 +96,7 @@ fn collect_styles_from_frame(frame: &Frame, page_width: f64, items: &mut Vec<Pag
                 x: position.x.to_pt(),
                 text_width: text_item.width().to_pt(),
                 page_width,
+                page_idx,
             });
         }
     });
@@ -182,14 +193,23 @@ struct RenderedBodyStyle {
 /// Splitting by script prevents a CJK-dominated document from picking a CJK
 /// fallback font as the ASCII baseline (which would cause every Latin run to
 /// get a spurious font override) and vice-versa.
+///
+/// The baseline is sampled exactly like `extract_document_style` (#27) — the
+/// first pages only, with the size from the shared glyph-weighted detector.
+/// Sampling all pages let back matter in another size or font move the
+/// baseline away from the document style and put spurious overrides on body
+/// runs. (The font histograms still weight by byte length; only the size
+/// histogram and the sampling are part of #27.)
 fn detect_rendered_body_style(styles: &[PagedRunStyle]) -> RenderedBodyStyle {
     let mut ascii_font_counts: HashMap<&str, usize> = HashMap::new();
     let mut cjk_font_counts: HashMap<&str, usize> = HashMap::new();
-    let mut size_counts: HashMap<u32, usize> = HashMap::new();
+    let mut size_samples: Vec<(f64, usize)> = Vec::new();
 
-    for item in styles {
-        let half_pt = pt_to_half_pt(item.size_pt);
-        *size_counts.entry(half_pt).or_insert(0) += item.text.len();
+    for item in styles
+        .iter()
+        .filter(|item| item.page_idx < BODY_SIZE_SAMPLE_PAGES)
+    {
+        size_samples.push((item.size_pt, item.text.chars().count()));
 
         let has_cjk = item.text.chars().any(is_cjk_char);
         let has_ascii = item
@@ -212,9 +232,7 @@ fn detect_rendered_body_style(styles: &[PagedRunStyle]) -> RenderedBodyStyle {
         .map_or_else(|| "Times New Roman".to_string(), ToString::to_string);
     let body_font_cjk = super::stats::dominant_key(cjk_font_counts)
         .map_or_else(|| body_font_ascii.clone(), ToString::to_string);
-    let body_size =
-        super::stats::dominant_key(size_counts.iter().map(|(size, count)| (size, *count)))
-            .map_or(DEFAULT_BODY_SIZE_HALF_PT, |size| *size);
+    let body_size = dominant_body_size_half_pt(size_samples).unwrap_or(DEFAULT_BODY_SIZE_HALF_PT);
 
     RenderedBodyStyle {
         ascii_font: body_font_ascii,

@@ -4,6 +4,7 @@
 //! frame detection, authoritative source-AST rules, and helpers that reconcile
 //! those values onto the document model.
 
+mod body_size;
 mod hanging_indent;
 mod language;
 mod margin;
@@ -29,9 +30,11 @@ pub use source_ast::{
 };
 pub use style::extract_document_style;
 
+pub(super) use body_size::{
+    BODY_SIZE_SAMPLE_PAGES, DEFAULT_BODY_SIZE_HALF_PT, dominant_body_size_half_pt,
+};
 pub(crate) use language::is_cjk_char;
 pub(super) use language::lang_region_to_bcp47;
 pub(super) use margin::find_body_zone;
-pub(super) use style::DEFAULT_BODY_SIZE_HALF_PT;
 pub(super) use style::apply_footnote_text_size;
-pub(super) use units::{pt_to_eighth_pt, pt_to_half_pt, pt_to_tenths, pt_to_twips};
+pub(super) use units::{pt_to_eighth_pt, pt_to_half_pt, pt_to_twips};
