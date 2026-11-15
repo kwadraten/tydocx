@@ -746,3 +746,22 @@ fn issue_inline_context_no_duplicate_paragraph() {
         "each inline-context paragraph must appear exactly once, with its context content"
     );
 }
+
+#[test]
+fn issue_block_source_lines_stay_one_paragraph() {
+    // Regression for #35: `#block[ab\ncd]` used to emit three paragraphs —
+    // "ab" and "cd" from the HTML walk (one paragraph per text node, since
+    // Typst's HTML export splits text at source newlines) plus a centered
+    // "ab cd" re-inserted by recovery. A block's lines are one flowing
+    // paragraph; the paged line must not be recovered as a duplicate.
+    let xml = fixture_doc_xml("issue_block_linebreaks");
+    let texts: Vec<String> = crate::common::paragraph_texts(&xml)
+        .into_iter()
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    assert_eq!(
+        texts,
+        ["ab cd", "aaa bbb ccc ddd eee fff ggg hhh iii jjj"],
+        "block lines must stay one paragraph each, with no recovery duplicates"
+    );
+}

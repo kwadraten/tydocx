@@ -137,6 +137,13 @@ pub(super) fn collect_inline_element(
             if tag_name(elem) == "math" || has_attr_value(elem, "role", "doc-noteref") {
                 return;
             }
+            if tag_name(elem) == "br" {
+                // A forced line break (`#linebreak()`) — without this it falls
+                // through to the child recursion below (a `<br>` has no children)
+                // and the break is silently dropped, gluing the surrounding words.
+                para.push_run(Run::line_break());
+                return;
+            }
             let fmt = options.fmt.for_tag(&tag_name(elem));
             collect_inlines(&elem.children, para, None, options.with_fmt(fmt));
         }

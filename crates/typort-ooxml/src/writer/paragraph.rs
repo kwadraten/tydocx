@@ -11,7 +11,7 @@ use super::fields::{
 use super::footnotes::write_footnote_ref;
 use super::image::{image_rel_id, write_image_inline};
 use super::math::{strip_math_para, write_equation_number, write_math_inline};
-use super::package::{two_em_hanging_twips, write_indentation};
+use super::package::{Indentation, two_em_hanging_twips, write_indentation};
 use super::run::{write_column_break, write_page_break, write_run, write_tab};
 use crate::document::{Alignment, HangingIndent, InlineElement, Paragraph};
 
@@ -82,7 +82,7 @@ pub(super) fn write_paragraph<W: Write>(
                 } else if let Some(style) = &para.style {
                     let style_id = style.ooxml_value();
                     ppr.create_element("w:pStyle")
-                        .with_attribute(("w:val", style_id.as_str()))
+                        .with_attribute(("w:val", style_id.as_ref()))
                         .write_empty()?;
                 }
                 if let Some(li) = &para.list_info {
@@ -141,10 +141,12 @@ pub(super) fn write_paragraph<W: Write>(
                     let left_str = left.to_string();
                     write_indentation(
                         ppr,
-                        Some(left_str.as_str()),
-                        None,
-                        zero_chars.then_some("0"),
-                        Some("0"),
+                        Indentation {
+                            left: Some(left_str.as_str()),
+                            first_line_chars: zero_chars.then_some("0"),
+                            first_line: Some("0"),
+                            ..Default::default()
+                        },
                     )?;
                 } else if has_hanging {
                     // Bibliographies use the historical 2em default; source-authored
@@ -158,10 +160,12 @@ pub(super) fn write_paragraph<W: Write>(
                     let bib_indent_str = bib_indent.to_string();
                     write_indentation(
                         ppr,
-                        Some(bib_indent_str.as_str()),
-                        Some(bib_indent_str.as_str()),
-                        zero_chars.then_some("0"),
-                        Some("0"),
+                        Indentation {
+                            left: Some(bib_indent_str.as_str()),
+                            hanging: Some(bib_indent_str.as_str()),
+                            first_line_chars: zero_chars.then_some("0"),
+                            first_line: Some("0"),
+                        },
                     )?;
                 } else if has_list {
                     // List indent: left = 2em, hanging = 1em, computed from body font size
@@ -171,13 +175,21 @@ pub(super) fn write_paragraph<W: Write>(
                     let list_hanging_str = list_hanging.to_string();
                     write_indentation(
                         ppr,
-                        Some(list_left_str.as_str()),
-                        Some(list_hanging_str.as_str()),
-                        None,
-                        None,
+                        Indentation {
+                            left: Some(list_left_str.as_str()),
+                            hanging: Some(list_hanging_str.as_str()),
+                            ..Default::default()
+                        },
                     )?;
                 } else if suppress_indent || has_eq_number {
-                    write_indentation(ppr, None, None, zero_chars.then_some("0"), Some("0"))?;
+                    write_indentation(
+                        ppr,
+                        Indentation {
+                            first_line_chars: zero_chars.then_some("0"),
+                            first_line: Some("0"),
+                            ..Default::default()
+                        },
+                    )?;
                 }
                 // Emit spacing override
                 if let Some(before) = para.spacing_before {

@@ -3,7 +3,7 @@ use std::io::{self, Write};
 
 use crate::document::DocumentStyle;
 use crate::writer::package::{
-    two_em_hanging_twips, write_font_triple, write_indentation, write_language_pair,
+    Indentation, two_em_hanging_twips, write_font_triple, write_indentation, write_language_pair,
     write_size_pair,
 };
 
@@ -127,7 +127,14 @@ fn write_style_normal<W: Write>(w: &mut Writer<W>, style: &DocumentStyle) -> io:
                 // firstLineChars over firstLine, so emit it first and keep the
                 // twips as a fallback. Absolute indents emit only firstLine.
                 let chars_str = style.first_line_indent_chars.map(|chars| chars.to_string());
-                write_indentation(ppr, None, None, chars_str.as_deref(), Some(indent.as_str()))?;
+                write_indentation(
+                    ppr,
+                    Indentation {
+                        first_line_chars: chars_str.as_deref(),
+                        first_line: Some(indent.as_str()),
+                        ..Default::default()
+                    },
+                )?;
                 Ok(())
             })?;
             Ok(())
@@ -173,7 +180,13 @@ fn write_style_heading<W: Write>(
                     .with_attribute(("w:before", sp_before.as_str()))
                     .with_attribute(("w:after", sp_after.as_str()))
                     .write_empty()?;
-                write_indentation(ppr, None, None, None, Some("0"))?;
+                write_indentation(
+                    ppr,
+                    Indentation {
+                        first_line: Some("0"),
+                        ..Default::default()
+                    },
+                )?;
                 Ok(())
             })?;
             s.create_element("w:rPr").write_inner_content(|rpr| {
@@ -212,10 +225,12 @@ fn write_style_bibliography<W: Write>(w: &mut Writer<W>, style: &DocumentStyle) 
             s.create_element("w:pPr").write_inner_content(|ppr| {
                 write_indentation(
                     ppr,
-                    Some(hang.as_str()),
-                    Some(hang.as_str()),
-                    None,
-                    Some("0"),
+                    Indentation {
+                        left: Some(hang.as_str()),
+                        hanging: Some(hang.as_str()),
+                        first_line: Some("0"),
+                        ..Default::default()
+                    },
                 )?;
                 Ok(())
             })?;
@@ -237,7 +252,13 @@ fn write_style_code_block<W: Write>(w: &mut Writer<W>, style: &DocumentStyle) ->
                 .with_attribute(("w:val", "Normal"))
                 .write_empty()?;
             s.create_element("w:pPr").write_inner_content(|ppr| {
-                write_indentation(ppr, None, None, None, Some("0"))?;
+                write_indentation(
+                    ppr,
+                    Indentation {
+                        first_line: Some("0"),
+                        ..Default::default()
+                    },
+                )?;
                 ppr.create_element("w:spacing")
                     .with_attribute(("w:line", "240"))
                     .with_attribute(("w:lineRule", "auto"))

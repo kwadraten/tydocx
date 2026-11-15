@@ -2,8 +2,8 @@ use super::text_norm::strip_cjk_spaces;
 
 use super::{
     Alignment, BlockElement, Content, Document, EquationElem, EquationState, HangingIndent,
-    HtmlDocument, HtmlElement, HtmlNode, InlineFmt, InlineOptions, Location, Numbering,
-    OutlineElem, Paragraph, ParagraphStyle, Run, Tag, WalkCtx, children_are_inline,
+    HtmlDocument, HtmlElement, HtmlNode, InlineElement, InlineFmt, InlineOptions, Location,
+    Numbering, OutlineElem, Paragraph, ParagraphStyle, Run, Tag, WalkCtx, children_are_inline,
     collect_deep_text, collect_inlines, collect_li_ids, content_at_location, convert_html_list,
     convert_html_table, detect_alignment, element_at_location, find_img_src, find_tag_end,
     footnote, handle_heading, handle_list_tag, handle_table_tag, has_attr_value, image,
@@ -267,17 +267,14 @@ pub(super) fn handle_html_element(elem: &HtmlElement, ctx: &mut WalkCtx) {
             walk_tags(&elem.children, ctx);
         }
         // A block container whose direct children are purely inline content
-        // (text + inline-format spans + inline equations) and that holds at least
-        // one inline equation — e.g. the body of a custom theorem/proof show rule
-        // (`block[ … $eq$ … ]`). `walk_tags` would treat each bare text node and
-        // each inline equation as its own block paragraph (and on typst 0.15 turn
-        // the inline math into stray display equations), so collect it as ONE
-        // paragraph here, resolving the equations to OMML via the introspector.
-        // Gated on an inline equation being present so ordinary inline-content
-        // blocks keep their original handling.
-        _ if children_are_inline(&elem.children)
-            && subtree_has_element(&elem.children, "equation") =>
-        {
+        // (text + inline-format spans + inline equations) — e.g. `#block[ab\ncd]`
+        // or the body of a custom theorem/proof show rule (`block[ … $eq$ … ]`).
+        // Typst's HTML export splits text at source newlines into separate text
+        // nodes, so `walk_tags` would treat each bare text node (and each inline
+        // equation) as its own block paragraph (and on typst 0.15 turn the inline
+        // math into stray display equations). Collect it as ONE paragraph here,
+        // resolving the equations to OMML via the introspector.
+        _ if children_are_inline(&elem.children) => {
             emit_inline_equation_paragraph(elem, ctx, InlineFmt::default(), detect_alignment(elem));
         }
         _ => {
@@ -300,6 +297,10 @@ pub(super) fn handle_html_element(elem: &HtmlElement, ctx: &mut WalkCtx) {
 /// resolved to OMML via the introspector) and emit it. Used for block-level
 /// inline-content containers whose inner equations must stay inline rather than be
 /// promoted to display equations by `walk_tags`.
+///
+/// A container holding only whitespace text emits nothing: `collect_inlines`
+/// turns a whitespace-only text node into a run, and without this guard an
+/// empty block would become a stray space-only paragraph.
 pub(super) fn emit_inline_equation_paragraph(
     elem: &HtmlElement,
     ctx: &mut WalkCtx,
@@ -314,7 +315,11 @@ pub(super) fn emit_inline_equation_paragraph(
         None,
         InlineOptions::generic(fmt, Some(ctx.html_doc)),
     );
-    if !para.inlines.is_empty() {
+    let has_content = para
+        .inlines
+        .iter()
+        .any(|inline| !matches!(inline, InlineElement::Text(run) if run.text.trim().is_empty()));
+    if has_content {
         ctx.doc.add_paragraph(para);
     }
 }

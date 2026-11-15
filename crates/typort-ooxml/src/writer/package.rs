@@ -71,27 +71,36 @@ pub(crate) fn write_language_pair<W: Write>(
     Ok(())
 }
 
+/// Indentation attributes for a `w:ind` element. Every field is optional;
+/// an absent field is omitted from the output. Call sites set only the
+/// attributes they need (`..Default::default()` for the rest) instead of
+/// passing four positional `Option<&str>` values.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Indentation<'a> {
+    pub left: Option<&'a str>,
+    pub hanging: Option<&'a str>,
+    pub first_line_chars: Option<&'a str>,
+    pub first_line: Option<&'a str>,
+}
+
 pub(crate) fn write_indentation<W: Write>(
     writer: &mut Writer<W>,
-    left: Option<&str>,
-    hanging: Option<&str>,
-    first_line_chars: Option<&str>,
-    first_line: Option<&str>,
+    indentation: Indentation<'_>,
 ) -> io::Result<()> {
-    let mut indentation = writer.create_element("w:ind");
-    if let Some(value) = left {
-        indentation = indentation.with_attribute(("w:left", value));
+    let mut element = writer.create_element("w:ind");
+    if let Some(value) = indentation.left {
+        element = element.with_attribute(("w:left", value));
     }
-    if let Some(value) = hanging {
-        indentation = indentation.with_attribute(("w:hanging", value));
+    if let Some(value) = indentation.hanging {
+        element = element.with_attribute(("w:hanging", value));
     }
-    if let Some(value) = first_line_chars {
-        indentation = indentation.with_attribute(("w:firstLineChars", value));
+    if let Some(value) = indentation.first_line_chars {
+        element = element.with_attribute(("w:firstLineChars", value));
     }
-    if let Some(value) = first_line {
-        indentation = indentation.with_attribute(("w:firstLine", value));
+    if let Some(value) = indentation.first_line {
+        element = element.with_attribute(("w:firstLine", value));
     }
-    indentation.write_empty()?;
+    element.write_empty()?;
     Ok(())
 }
 

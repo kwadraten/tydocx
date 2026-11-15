@@ -391,3 +391,18 @@ fn hanging_indent_does_not_clobber_list_items() {
         "the hanging-indent rule must not clobber the list indent with 440:\n{item}"
     );
 }
+
+#[test]
+fn issue_list_item_linebreak_survives() {
+    // Regression for #35: `#linebreak()` in a list item was dropped by the
+    // Generic inline path, gluing the surrounding words ("item onecontinued").
+    let xml = fixture_doc_xml("issue_list_linebreak");
+    let para = paragraph_containing(&xml, "item one");
+    let br = para
+        .find("<w:br")
+        .expect("line break should be emitted in the list item");
+    assert!(
+        para.find("item one").unwrap() < br && br < para.find("continued").unwrap(),
+        "line break must sit between the two halves: {para}"
+    );
+}

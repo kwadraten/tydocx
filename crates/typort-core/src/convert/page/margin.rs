@@ -225,8 +225,8 @@ pub fn detect_page_numbering(
             return None;
         }
         // Values must be consecutive (page 2 value = page 1 value + 1)
-        let val1 = page_number_value(first_trimmed, &fmt);
-        let val2 = page_number_value(second_trimmed, &fmt);
+        let val1 = page_number_value(first_trimmed, fmt);
+        let val2 = page_number_value(second_trimmed, fmt);
         if val1 == 0 || val2 == 0 || val2 != val1 + 1 {
             return None;
         }
@@ -245,7 +245,7 @@ pub fn detect_page_numbering(
 /// Get the numeric value of a page number string for a given format.
 ///
 /// Returns 0 if the string cannot be parsed for the given format.
-fn page_number_value(s: &str, fmt: &PageNumberFormat) -> u32 {
+fn page_number_value(s: &str, fmt: PageNumberFormat) -> u32 {
     match fmt {
         PageNumberFormat::Decimal => s.parse::<u32>().unwrap_or(0),
         PageNumberFormat::LowerRoman => roman_value(s, false),
@@ -479,51 +479,51 @@ mod tests {
 
     #[test]
     fn page_number_value_decimal() {
-        assert_eq!(page_number_value("1", &PageNumberFormat::Decimal), 1);
-        assert_eq!(page_number_value("5", &PageNumberFormat::Decimal), 5);
-        assert_eq!(page_number_value("42", &PageNumberFormat::Decimal), 42);
+        assert_eq!(page_number_value("1", PageNumberFormat::Decimal), 1);
+        assert_eq!(page_number_value("5", PageNumberFormat::Decimal), 5);
+        assert_eq!(page_number_value("42", PageNumberFormat::Decimal), 42);
     }
 
     #[test]
     fn page_number_value_roman() {
-        assert_eq!(page_number_value("i", &PageNumberFormat::LowerRoman), 1);
-        assert_eq!(page_number_value("ii", &PageNumberFormat::LowerRoman), 2);
-        assert_eq!(page_number_value("iii", &PageNumberFormat::LowerRoman), 3);
-        assert_eq!(page_number_value("iv", &PageNumberFormat::LowerRoman), 4);
-        assert_eq!(page_number_value("v", &PageNumberFormat::LowerRoman), 5);
-        assert_eq!(page_number_value("IX", &PageNumberFormat::UpperRoman), 9);
-        assert_eq!(page_number_value("X", &PageNumberFormat::UpperRoman), 10);
+        assert_eq!(page_number_value("i", PageNumberFormat::LowerRoman), 1);
+        assert_eq!(page_number_value("ii", PageNumberFormat::LowerRoman), 2);
+        assert_eq!(page_number_value("iii", PageNumberFormat::LowerRoman), 3);
+        assert_eq!(page_number_value("iv", PageNumberFormat::LowerRoman), 4);
+        assert_eq!(page_number_value("v", PageNumberFormat::LowerRoman), 5);
+        assert_eq!(page_number_value("IX", PageNumberFormat::UpperRoman), 9);
+        assert_eq!(page_number_value("X", PageNumberFormat::UpperRoman), 10);
     }
 
     #[test]
     fn page_number_value_letters() {
-        assert_eq!(page_number_value("a", &PageNumberFormat::LowerLetter), 1);
-        assert_eq!(page_number_value("b", &PageNumberFormat::LowerLetter), 2);
-        assert_eq!(page_number_value("z", &PageNumberFormat::LowerLetter), 26);
-        assert_eq!(page_number_value("A", &PageNumberFormat::UpperLetter), 1);
-        assert_eq!(page_number_value("C", &PageNumberFormat::UpperLetter), 3);
+        assert_eq!(page_number_value("a", PageNumberFormat::LowerLetter), 1);
+        assert_eq!(page_number_value("b", PageNumberFormat::LowerLetter), 2);
+        assert_eq!(page_number_value("z", PageNumberFormat::LowerLetter), 26);
+        assert_eq!(page_number_value("A", PageNumberFormat::UpperLetter), 1);
+        assert_eq!(page_number_value("C", PageNumberFormat::UpperLetter), 3);
     }
 
     #[test]
     fn consecutive_check_logic() {
         // Decimal: 1 -> 2 is consecutive
-        let v1 = page_number_value("1", &PageNumberFormat::Decimal);
-        let v2 = page_number_value("2", &PageNumberFormat::Decimal);
+        let v1 = page_number_value("1", PageNumberFormat::Decimal);
+        let v2 = page_number_value("2", PageNumberFormat::Decimal);
         assert_eq!(v2, v1 + 1);
 
         // Decimal: 5 -> 5 is NOT consecutive (static text)
-        let v1 = page_number_value("5", &PageNumberFormat::Decimal);
-        let v2 = page_number_value("5", &PageNumberFormat::Decimal);
+        let v1 = page_number_value("5", PageNumberFormat::Decimal);
+        let v2 = page_number_value("5", PageNumberFormat::Decimal);
         assert_ne!(v2, v1 + 1);
 
         // Roman: i -> ii is consecutive
-        let v1 = page_number_value("i", &PageNumberFormat::LowerRoman);
-        let v2 = page_number_value("ii", &PageNumberFormat::LowerRoman);
+        let v1 = page_number_value("i", PageNumberFormat::LowerRoman);
+        let v2 = page_number_value("ii", PageNumberFormat::LowerRoman);
         assert_eq!(v2, v1 + 1);
 
         // Letter: a -> b is consecutive
-        let v1 = page_number_value("a", &PageNumberFormat::LowerLetter);
-        let v2 = page_number_value("b", &PageNumberFormat::LowerLetter);
+        let v1 = page_number_value("a", PageNumberFormat::LowerLetter);
+        let v2 = page_number_value("b", PageNumberFormat::LowerLetter);
         assert_eq!(v2, v1 + 1);
     }
 }

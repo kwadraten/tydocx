@@ -26,8 +26,20 @@ pub struct PagePreset {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FootnotePreset {
-    /// "decimal" (1,2,3) or "circled" (①②③)
-    pub format: Option<String>,
+    /// Footnote number format: decimal (1,2,3) or circled (①②③).
+    pub format: Option<FootnoteNumberFormat>,
+}
+
+/// Footnote number format declared in a preset TOML file.
+///
+/// Deserialized from the `format` string (`"decimal"` / `"circled"`); an
+/// unknown value is rejected at load time instead of silently falling back
+/// to decimal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FootnoteNumberFormat {
+    Decimal,
+    Circled,
 }
 
 impl Preset {
@@ -48,11 +60,11 @@ impl Preset {
             }
         }
         if let Some(footnote) = &self.footnote
-            && let Some(format) = &footnote.format
+            && let Some(format) = footnote.format
         {
-            doc.style.footnote_format = match format.as_str() {
-                "circled" => typort_ooxml::FootnoteFormat::CircledNumber,
-                _ => typort_ooxml::FootnoteFormat::Decimal,
+            doc.style.footnote_format = match format {
+                FootnoteNumberFormat::Decimal => typort_ooxml::FootnoteFormat::Decimal,
+                FootnoteNumberFormat::Circled => typort_ooxml::FootnoteFormat::CircledNumber,
             };
         }
     }
@@ -153,6 +165,49 @@ margin_right_cm = 3.17
     fn cm_to_twips_converts_correctly() {
         assert_eq!(cm_to_twips(2.54), 1440);
         assert_eq!(cm_to_twips(3.17), 1797);
+    }
+
+    #[test]
+    fn footnote_format_parses_known_values() {
+        let circled: Preset = toml::from_str("[footnote]\nformat = \"circled\"\n").unwrap();
+        assert_eq!(
+            circled.footnote.as_ref().unwrap().format,
+            Some(FootnoteNumberFormat::Circled)
+        );
+        let decimal: Preset = toml::from_str("[footnote]\nformat = \"decimal\"\n").unwrap();
+        assert_eq!(
+            decimal.footnote.as_ref().unwrap().format,
+            Some(FootnoteNumberFormat::Decimal)
+        );
+    }
+
+    #[test]
+    fn footnote_format_absent_means_no_override() {
+        let preset: Preset = toml::from_str("[journal]\nname = \"No Footnotes\"\n").unwrap();
+        assert!(preset.footnote.is_none());
+    }
+
+    #[test]
+    fn footnote_format_rejects_unknown_values() {
+        let result = toml::from_str::<Preset>("[footnote]\nformat = \"roman\"\n");
+        assert!(result.is_err(), "unknown footnote format must fail to load");
+    }
+
+    #[test]
+    fn footnote_format_applies_to_document() {
+        let mut doc = typort_ooxml::Document::new();
+        let preset: Preset = toml::from_str("[footnote]\nformat = \"circled\"\n").unwrap();
+        preset.apply(&mut doc);
+        assert_eq!(
+            doc.style.footnote_format,
+            typort_ooxml::FootnoteFormat::CircledNumber
+        );
+        let preset: Preset = toml::from_str("[footnote]\nformat = \"decimal\"\n").unwrap();
+        preset.apply(&mut doc);
+        assert_eq!(
+            doc.style.footnote_format,
+            typort_ooxml::FootnoteFormat::Decimal
+        );
     }
 
     #[test]

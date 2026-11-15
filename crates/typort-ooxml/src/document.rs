@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParagraphStyle {
     Normal,
@@ -5,11 +7,14 @@ pub enum ParagraphStyle {
 }
 
 impl ParagraphStyle {
+    /// The `w:pStyle` value string. `Normal` borrows its static name; a
+    /// heading level is formatted, so it owns its string — hence `Cow`
+    /// instead of `&'static str` like the sibling value methods.
     #[must_use]
-    pub fn ooxml_value(&self) -> String {
+    pub fn ooxml_value(&self) -> Cow<'static, str> {
         match self {
-            Self::Normal => "Normal".to_string(),
-            Self::Heading(level) => format!("Heading{level}"),
+            Self::Normal => Cow::Borrowed("Normal"),
+            Self::Heading(level) => Cow::Owned(format!("Heading{level}")),
         }
     }
 }
@@ -26,7 +31,7 @@ pub enum Alignment {
 impl Alignment {
     /// Return the OOXML `w:jc` value string for this alignment.
     #[must_use]
-    pub fn ooxml_value(&self) -> &'static str {
+    pub fn ooxml_value(self) -> &'static str {
         match self {
             Alignment::Left => "left",
             Alignment::Center => "center",
@@ -86,7 +91,7 @@ pub struct ListInfo {
 }
 
 /// Word bibliography source type (`ST_SourceType`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceType {
     JournalArticle,
     Book,
@@ -101,7 +106,7 @@ pub enum SourceType {
 
 impl SourceType {
     #[must_use]
-    pub fn ooxml_value(&self) -> &'static str {
+    pub fn ooxml_value(self) -> &'static str {
         match self {
             Self::JournalArticle => "JournalArticle",
             Self::Book => "Book",
@@ -802,7 +807,7 @@ pub struct Body {
 }
 
 /// Section break type for multi-section documents.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionBreakType {
     NextPage,
     Continuous,
@@ -812,7 +817,7 @@ pub enum SectionBreakType {
 
 impl SectionBreakType {
     #[must_use]
-    pub fn ooxml_value(&self) -> &'static str {
+    pub fn ooxml_value(self) -> &'static str {
         match self {
             Self::NextPage => "nextPage",
             Self::Continuous => "continuous",
@@ -895,7 +900,7 @@ pub enum FootnoteFormat {
 }
 
 /// Page number format for footer page numbering.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageNumberFormat {
     Decimal,
     LowerRoman,
@@ -906,7 +911,7 @@ pub enum PageNumberFormat {
 
 impl PageNumberFormat {
     #[must_use]
-    pub fn ooxml_value(&self) -> &'static str {
+    pub fn ooxml_value(self) -> &'static str {
         match self {
             Self::Decimal => "decimal",
             Self::LowerRoman => "lowerRoman",
