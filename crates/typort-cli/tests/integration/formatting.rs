@@ -962,7 +962,18 @@ fn issue_highlight_color_passthrough() {
         xml.contains("<w:shd w:val=\"clear\" w:fill=\"FFCCCC\"/>"),
         "arbitrary pink fill should pass through as character shading"
     );
-    for text in ["default text", "pink text", "blue text", "gradient text"] {
+    assert_eq!(
+        xml.matches("<w:shd ").count(),
+        1,
+        "fill:none must not add shading; only the pink fill is shaded"
+    );
+    for text in [
+        "default text",
+        "pink text",
+        "blue text",
+        "gradient text",
+        "plain text",
+    ] {
         assert!(xml.contains(text), "highlight text '{text}' present");
     }
 }
