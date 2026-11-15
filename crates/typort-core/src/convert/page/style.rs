@@ -3,7 +3,7 @@
 //! Extracts the most-common font family and size plus paragraph spacing,
 //! indentation, justification, heading styles, and footnote sizing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use typort_ooxml::document::{Document, DocumentStyle, FootnoteFormat, InlineElement};
 use typst::layout::{Frame, FrameItem};
@@ -107,6 +107,8 @@ struct FontInfoHistograms {
     size_counts: HashMap<u32, usize>,
     y_positions: Vec<(f64, u32)>,
     body_cap_heights: Vec<f64>,
+    /// Families whose rendered faces carry Typst's `MONOSPACE` flag (#26).
+    monospace_fonts: HashSet<String>,
 }
 
 /// Extract document style (fonts, sizes, spacing) from the rendered `PagedDocument`.
@@ -127,6 +129,7 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
         size_counts,
         y_positions,
         body_cap_heights,
+        monospace_fonts,
     } = histograms;
 
     // Detect body font (most common per script). On a count tie, fall back to
@@ -170,21 +173,7 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
     };
 
     // Detect code font (monospace font that isn't the body font)
-    let code_font = super::stats::dominant_key(
-        ascii_font_counts
-            .iter()
-            .filter(|(f, _)| {
-                let fl = f.to_lowercase();
-                (fl.contains("mono")
-                    || fl.contains("courier")
-                    || fl.contains("consol")
-                    || fl.contains("fira code")
-                    || fl.contains("source code"))
-                    && f.as_str() != body_font_ascii
-            })
-            .map(|(font, count)| (font.as_str(), *count)),
-    )
-    .map_or_else(|| "Courier New".to_string(), ToString::to_string);
+    let code_font = detect_code_font(&ascii_font_counts, &monospace_fonts, &body_font_ascii);
 
     // Detect sizes for code, footnotes, headings from actual rendered data
     let code_size_half_pt = detect_code_size(&size_counts, body_size_half_pt);
@@ -434,6 +423,25 @@ fn collect_right_edges(
             }
         }
     });
+}
+
+/// Pick the code font: the most common monospace family that is not the body
+/// font. Monospace-ness is read from `monospace_fonts` — families whose
+/// rendered faces carry Typst's `MONOSPACE` flag (#26) — never from the family
+/// name, so a monospace face without "mono" in its name ("Cascadia Code",
+/// "Hack") is picked, and a proportional face that happens to carry one is not.
+fn detect_code_font(
+    ascii_font_counts: &HashMap<String, usize>,
+    monospace_fonts: &HashSet<String>,
+    body_font_ascii: &str,
+) -> String {
+    super::stats::dominant_key(
+        ascii_font_counts
+            .iter()
+            .filter(|(f, _)| monospace_fonts.contains(*f) && f.as_str() != body_font_ascii)
+            .map(|(font, count)| (font.as_str(), *count)),
+    )
+    .map_or_else(|| "Courier New".to_string(), ToString::to_string)
 }
 
 /// Detect code block font size: the most common size smaller than body that's used with mono fonts.
@@ -716,6 +724,19 @@ fn collect_font_info_split(frame: &Frame, histograms: &mut FontInfoHistograms) {
 
             let has_cjk = text_item.text.chars().any(is_cjk_char);
             let has_ascii = text_item.text.chars().any(|c| c.is_ascii_alphabetic());
+            // Monospace-ness is a property of the font face itself — Typst
+            // computes the `MONOSPACE` flag from the font tables — not of the
+            // family name (#26). A "mono" in the name proves nothing either
+            // way: "Cascadia Code" and "Hack" are monospace without one, and a
+            // proportional face can carry one.
+            if text_item
+                .font
+                .info()
+                .flags
+                .contains(typst_library::text::FontFlags::MONOSPACE)
+            {
+                histograms.monospace_fonts.insert(family.clone());
+            }
             if has_cjk {
                 *histograms.cjk_fonts.entry(family.clone()).or_insert(0) += glyph_count;
             }
@@ -724,4 +745,76 @@ fn collect_font_info_split(frame: &Frame, histograms: &mut FontInfoHistograms) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HashMap, HashSet, detect_code_font};
+
+    fn counts(pairs: &[(&str, usize)]) -> HashMap<String, usize> {
+        pairs
+            .iter()
+            .map(|(name, count)| ((*name).to_string(), *count))
+            .collect()
+    }
+
+    fn mono(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn detect_code_font_picks_dominant_monospace_not_body() {
+        // Liberation Mono dominates the monospace families and is not the body
+        // font, so it wins over the less-used DejaVu Sans Mono.
+        let ascii = counts(&[
+            ("Liberation Serif", 500),
+            ("Liberation Mono", 80),
+            ("DejaVu Sans Mono", 20),
+        ]);
+        let monospace = mono(&["Liberation Mono", "DejaVu Sans Mono"]);
+        assert_eq!(
+            detect_code_font(&ascii, &monospace, "Liberation Serif"),
+            "Liberation Mono"
+        );
+    }
+
+    #[test]
+    fn detect_code_font_ignores_name_substrings() {
+        // "Cascadia Code" and "Hack" are monospace without "mono" in the name,
+        // so the flag set — not the name — decides. A proportional face that
+        // happens to carry a substring ("Monotype Corsiva" is not monospace)
+        // must not be picked even though it dominates the counts.
+        let ascii = counts(&[
+            ("Liberation Serif", 500),
+            ("Monotype Corsiva", 90),
+            ("Cascadia Code", 80),
+            ("Hack", 10),
+        ]);
+        let monospace = mono(&["Cascadia Code", "Hack"]);
+        assert_eq!(
+            detect_code_font(&ascii, &monospace, "Liberation Serif"),
+            "Cascadia Code"
+        );
+    }
+
+    #[test]
+    fn detect_code_font_skips_body_font_even_when_monospace() {
+        // A monospace body font is the body font, not the code font.
+        let ascii = counts(&[("DejaVu Sans Mono", 500), ("Liberation Mono", 80)]);
+        let monospace = mono(&["DejaVu Sans Mono", "Liberation Mono"]);
+        assert_eq!(
+            detect_code_font(&ascii, &monospace, "DejaVu Sans Mono"),
+            "Liberation Mono"
+        );
+    }
+
+    #[test]
+    fn detect_code_font_falls_back_without_monospace() {
+        let ascii = counts(&[("Liberation Serif", 500)]);
+        let monospace = mono(&[]);
+        assert_eq!(
+            detect_code_font(&ascii, &monospace, "Liberation Serif"),
+            "Courier New"
+        );
+    }
 }

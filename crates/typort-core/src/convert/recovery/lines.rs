@@ -49,7 +49,11 @@ struct FrameTextItem {
     x: f64,
     text: String,
     size_pt: f64,
-    font_name: String,
+    /// The face Typst shaped this item with carries an OpenType `MATH` table
+    /// (`FontFlags::MATH`) — the same signal `run_style` already uses (#26).
+    /// A name substring ("Math") is not how a math font is identified; the
+    /// table is.
+    is_math_font: bool,
 }
 
 fn cluster_by_x<'a>(
@@ -182,7 +186,7 @@ pub(super) fn extract_lines_from_all_pages(
             let trimmed = full_text.trim().to_string();
             let item_count = u32::try_from(items.len()).map_or(f64::from(u32::MAX), f64::from);
             let avg_y = items.iter().map(|i| i.y).sum::<f64>() / item_count;
-            let all_math_font = items.iter().all(|i| i.font_name.contains("Math"));
+            let all_math_font = items.iter().all(|i| i.is_math_font);
             if !trimmed.is_empty() {
                 all_lines.push(FrameLine {
                     text: trimmed,
@@ -203,13 +207,17 @@ fn collect_text_items_with_pos(frame: &Frame, items: &mut Vec<FrameTextItem>) {
         if let FrameItem::Text(text_item) = item {
             let text = text_item.text.to_string();
             if !text.is_empty() {
-                let font_name = text_item.font.info().family.clone();
+                let is_math_font = text_item
+                    .font
+                    .info()
+                    .flags
+                    .contains(typst_library::text::FontFlags::MATH);
                 items.push(FrameTextItem {
                     y: position.y.to_pt(),
                     x: position.x.to_pt(),
                     text,
                     size_pt: text_item.size.to_pt(),
-                    font_name,
+                    is_math_font,
                 });
             }
         }

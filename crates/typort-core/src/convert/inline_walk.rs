@@ -121,6 +121,22 @@ pub(super) fn collect_inlines(
     }
 }
 
+/// Whether an inline element with this tag name and `role` attribute is
+/// skipped (not descended into) for the given collection purpose.
+///
+/// Generic and Footnote both skip `MathML` — `<math>` is the rendered echo of
+/// an equation the Tag walker already emitted as OMML — and differ only in
+/// which footnote-marker role they suppress (`doc-noteref` vs `doc-backlink`).
+/// `FormattedRun` deliberately skips nothing: it descends into `MathML`, and
+/// changing that output belongs to #12.
+fn skip_inline_element(purpose: InlinePurpose, tag: &str, role: Option<&str>) -> bool {
+    match purpose {
+        InlinePurpose::Generic => tag == "math" || role == Some("doc-noteref"),
+        InlinePurpose::Footnote => tag == "math" || role == Some("doc-backlink"),
+        InlinePurpose::FormattedRun | InlinePurpose::Paragraph => false,
+    }
+}
+
 pub(super) fn collect_inline_element(
     elem: &HtmlElement,
     para: &mut Paragraph,
@@ -133,34 +149,48 @@ pub(super) fn collect_inline_element(
                 handle_inline_html_element(elem, ctx, para);
             }
         }
-        InlinePurpose::Generic => {
-            if tag_name(elem) == "math" || has_attr_value(elem, "role", "doc-noteref") {
+        InlinePurpose::Generic | InlinePurpose::FormattedRun | InlinePurpose::Footnote => {
+            // The three non-Paragraph purposes share one descend shape: skip
+            // what the purpose suppresses, then recurse with the tag's
+            // formatting. Only Generic treats `<br>` as a line break.
+            let tag = tag_name(elem);
+            if skip_inline_element(
+                options.purpose,
+                &tag,
+                get_attr_value(elem, "role").as_deref(),
+            ) {
                 return;
             }
-            if tag_name(elem) == "br" {
+            if options.purpose == InlinePurpose::Generic && tag == "br" {
                 // A forced line break (`#linebreak()`) — without this it falls
                 // through to the child recursion below (a `<br>` has no children)
                 // and the break is silently dropped, gluing the surrounding words.
                 para.push_run(Run::line_break());
                 return;
             }
-            let fmt = options.fmt.for_tag(&tag_name(elem));
-            collect_inlines(&elem.children, para, None, options.with_fmt(fmt));
-        }
-        InlinePurpose::FormattedRun => {
-            // Deliberately descend into MathML here. Link display collection has
-            // historically leaked its glyphs; changing that output belongs to #12.
-            let fmt = options.fmt.for_tag(&tag_name(elem));
-            collect_inlines(&elem.children, para, None, options.with_fmt(fmt));
-        }
-        InlinePurpose::Footnote => {
-            if tag_name(elem) == "math" || has_attr_value(elem, "role", "doc-backlink") {
-                return;
-            }
-            let fmt = options.fmt.for_tag(&tag_name(elem));
+            let fmt = options.fmt.for_tag(&tag);
             collect_inlines(&elem.children, para, None, options.with_fmt(fmt));
         }
     }
+}
+
+/// Collect an element's children into a fresh paragraph with the given
+/// formatting, using the Generic collector. The Generic collector is
+/// element-aware (equations resolve to OMML when `html_doc` is present), so
+/// this preserves inline math that `drain_text_runs` would drop.
+fn collect_children_generic(
+    children: &[HtmlNode],
+    fmt: InlineFmt,
+    html_doc: Option<&HtmlDocument>,
+) -> Paragraph {
+    let mut tmp = Paragraph::new();
+    collect_inlines(
+        children,
+        &mut tmp,
+        None,
+        InlineOptions::generic(fmt, html_doc),
+    );
+    tmp
 }
 
 pub(super) fn collect_generic_inline_tag(
@@ -557,36 +587,17 @@ pub(super) fn handle_inline_html_element(
 ) {
     let tag_str = tag_name(elem);
     match tag_str.as_str() {
-        "strong" | "b" | "em" | "i" => {
-            // Pass the doc and move ALL inlines (not just text runs): emphasis can
-            // wrap an inline equation (typst 0.15 nests math inside the emphasis
-            // element), which the shared inline collector emits as OMML via the
-            // introspector — `drain_text_runs` would silently drop that math.
-            let mut tmp = Paragraph::new();
-            collect_inlines(
+        "strong" | "b" | "em" | "i" | "code" => {
+            // Emphasis and code share one collection shape: descend with the
+            // tag's formatting (`for_tag` maps "code" to monospace) and move
+            // ALL inlines (not just text runs) — emphasis can wrap an inline
+            // equation (typst 0.15 nests math inside the emphasis element),
+            // which the shared inline collector emits as OMML via the
+            // introspector; `drain_text_runs` would silently drop that math.
+            let mut tmp = collect_children_generic(
                 &elem.children,
-                &mut tmp,
-                None,
-                InlineOptions::generic(
-                    InlineFmt::default().for_tag(tag_str.as_str()),
-                    Some(ctx.html_doc),
-                ),
-            );
-            para.inlines.append(&mut tmp.inlines);
-        }
-        "code" => {
-            let mut tmp = Paragraph::new();
-            collect_inlines(
-                &elem.children,
-                &mut tmp,
-                None,
-                InlineOptions::generic(
-                    InlineFmt {
-                        monospace: true,
-                        ..InlineFmt::default()
-                    },
-                    Some(ctx.html_doc),
-                ),
+                InlineFmt::default().for_tag(tag_str.as_str()),
+                Some(ctx.html_doc),
             );
             para.inlines.append(&mut tmp.inlines);
         }
@@ -606,13 +617,7 @@ pub(super) fn handle_inline_html_element(
         "a" => {
             // External hyperlink from HTML <a href="...">
             if let Some(href) = get_attr_value(elem, "href") {
-                let mut tmp = Paragraph::new();
-                collect_inlines(
-                    &elem.children,
-                    &mut tmp,
-                    None,
-                    InlineOptions::generic(InlineFmt::default(), None),
-                );
+                let mut tmp = collect_children_generic(&elem.children, InlineFmt::default(), None);
                 let runs = drain_text_runs(&mut tmp);
                 if !runs.is_empty() {
                     para.add_hyperlink(href, runs);
@@ -621,29 +626,18 @@ pub(super) fn handle_inline_html_element(
                 collect_inlines(&elem.children, para, Some(ctx), InlineOptions::paragraph());
             }
         }
-        "sup" => {
-            let mut tmp = Paragraph::new();
-            collect_inlines(
-                &elem.children,
-                &mut tmp,
-                None,
-                InlineOptions::generic(InlineFmt::default(), None),
-            );
+        "sup" | "sub" => {
+            // One shape, one flag difference: collect the children as plain
+            // text runs, then mark them superscript or subscript. Text runs
+            // only — `drain_text_runs` drops anything else (e.g. an equation
+            // nested under the marker), as before.
+            let mut tmp = collect_children_generic(&elem.children, InlineFmt::default(), None);
             for mut run in drain_text_runs(&mut tmp) {
-                run.superscript = true;
-                para.push_run(run);
-            }
-        }
-        "sub" => {
-            let mut tmp = Paragraph::new();
-            collect_inlines(
-                &elem.children,
-                &mut tmp,
-                None,
-                InlineOptions::generic(InlineFmt::default(), None),
-            );
-            for mut run in drain_text_runs(&mut tmp) {
-                run.subscript = true;
+                if tag_str == "sup" {
+                    run.superscript = true;
+                } else {
+                    run.subscript = true;
+                }
                 para.push_run(run);
             }
         }
@@ -655,5 +649,78 @@ pub(super) fn handle_inline_html_element(
         _ => {
             collect_inlines(&elem.children, para, Some(ctx), InlineOptions::paragraph());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InlinePurpose, skip_inline_element};
+
+    #[test]
+    fn skip_inline_element_generic_skips_math_and_noteref() {
+        // Generic skips the MathML echo of an equation and the footnote
+        // reference marker, but descends into anything else.
+        assert!(skip_inline_element(InlinePurpose::Generic, "math", None));
+        assert!(skip_inline_element(
+            InlinePurpose::Generic,
+            "sup",
+            Some("doc-noteref")
+        ));
+        assert!(!skip_inline_element(InlinePurpose::Generic, "sup", None));
+        assert!(!skip_inline_element(
+            InlinePurpose::Generic,
+            "sup",
+            Some("doc-backlink")
+        ));
+        assert!(!skip_inline_element(InlinePurpose::Generic, "span", None));
+    }
+
+    #[test]
+    fn skip_inline_element_formatted_run_skips_nothing() {
+        // FormattedRun deliberately descends into MathML (see #12); only the
+        // other purposes suppress anything.
+        assert!(!skip_inline_element(
+            InlinePurpose::FormattedRun,
+            "math",
+            None
+        ));
+        assert!(!skip_inline_element(
+            InlinePurpose::FormattedRun,
+            "sup",
+            Some("doc-noteref")
+        ));
+        assert!(!skip_inline_element(
+            InlinePurpose::FormattedRun,
+            "a",
+            Some("doc-backlink")
+        ));
+    }
+
+    #[test]
+    fn skip_inline_element_footnote_skips_math_and_backlink() {
+        assert!(skip_inline_element(InlinePurpose::Footnote, "math", None));
+        assert!(skip_inline_element(
+            InlinePurpose::Footnote,
+            "a",
+            Some("doc-backlink")
+        ));
+        assert!(!skip_inline_element(
+            InlinePurpose::Footnote,
+            "a",
+            Some("doc-noteref")
+        ));
+        assert!(!skip_inline_element(InlinePurpose::Footnote, "span", None));
+    }
+
+    #[test]
+    fn skip_inline_element_paragraph_never_skips() {
+        // Paragraph dispatches to handle_inline_html_element, which owns its
+        // own skipping; the shared predicate stays out of its way.
+        assert!(!skip_inline_element(InlinePurpose::Paragraph, "math", None));
+        assert!(!skip_inline_element(
+            InlinePurpose::Paragraph,
+            "sup",
+            Some("doc-noteref")
+        ));
     }
 }

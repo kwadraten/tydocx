@@ -985,3 +985,26 @@ fn issue_highlight_space_preserved() {
     assert!(xml.contains("World"), "adjacent text present");
     assert!(xml.contains("bold"), "bold text present");
 }
+
+#[test]
+fn issue_code_font_detected_by_flag_not_name() {
+    // #26: the code face is "Zed Sans" (tests/fonts/ZedSans.ttf) — monospace
+    // by its MONOSPACE flag, with none of the old name substrings ("mono",
+    // "courier", "consol", "fira code", "source code") in its family name.
+    // The detected code font must be Zed Sans, not the "Courier New" the
+    // name check fell back to.
+    let fonts = std::path::PathBuf::from("../../tests/fonts");
+    let styles_xml = crate::common::fixture_part_with_font_dirs(
+        "issue_code_font_flag_not_name",
+        "word/styles.xml",
+        &[fonts],
+    );
+    assert!(
+        styles_xml.contains("Zed Sans"),
+        "code style font must be the detected monospace face Zed Sans:\n{styles_xml}"
+    );
+    assert!(
+        !styles_xml.contains("Courier New"),
+        "code font must not fall back to Courier New:\n{styles_xml}"
+    );
+}
