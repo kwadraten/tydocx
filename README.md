@@ -23,15 +23,14 @@ for the schema); none are bundled.
 
 typort compiles your Typst document and generates a Word file directly — no intermediate PDF, no Pandoc, no template required.
 
-```
-input.typ ──► Typst compiler ──► HtmlDocument (structure)
-                               ──► PagedDocument (layout)
-                                        │
-                                        ▼
-                              typort conversion engine
-                                        │
-                                        ▼
-                                   output.docx
+```mermaid
+flowchart LR
+    INPUT["input.typ"] --> COMP["Typst compiler"]
+    COMP --> HTML["HtmlDocument (structure)"]
+    COMP --> PAGED["PagedDocument (layout)"]
+    HTML --> ENG["typort conversion engine"]
+    PAGED --> ENG
+    ENG --> OUT["output.docx"]
 ```
 
 ## Supported features
@@ -81,13 +80,13 @@ OOXML XML is generated directly via `quick-xml`. No docx-rs, no intermediate for
 
 ## Architecture
 
-```
-crates/
-  typort-cli/     CLI binary (clap)
-  typort-core/    Typst compilation + conversion engine
-  typort-ooxml/   OOXML document model + XML writer + ZIP packaging
-  typort-math/    Typst math → OMML conversion
-  typort-presets/ Journal preset loading
+```mermaid
+flowchart TD
+    CRATES["crates/"] --> CLI["typort-cli/ — CLI binary (clap)"]
+    CRATES --> CORE["typort-core/ — Typst compilation + conversion engine"]
+    CRATES --> OOXML["typort-ooxml/ — OOXML document model + XML writer + ZIP packaging"]
+    CRATES --> MATH["typort-math/ — Typst math → OMML conversion"]
+    CRATES --> PRESETS["typort-presets/ — Journal preset loading"]
 ```
 
 ## Build & test

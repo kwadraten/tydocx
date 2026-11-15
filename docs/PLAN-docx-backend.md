@@ -2,7 +2,7 @@
 
 分支：`feature/docx-backend`，基线 main `9f9cb2e`，Typst 0.15.1。
 目标：把 typort 从“转换器”演进为真正的 DOCX 编译后端。
-权威规则见 `CLAUDE.md`；架构现状见 `docs/ARCHITECTURE.md`。本文档只定方向，不复述现状。
+权威规则见 `AGENTS.md`；架构现状见 `docs/ARCHITECTURE.md`。本文档只定方向，不复述现状。
 
 ## 目标架构
 
@@ -60,6 +60,7 @@ Typst 官方 #190（docx 支持）已关闭，docx 不在官方 scope 内；
 ## 工作流
 
 - 每步：实现代理 → 独立测试代理 → review 循环到零 P0/P1 → 提交 → push 请用户评审。
+- 纯函数化：新增逻辑优先写成纯函数（显式输入→输出，无隐藏状态、无 I/O），I/O 只放在边界；每个纯函数配单元测试，不只靠 fixture 集成测试。
 - 分工文件归属：文档清理只动 `*.md` 的图；spike 只写 `docs/spike-realize.md`；
   步骤 1 只动 `crates/` 与 `tests/`。互不重叠。
 - 图一律用 Mermaid，不用 ASCII 图。行文不写测试数量。

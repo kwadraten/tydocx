@@ -2,7 +2,7 @@
 
 This document explains how typort turns a Typst document into an editable Word
 file. It is written for newcomers to the codebase. For build and contribution
-rules, see [`CLAUDE.md`](../CLAUDE.md) in the repository root.
+rules, see [`AGENTS.md`](../AGENTS.md) in the repository root.
 
 ## The problem
 
@@ -90,36 +90,14 @@ heart of the system. It is a linear, numbered pipeline. The steps are grouped he
 by purpose; see the numbered comments in `crates/typort-core/src/convert/mod.rs`
 for the exact order.
 
-```
-                    ┌─────────────────────────────────────────────┐
-   input.typ ──►    │  TyportWorld  (World trait: source, fonts,   │
-                    │                packages, Feature::Html)      │
-                    └───────────────┬──────────────┬──────────────┘
-                                    │              │
-              compile::<HtmlDocument>      compile::<PagedDocument>
-                                    │              │
-                    semantics + introspector   geometry + frames
-                                    │              │
-                                    ▼              ▼
-                    ┌─────────────────────────────────────────────┐
-                    │  convert(): five named phases                 │
-                    │   1  compile HTML + Paged targets             │
-                    │   2  apply page + style, then AST overrides   │
-                    │   3  walk HTML body → emit BlockElements;     │
-                    │      decode <img> data URLs; attach figure    │
-                    │      rasters by Location                      │
-                    │   4  apply headers/footers/page numbering     │
-                    │   5  run recovery and post-processing passes │
-                    │      (metadata, bibliography, per-run styles,│
-                    │      source breaks/smallcaps/hanging indents, │
-                    │      sections, rules, merging, coalescing)    │
-                    └───────────────┬─────────────────────────────┘
-                                    ▼
-                          typort_ooxml::Document   (the IR)
-                                    ▼
-                          writer → XML parts → ZIP
-                                    ▼
-                               output.docx
+```mermaid
+flowchart TD
+    INPUT["input.typ"] --> WORLD["TyportWorld (World trait: source, fonts, packages, Feature::Html)"]
+    WORLD -->|compile::&lt;HtmlDocument&gt; — semantics + introspector| CONVERT["convert(): five named phases<br/>1 compile HTML + Paged targets<br/>2 apply page + style, then AST overrides<br/>3 walk HTML body → emit BlockElements; decode &lt;img&gt; data URLs; attach figure rasters by Location<br/>4 apply headers/footers/page numbering<br/>5 run recovery and post-processing passes (metadata, bibliography, per-run styles, source breaks/smallcaps/hanging indents, sections, rules, merging, coalescing)"]
+    WORLD -->|compile::&lt;PagedDocument&gt; — geometry + frames| CONVERT
+    CONVERT --> IR["typort_ooxml::Document (the IR)"]
+    IR --> WRITER["writer → XML parts → ZIP"]
+    WRITER --> OUT["output.docx"]
 ```
 
 Two design properties worth knowing:
@@ -136,13 +114,13 @@ Two design properties worth knowing:
 
 ## Crate layout
 
-```
-crates/
-  typort-cli/      Thin clap binary: parse args → convert → write .docx
-  typort-core/     Typst compilation + the conversion engine (the brain)
-  typort-ooxml/    The OOXML document model (IR) + XML writer + ZIP packaging
-  typort-math/     Typst math Content tree → OMML
-  typort-presets/  Journal/style preset loading
+```mermaid
+flowchart TD
+    CRATES["crates/"] --> CLI["typort-cli/ — Thin clap binary: parse args → convert → write .docx"]
+    CRATES --> CORE["typort-core/ — Typst compilation + the conversion engine (the brain)"]
+    CRATES --> OOXML["typort-ooxml/ — The OOXML document model (IR) + XML writer + ZIP packaging"]
+    CRATES --> MATH["typort-math/ — Typst math Content tree → OMML"]
+    CRATES --> PRESETS["typort-presets/ — Journal/style preset loading"]
 ```
 
 `typort-ooxml/src/lib.rs` is the crate's public API index: it contains only module
@@ -299,4 +277,4 @@ pattern to follow:
    not guessed from the presence of CJK glyphs.
 
 If a future change reintroduces `if text.contains("<word>")` to drive layout,
-it regresses this principle. See `CLAUDE.md`.
+it regresses this principle. See `AGENTS.md`.
