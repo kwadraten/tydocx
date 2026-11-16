@@ -138,17 +138,21 @@ contextual 函数，从样式链读 `TargetElem::target`。
 2. **target 在一次编译内也会变。** HTML 导出里 `html.frame()` 内部的
    target 是 `paged`。单源导出必须接受：IR 里个别子树可能来自另一个目标
    的分支。
-3. **自定义 `Output` 必须选一个现有变体。** 推荐选 `Html`：DOCX 是流式
-   文档，语义上离 HTML 分支最近；模板的 HTML 分支产出的是流式内容，
-   相对容易降级。但有两个代价要认下：
-   - `compile` 会要求 Library 启用 `Feature::Html`，否则直接报错；启用
-     后每次编译都会多一条“html export is under active development”的
-     warning（上游 issue #5512）。
-   - 模板的 HTML 分支可能产出 `html.elem(...)` 这种原生 HTML 内容——它是
-     `Content`，可以走 realize，但降级到 OOXML 时要显式处理（报告降级，
-     而不是静默丢掉）。
-   - 选 `Paged` 能避开 warning，但模板会走打印分支（box、stroke、绝对
-     定位），降级更难。得不偿失。
+3. **自定义 `Output` 必须选一个现有变体。** 选 `Paged`：两种 show 输出
+   各有利弊，Paged 的输出更接近 DOCX 的块模型且保留字段。Paged 与 Html
+   都有内置 show 规则（Typst 0.15.1：Paged 59 条，Html 38 条）——
+   “Paged 下无内置规则”是错的（见下节修正，探针实测）。差别在于输出
+   形态：Html 把 TableElem 投影成 `<table>`（单元格只剩
+   colspan/rowspan，fill/stroke/inset/align/列宽全丢）；Paged 把元素
+   投影成 BlockElem/ParElem 容器 + 渲染文本（元素本身被吃掉，但字段
+   以 materialize 形式留在元素上，身份保留在 tag 流里）。模板走打印
+   分支（box、stroke、绝对定位）对 DOCX 反而是对的分支——Word 是分页
+   文档，这些正是 C2 要表示的东西。
+   - 选 `Html` 的代价：`compile` 要求 Library 启用 `Feature::Html`，
+     否则直接报错；启用后每次编译多一条“html export is under active
+     development”的 warning（上游 issue #5512）；模板的 HTML 分支可能
+     产出 `html.elem(...)` 原生 HTML 内容——它是 `Content`，可以走
+     realize，但降级到 OOXML 时要显式处理（报告降级，而不是静默丢掉）。
    - 加一个 `Target::Docx` 变体需要改上游枚举，是 breaking change，不在
      本分支的掌控内。
 
@@ -167,24 +171,57 @@ TableElem 调查的结论，推翻上节“推荐选 Html”的前提：
   反查——即现在 M2/table_align 的做法。B 路原样写并不能解决表格问题；
   “Html 分支产出流式内容相对容易降级”只在模板分支层面成立，在 pairs
   层面 Html 意味着语义已被改写。
-- 步骤 2 改走 Target::Paged：Paged 下没有任何元素的内置规则，
-  TableElem 等保持语义，`synthesize` 照常跑（`elem.grid` 已解析，含
-  entries/headers/footer/gutter 展开）。`compile` 对 Paged 不要求
+- 步骤 2 改走 Target::Paged：`compile` 对 Paged 不要求
   `Feature::Html`、不发 warning（typst lib.rs `compile_impl` 的
   match）；`PagedDocument` 本身就是 `Target::Paged` 的 `Output`，
   公共 API 走得通。
+
+探针复核（2026-11-16，`~/workspace/realize-probe/report.md`，115 对
+dump）：上段“Paged 下没有任何元素的内置规则，TableElem 等保持语义”
+是错的，须重写前提：
+
+- Typst 0.15.1 的 `typst-layout/src/rules.rs` 为 `Target::Paged`
+  注册 **59 条**内置 show 规则（Html 在 `typst-html/src/rules.rs`
+  注册 38 条）。HEADING、FIGURE、FIGURE_CAPTION、CITE_GROUP、
+  BIBLIOGRAPHY、TABLE、TABLE_CELL 等规则都会吃掉语义元素：
+  HeadingElem 变成 BlockElem，Strong/Emph 并入 TextElem 属性，
+  CiteGroup 被渲染成 `[1]` 文本。**Paged 与 Html 的差别不是“语义
+  vs 丢失”，而是两种不同的 show 输出**——Html 投影成标签（丢
+  fill/stroke/inset/align/列宽等），Paged 投影成 BlockElem/ParElem
+  容器 + 渲染文本（丢的是元素本身，但字段以 materialize 形式留在
+  元素上，身份保留在 tag 流里）。
+- 因此 Target 改走 Paged 的结论仍成立，但理由须改成：两种 show 输出
+  各有利弊，Paged 的输出更接近 DOCX 的块模型且保留字段。
+- **Table 仍是缺口**：TableElem 在 pairs 任何位置都没有 tag（藏在
+  figure 的 BlockElem 体内，从未被 `visit`），且 `grid: None`（未
+  synthesize；字段都在：列 1fr/2fr/1fr、gutter 3pt、inset 6pt、
+  fill/align 闭包、stroke 0.5pt 灰、合并格 colspan 2）。对照：同一份
+  文档里 GridElem 的 grid 已解析（`Some(CellGrid)`）。脚注正文也不在
+  pairs 里。解决路二选一待验证：对 BlockElem 体再调一次 realize
+  （`RealizationKind::Fragment`），或从伴生 Paged 取数——Docx 与
+  Paged 两次编译的 Location 完全一致，跨编译匹配成立。
+- **introspector 必须递归收嵌套 tag**：只用顶层 TagElem 对建
+  introspector 是 blocker——`CITE_GROUP_RULE` 调 `Works::citation`，
+  查 engine introspector 里的 CiteGroup，顶层流里没有，`citation
+  could not be located` 每轮都报、最终轮编译失败。修复是按 pairs 顺序
+  扫描，遇到 ParElem/BlockElem 就地递归进 body，把体内 TagElem 也喂给
+  `builder.discover_tag`；修复后第 2 轮起自建 introspector 有 2 个
+  citegroup，编译通过，引用渲染正常。
 - 代价（开工时逐项验证）：IR 必须原生处理全部三十来种语义元素
-  （列表 pattern、标题编号、脚注收集、目录、引用标记、参考文献条目
-  渲染、数学、图片……）；参考文献条目渲染从“读 HTML”变成自己做；
-  `html.elem` 原生内容无 Paged 规则，留在 pairs 里要走 C1 降级；模板
-  走打印分支（对 DOCX 反而是对的分支——Word 是分页文档，box/stroke/
-  绝对定位正是 C2 要表示的东西）。
+  （列表 pattern、标题编号、脚注收集、目录、引用标记、数学、图片……
+  ——注意 Strong/Emph 等已被 show 规则并入 TextElem 属性，IR 里它们
+  是 run 属性而非独立变体）；参考文献条目正文已由 Typst 自己的
+  BIBLIOGRAPHY_RULE（内含 hayagriva）渲染进 pairs，**不需要自己接
+  hayagriva 渲染条目**（hayagriva 在 typort 里只剩 `b:Sources` 与自
+  定义 CSL）；`html.elem` 原生内容无 Paged 规则，留在 pairs 里要走
+  C1 降级；模板走打印分支（对 DOCX 反而是对的分支——Word 是分页文
+  档，box/stroke/绝对定位正是 C2 要表示的东西）。
 - 仍需 PagedDocument 作伴生输入（两设计皆然）：绝对几何（列宽、图
   尺寸、边区）、页码（M8 缓存文本、目录页码）、running headers、逐页
-  脚注编号——这些值只在布局后存在，realize 本身给不出。
-- 入口决策：步骤 2 先做一个 Paged 下 realize 的探针（打一份文档的
-  pairs，看元素种类与 StyleChain 是否如预期），再定 IR 形态；不要
-  直接按原草图的 `Target::Html` 开工。
+  脚注编号、脚注正文——这些值只在布局后存在，realize 本身给不出。
+- 入口决策：探针已完成（GO，有条件），下一步先做最小验证闭环
+  （Fragment 再实现 vs 伴生取表，二选一）再定 IR 形态；不要直接按
+  原草图的 `Target::Html` 开工。
 
 ## 最小代码草图：拿到 (Content, StyleChain)
 
@@ -253,10 +290,11 @@ let doc = typst::compile::<DocxDocument>(&world).output?;
 - **introspector 是必须自己解决的一块。** `Output::introspector()` 是
   trait 的一部分，编译循环靠它判断收敛。现有两个实现都是在共享的
   `ElementIntrospector` / `ElementIntrospectorBuilder` 之上搭的，喂的是
-  文档的 tag 流；`realize` 的输出里本来就带 `Tag` 对（`to_tag`），所以
-  从 pairs 的 tag 流重建一个 introspector 是可行的，但具体喂法要对着
-  `HtmlIntrospector::new(&[HtmlNode])` / `PagedIntrospector::new(&[Page])`
-  再确认一次——这是本 spike 唯一没完全钉死的实现细节。
+  文档的 tag 流；`realize` 的输出里本来就带 `Tag` 对（`to_tag`）。探针
+  已钉死喂法（2026-11-16）：**必须递归收嵌套 tag**——按 pairs 顺序
+  扫描，遇到 ParElem/BlockElem 就地递归进 body，把体内 TagElem 也喂给
+  `builder.discover_tag`；只收顶层 tag 是 blocker（引用编译失败，见
+  上节探针复核）。
 - **`Arenas` 的生命周期。** `realize` 返回的 `Pair` 借用 `content`、
   `styles` 和 arenas 里的东西；`create` 返回之前必须把需要的值复制进
   自有结构，不能把借用带出 `create`。
@@ -379,23 +417,28 @@ flowchart LR
   要换的是 typort-core 的输入形态与三路事实源，正好是 PLAN 步骤 2
   的范围。
 - target 改走 Paged（见上节修正）：不要求 `Feature::Html`，没有 Html
-  warning；代价是 IR 必须原生处理全部语义元素，参考文献条目渲染自己做。
+  warning；代价是 IR 必须原生处理全部语义元素（注意 Strong/Emph 等
+  已并入 TextElem 属性），参考文献条目正文由 Typst 的
+  BIBLIOGRAPHY_RULE 渲染进 pairs，不需要自己做。
 
 先做的前三步（实现代理的切口）：
 
-1. 先立 owned IR 类型（普通结构体，无生命周期）与 `IR -> typort_ooxml::Document`
+1. 先立 owned IR 类型（独立 crate，代数数据类型，普通结构体，无生命
+   周期）与 `IR -> typort_ooxml::Document`
    的纯 lowering，配单元测试；这一步不需要编译器参与。
 2. 再实现 `DocxDocument: Output`，`create()` 里一次 `realize` +
-   collect 到 IR；introspector 先按 `ElementIntrospectorBuilder` 从
-   pairs 的 tag 流搭，搭不通就记为阻塞项，不要绕过去。
+   collect 到 IR；introspector 按 `ElementIntrospectorBuilder` 从
+   pairs 的 tag 流搭，**须递归收嵌套 tag**（探针已验证，只收顶层是
+   blocker）；BlockElem 体内的 TableElem / 脚注正文按验证闭环的结论
+   取（Fragment 再实现或伴生 Paged）。
 3. 最后把 `convert(world)` 的调用点切到新路径，Paged 编译与源码 AST
    第三路只保留为显式注入的回退输入，并逐项登记删除计划。
 
 ## 开放问题与风险
 
-- **introspector 的具体喂法**：方向已确认（`ElementIntrospectorBuilder`
-  + pairs 的 tag 流），但构造细节要对着 `HtmlIntrospector` /
-  `PagedIntrospector` 的实现再核对一次。这是草图里唯一没完全钉死的点。
+- **introspector 的具体喂法**：探针已钉死（2026-11-16）——
+  `ElementIntrospectorBuilder` + pairs 的 tag 流，须递归收嵌套 tag；
+  只收顶层 tag 时引用编译失败。细节见上节探针复核。
 - **show 规则可以抹掉原始语义。** 一个 `heading` 可以被 show 成普通文本
   加图形。IR 要同时记“原始身份”（经 tag / location）与“实现后的结构”，
   否则降级报告写不准；具体记多少是 IR 设计时要定的。
@@ -420,5 +463,8 @@ flowchart LR
   `crates/typst-html/src/convert.rs`、`rules.rs`、`css/resolve.rs`、
   `crates/typst-layout/src/pages/mod.rs`（Paged 路径的 `realize` 调用）。
 - `typst-realize` 的 crates.io 发布状态（0.13 / 0.14 / 0.15 均有发布）。
+- 探针 `~/workspace/realize-probe/report.md`（Paged 下 realize，
+  2026-11-16：Paged 59 条 / Html 38 条内置规则、115 对 dump、嵌套
+  tag 收集法、Table 缺口、hayagriva 结论）。
 - 上游 issue：#190（docx 不在官方 scope，已关闭）、#5512（HTML 导出
   未完成，编译 warning 里引用）、#9064（自定义后端，还开着）。
