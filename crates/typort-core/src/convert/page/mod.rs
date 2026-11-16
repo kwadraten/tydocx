@@ -8,6 +8,7 @@ mod body_size;
 mod hanging_indent;
 mod language;
 mod margin;
+mod page_ref;
 mod reachable;
 mod run_style;
 mod sections;
@@ -36,5 +37,6 @@ pub(super) use body_size::{
 pub(crate) use language::is_cjk_char;
 pub(super) use language::{is_cjk_language, lang_region_to_bcp47};
 pub(super) use margin::find_body_zone;
+pub(super) use page_ref::counter_page_label;
 pub(super) use style::apply_footnote_text_size;
 pub(super) use units::{pt_to_eighth_pt, pt_to_half_pt, pt_to_twips};

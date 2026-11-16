@@ -184,8 +184,10 @@ pub(super) fn handle_html_element(elem: &HtmlElement, ctx: &mut WalkCtx) {
         "pre" => convert_code_block(elem, ctx.doc),
         "blockquote" => convert_blockquote(elem, ctx),
         "dl" => convert_term_list(elem, ctx.doc),
-        "ol" => convert_html_list(elem, ctx.doc, true, ctx.html_doc),
-        "ul" => convert_html_list(elem, ctx.doc, false, ctx.html_doc),
+        // A bare `<ol>`/`<ul>` with no enclosing enum/list Tag carries no
+        // numbering pattern to resolve — the shared definition applies.
+        "ol" => convert_html_list(elem, ctx.doc, true, None, ctx.html_doc),
+        "ul" => convert_html_list(elem, ctx.doc, false, None, ctx.html_doc),
         "table" => convert_html_table(elem, None, ctx.doc, html, ctx.world),
         "figcaption" => {
             // Collect all figcaption content into a single paragraph

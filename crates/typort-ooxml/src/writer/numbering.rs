@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use quick_xml::Writer;
 
 use super::package::write_value_element;
-use crate::document::Document;
+use crate::document::{Document, LevelOverride};
 
 #[allow(
     clippy::too_many_lines,
@@ -55,24 +55,25 @@ pub(super) fn generate_numbering_xml(
                     Ok(())
                 })?;
             // Numbering instance 1 -> abstractNum 1 (ordered)
-            write_numbering_instance(w, "1", "1", None)?;
+            write_numbering_instance(w, "1", "1", None, &[])?;
             // Numbering instance 2 -> abstractNum 2 (unordered)
-            write_numbering_instance(w, "2", "2", None)?;
+            write_numbering_instance(w, "2", "2", None, &[])?;
             // No abstractNum 3: the Chinese five-level heading numbering
             // definition was emitted unconditionally but never referenced by
             // any w:numPr — heading numbering is literal text, not linked
             // Word numbering (see #29). It returns if heading numbering is
             // ever linked to a numId.
             // Dynamic numbering instances for each top-level list
-            for &(num_id, abstract_num_id, start) in &doc.list_num_instances {
-                let num_id_str = num_id.to_string();
-                let abs_id_str = abstract_num_id.to_string();
-                let start_str = start.to_string();
+            for instance in &doc.list_num_instances {
+                let num_id_str = instance.num_id.to_string();
+                let abs_id_str = instance.abstract_num_id.to_string();
+                let start_str = instance.start.to_string();
                 write_numbering_instance(
                     w,
                     num_id_str.as_str(),
                     abs_id_str.as_str(),
                     Some(start_str.as_str()),
+                    &instance.level_overrides,
                 )?;
             }
             Ok(())
@@ -85,12 +86,18 @@ fn write_numbering_instance<W: Write>(
     num_id: &str,
     abstract_num_id: &str,
     start: Option<&str>,
+    level_overrides: &[LevelOverride],
 ) -> io::Result<()> {
     writer
         .create_element("w:num")
         .with_attribute(("w:numId", num_id))
         .write_inner_content(|num| {
             write_value_element(num, "w:abstractNumId", abstract_num_id)?;
+            // The level-0 pattern override (if any) shares its w:lvlOverride
+            // with the startOverride: ECMA-376 intends one override per
+            // level, and a reader taking the first ilvl-0 element would
+            // silently drop the pattern if the two were split.
+            let level0 = level_overrides.iter().find(|o| o.ilvl == 0);
             if let Some(start) = start {
                 // Each top-level list is an independent instance: override the
                 // level-0 start so Word restarts at the list's own first number.
@@ -98,7 +105,39 @@ fn write_numbering_instance<W: Write>(
                     .with_attribute(("w:ilvl", "0"))
                     .write_inner_content(|ovr| {
                         write_value_element(ovr, "w:startOverride", start)?;
+                        if let Some(def) = level0 {
+                            write_numbering_level(
+                                ovr,
+                                "0",
+                                "1",
+                                def.num_fmt,
+                                def.lvl_text.as_str(),
+                                "left",
+                            )?;
+                        }
                         Ok(())
+                    })?;
+            }
+            // Per-level overrides (e.g. an enum's non-decimal numbering
+            // pattern): each carries a full w:lvl so Word renders that
+            // level's numbers in the author's format. The ilvl-0 entry is
+            // skipped here when it was merged into the start element above.
+            for ovr in level_overrides {
+                if ovr.ilvl == 0 && start.is_some() {
+                    continue;
+                }
+                let ilvl_str = ovr.ilvl.to_string();
+                num.create_element("w:lvlOverride")
+                    .with_attribute(("w:ilvl", ilvl_str.as_str()))
+                    .write_inner_content(|lvl_ovr| {
+                        write_numbering_level(
+                            lvl_ovr,
+                            ilvl_str.as_str(),
+                            "1",
+                            ovr.num_fmt,
+                            ovr.lvl_text.as_str(),
+                            "left",
+                        )
                     })?;
             }
             Ok(())
@@ -107,8 +146,8 @@ fn write_numbering_instance<W: Write>(
 }
 
 /// Helper to write a single numbering level definition.
-fn write_numbering_level(
-    writer: &mut Writer<&mut Vec<u8>>,
+fn write_numbering_level<W: Write>(
+    writer: &mut Writer<W>,
     ilvl: &str,
     start: &str,
     num_fmt: &str,

@@ -65,7 +65,10 @@ use dom::{
 use headings::handle_heading;
 use highlight::{HighlightStyle, highlight_style};
 use inline_walk::{InlineOptions, collect_inlines};
-use lists::{convert_html_list, convert_html_list_to_paragraphs, handle_list_tag};
+use lists::{
+    convert_html_list, convert_html_list_to_paragraphs, enum_location_before, enum_numbering_at,
+    handle_list_tag,
+};
 use postprocess::{apply_paragraph_formatting, extract_document_metadata};
 use smallcaps::apply_smallcaps_from_source;
 use source::{apply_hanging_indent_from_source, apply_source_overrides, gather_source_overrides};

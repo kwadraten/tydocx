@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
+use typst::World;
+
 use super::{
     Alignment, CiteElem, CiteGroup, EmphElem, EquationElem, HighlightElem, HighlightStyle,
     HtmlDocument, HtmlElement, HtmlNode, InlineFmt, LinkElem, Paragraph, RefElem, Run, StrongElem,
     Tag, WalkCtx, collect_flat_text, content_at_location, drain_text_runs, element_at_location,
     emit_block_equation, find_img_src, find_tag_end, first_biblioref_href, footnote,
-    get_attr_value, has_attr_value, highlight_style, image, inline, is_block_equation,
+    get_attr_value, has_attr_value, highlight_style, image, inline, is_block_equation, page,
     run_with_span, sanitize_anchor, subtree_has_element, tag_name,
 };
 
@@ -331,7 +333,8 @@ pub(super) fn handle_inline_tag(
         "super" | "sub" | "raw" | "underline" | "strike" | "highlight" | "overline"
         | "smallcaps" => handle_inline_format_tag(tag, children, i, ctx, para),
         "cite-group" => handle_inline_cite_group_tag(tag, children, i, ctx, para),
-        "par" | "context" => handle_nested_inline_tag(tag, children, i, ctx, para),
+        "par" => handle_nested_inline_tag(tag, children, i, ctx, para),
+        "context" => handle_inline_context_tag(tag, children, i, ctx, para),
         "caption" => handle_inline_caption_tag(tag, children, i, ctx, para),
         _ => find_tag_end(children, i, tag.location()),
     }
@@ -559,6 +562,46 @@ pub(super) fn handle_inline_cite_group_tag(
         let display = collect_flat_text(&children[i + 1..end]);
         if !keys.is_empty() && !display.is_empty() {
             para.add_citation(keys, display);
+        }
+    }
+    end
+}
+
+/// A `context` Tag wraps a `context ...` expression. Most of the time it is
+/// transparent — the rendered text is the expression's value, collected as
+/// usual — but `counter(page).at(<label>)` is a page reference to a labelled
+/// location: emit a PAGEREF field to that label's bookmark instead, with the
+/// rendered page number as the cached display text. The label is recovered
+/// from the source AST (the Tag's span points at the expression); anything
+/// the resolver can't identify falls back to the plain-text collection.
+pub(super) fn handle_inline_context_tag(
+    tag: &Tag,
+    children: &[HtmlNode],
+    i: usize,
+    ctx: &mut WalkCtx,
+    para: &mut Paragraph,
+) -> usize {
+    let end = find_tag_end(children, i, tag.location());
+    let Tag::Start(content, _) = tag else {
+        return end;
+    };
+    let span = content.span();
+    let label = span
+        .id()
+        .and_then(|id| ctx.world.source(id).ok())
+        .and_then(|source| page::counter_page_label(&source, span));
+    match label {
+        Some(label) => {
+            let display = collect_flat_text(&children[i + 1..end]);
+            para.add_field_pageref(label, display);
+        }
+        None => {
+            collect_inlines(
+                &children[i + 1..end],
+                para,
+                Some(ctx),
+                InlineOptions::paragraph(),
+            );
         }
     }
     end

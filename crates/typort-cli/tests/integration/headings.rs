@@ -347,3 +347,23 @@ fn issue_headings_only_h2_style_matches_rendered_size() {
         "Heading2 style should define size 26 half-points (13pt). Got:\n{heading2}"
     );
 }
+
+#[test]
+fn issue_pageref_field_for_page_counter_reference() {
+    // A `counter(page).at(<label>)` reference (M8) must become a PAGEREF
+    // field to the labelled heading's bookmark, with the rendered page number
+    // as the cached display text — the same shape as the existing REF field.
+    let xml = fixture_doc_xml("issue_pageref");
+    assert!(
+        xml.contains("PAGEREF intro"),
+        "page reference should emit a PAGEREF field:\n{xml}"
+    );
+    assert!(
+        xml.contains("w:name=\"intro\""),
+        "the target heading should carry the bookmark the field points at:\n{xml}"
+    );
+    assert!(
+        xml.contains("<w:t xml:space=\"preserve\">1</w:t>"),
+        "the field's cached display text should be the page number:\n{xml}"
+    );
+}

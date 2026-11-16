@@ -2,8 +2,9 @@ use super::{
     CellContent, Document, HtmlDocument, HtmlElement, HtmlNode, InlineFmt, InlineOptions, Location,
     Paragraph, StyleChain, Table, TableCell, TableElem, TableRow, Tag, TyportWorld, VMerge,
     WalkCtx, collect_inlines, content_at_location, convert_html_list_to_paragraphs,
-    element_at_location, find_first_element, find_tag_end, get_attr_value, image,
-    is_inline_equation_at, subtree_has_element, table_align, table_width, tag_name, walk_tags,
+    element_at_location, enum_location_before, enum_numbering_at, find_first_element, find_tag_end,
+    get_attr_value, image, is_inline_equation_at, subtree_has_element, table_align, table_width,
+    tag_name, walk_tags,
 };
 
 /// Rowspan metadata for a single cell: `(html_cell_index, rowspan, colspan)`.
@@ -69,6 +70,9 @@ pub(super) fn convert_html_table(
         // Semantic cell alignment (the HTML `<td>`s carry none): horizontal → cell
         // paragraph `w:jc`, vertical → `w:vAlign`, read from the same TableElem.
         table_align::apply_cell_alignment(&mut table, &table_elem, world, html_doc);
+        // Semantic cell fill (likewise absent from the HTML): solid colors →
+        // `w:shd` cell shading.
+        table_align::apply_cell_fill(&mut table, &table_elem, world, html_doc);
     }
 
     doc.add_table(table);
@@ -106,6 +110,7 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
                     vmerge: VMerge::Continue,
                     width_pct: None,
                     vertical_align: None,
+                    shading: None,
                 });
                 logical_col += colspan as usize;
             } else if src_idx < src_cells.len() {
@@ -208,6 +213,7 @@ pub(super) fn convert_table_row(
                     vmerge,
                     width_pct: None,
                     vertical_align: None,
+                    shading: None,
                 });
                 cell_idx += 1;
             }
@@ -307,8 +313,13 @@ pub(super) fn convert_cell_paragraphs(
                 &mut paragraphs,
             );
             let ordered = tag == "ol";
+            // The cell enum's numbering pattern lives on its Tag marker, a
+            // sibling immediately before this `<ol>` (same layout as the
+            // nested-enum case in lists.rs).
+            let numbering = enum_location_before(&td.children, idx)
+                .and_then(|loc| enum_numbering_at(html_doc, loc));
             paragraphs.extend(convert_html_list_to_paragraphs(
-                el, doc, ordered, html_doc, fmt,
+                el, doc, ordered, numbering, html_doc, fmt,
             ));
             range_start = idx + 1;
         } else if tag == "table" {
@@ -415,7 +426,7 @@ pub(super) fn collect_cell_content_recursive(
     content: &mut Vec<CellContent>,
     doc: &mut Document,
 ) {
-    for child in children {
+    for (idx, child) in children.iter().enumerate() {
         match child {
             HtmlNode::Element(el) => {
                 let tag = tag_name(el);
@@ -428,11 +439,16 @@ pub(super) fn collect_cell_content_recursive(
                 } else if tag == "ul" || tag == "ol" {
                     // A list inside the cell: same list handling as body
                     // lists, so its items carry `w:numPr` (upstream #31).
+                    // The enum's numbering pattern comes from its Tag
+                    // marker, a sibling immediately before this `<ol>`.
                     let ordered = tag == "ol";
+                    let numbering = enum_location_before(children, idx)
+                        .and_then(|loc| enum_numbering_at(html_doc, loc));
                     let paras = convert_html_list_to_paragraphs(
                         el,
                         doc,
                         ordered,
+                        numbering,
                         html_doc,
                         InlineFmt::default(),
                     );

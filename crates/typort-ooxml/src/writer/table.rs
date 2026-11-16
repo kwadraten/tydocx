@@ -124,6 +124,14 @@ pub(super) fn write_table<W: Write>(
                                         Ok(())
                                     })?;
                             }
+                            // Cell shading (w:shd comes after tcBorders and
+                            // before vAlign in the CT_TcPr schema order).
+                            if let Some(shading) = &cell.shading {
+                                tcpr.create_element("w:shd")
+                                    .with_attribute(("w:val", "clear"))
+                                    .with_attribute(("w:fill", shading.as_str()))
+                                    .write_empty()?;
+                            }
                             // Vertical cell alignment (w:vAlign comes after
                             // tcBorders in the CT_TcPr schema order).
                             if let Some(va) = cell.vertical_align {

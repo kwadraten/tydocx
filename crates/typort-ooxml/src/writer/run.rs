@@ -6,7 +6,8 @@ use quick_xml::events::BytesText;
 use super::WriteCtx;
 use super::citation::{lang_to_lcid, write_citation_sdt};
 use super::fields::{
-    write_bookmark_end, write_bookmark_start, write_field_ref, write_hyperlink, write_toc_field,
+    write_bookmark_end, write_bookmark_start, write_field_pageref, write_field_ref,
+    write_hyperlink, write_toc_field,
 };
 use super::footnotes::write_footnote_ref;
 use super::image::{image_rel_id, write_image_inline};
@@ -51,6 +52,10 @@ pub(super) fn write_inline<W: Write>(
             bookmark_name,
             display_text,
         } => write_field_ref(writer, bookmark_name, display_text),
+        InlineElement::FieldPageRef {
+            bookmark_name,
+            display_text,
+        } => write_field_pageref(writer, bookmark_name, display_text),
         InlineElement::Hyperlink { url, runs } => write_hyperlink(writer, url, runs, ctx.doc_style),
         InlineElement::InternalLink { anchor, runs } => {
             writer

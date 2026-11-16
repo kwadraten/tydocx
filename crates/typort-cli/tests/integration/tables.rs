@@ -102,6 +102,7 @@ fn table_cell_supports_merged_cell_fields() {
         vmerge: VMerge::Restart,
         width_pct: None,
         vertical_align: None,
+        shading: None,
     };
     assert_eq!(cell.colspan, 2);
     assert_eq!(cell.vmerge, VMerge::Restart);
@@ -114,6 +115,7 @@ fn table_cell_supports_merged_cell_fields() {
         vmerge: VMerge::Continue,
         width_pct: None,
         vertical_align: None,
+        shading: None,
     };
     assert_eq!(cont_cell.vmerge, VMerge::Continue);
 }
@@ -134,6 +136,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         vmerge: VMerge::Restart,
                         width_pct: None,
                         vertical_align: None,
+                        shading: None,
                     },
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -142,6 +145,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         vmerge: VMerge::None,
                         width_pct: None,
                         vertical_align: None,
+                        shading: None,
                     },
                 ],
             },
@@ -154,6 +158,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         vmerge: VMerge::Continue,
                         width_pct: None,
                         vertical_align: None,
+                        shading: None,
                     },
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -162,6 +167,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         vmerge: VMerge::None,
                         width_pct: None,
                         vertical_align: None,
+                        shading: None,
                     },
                 ],
             },
@@ -863,5 +869,30 @@ fn issue_table_cell_list_emits_numbering_part() {
     assert!(
         numbering.contains("w:ilvl=\"1\""),
         "numbering.xml should define level 1 for nested lists"
+    );
+}
+
+#[test]
+fn issue_table_cell_fill_writes_cell_shading() {
+    // Table fill (M2): a row-conditional table fill shades the header row,
+    // a per-cell fill shades one cell, and a gradient fill — which has no
+    // cell-level OOXML equivalent — shades nothing.
+    let xml = fixture_doc_xml("issue_table_cell_fill");
+    assert_eq!(
+        xml.matches("<w:shd w:val=\"clear\" w:fill=\"DDEEFF\"/>")
+            .count(),
+        2,
+        "both header cells should carry the table fill:\n{xml}"
+    );
+    assert_eq!(
+        xml.matches("<w:shd w:val=\"clear\" w:fill=\"FFCCCC\"/>")
+            .count(),
+        1,
+        "the per-cell fill should shade exactly one cell:\n{xml}"
+    );
+    assert_eq!(
+        xml.matches("<w:shd ").count(),
+        3,
+        "gradient-filled cells must not gain shading:\n{xml}"
     );
 }

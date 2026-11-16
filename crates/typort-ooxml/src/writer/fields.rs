@@ -88,6 +88,16 @@ pub(super) fn write_field_ref<W: Write>(
     write_complex_field(writer, &instr, display_text, true)
 }
 
+pub(super) fn write_field_pageref<W: Write>(
+    writer: &mut Writer<W>,
+    bookmark_name: &str,
+    display_text: &str,
+) -> io::Result<()> {
+    let bookmark_name = truncate_bookmark_name(bookmark_name);
+    let instr = format!(" PAGEREF {bookmark_name} \\h ");
+    write_complex_field(writer, &instr, display_text, true)
+}
+
 pub(super) fn write_hyperlink<W: Write>(
     writer: &mut Writer<W>,
     url: &str,

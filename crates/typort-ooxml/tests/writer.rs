@@ -437,6 +437,7 @@ mod tests {
             vmerge: document::VMerge::None,
             width_pct: None,
             vertical_align: None,
+            shading: None,
         };
         let row = document::TableRow { cells: vec![cell] };
         let table = document::Table {

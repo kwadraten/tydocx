@@ -182,6 +182,13 @@ pub enum InlineElement {
         bookmark_name: String,
         display_text: String,
     },
+    /// A page-number cross-reference field (PAGEREF field code pointing at a
+    /// bookmark). The cached `display_text` is the page number Typst rendered
+    /// for the target (e.g. from `counter(page).at(<label>)`).
+    FieldPageRef {
+        bookmark_name: String,
+        display_text: String,
+    },
     /// An external hyperlink using `fldSimple` with HYPERLINK field code.
     Hyperlink { url: String, runs: Vec<Run> },
     /// An internal hyperlink (`w:hyperlink w:anchor`) to a bookmark — e.g. a
@@ -499,6 +506,7 @@ impl Paragraph {
                     }
                 }
                 InlineElement::FieldRef { display_text, .. }
+                | InlineElement::FieldPageRef { display_text, .. }
                 | InlineElement::Citation { display_text, .. } => {
                     text.push_str(display_text);
                 }
@@ -577,6 +585,14 @@ impl Paragraph {
         });
     }
 
+    /// Add a page-number cross-reference field (PAGEREF field code).
+    pub fn add_field_pageref(&mut self, bookmark_name: String, display_text: String) {
+        self.inlines.push(InlineElement::FieldPageRef {
+            bookmark_name,
+            display_text,
+        });
+    }
+
     /// Add an external hyperlink.
     pub fn add_hyperlink(&mut self, url: String, runs: Vec<Run>) {
         self.inlines.push(InlineElement::Hyperlink { url, runs });
@@ -640,6 +656,10 @@ pub struct TableCell {
     /// Vertical alignment of the cell's content, read from the semantic
     /// `TableElem`. Maps to `w:vAlign`. `None` = unset (don't override Word).
     pub vertical_align: Option<VerticalAlign>,
+    /// Cell background as a 6-digit uppercase hex (e.g. `"DDEEFF"`), read from
+    /// the semantic `TableElem` fill. Maps to `w:shd` in `w:tcPr`, mirroring
+    /// `Run.shading`. `None` = unset.
+    pub shading: Option<String>,
 }
 
 /// Vertical alignment of a table cell's content. Maps to `w:vAlign`.
@@ -1005,6 +1025,35 @@ impl Default for DocumentStyle {
     }
 }
 
+/// One numbering level's override for a list instance: an OOXML
+/// `w:lvlOverride` carrying a full `w:lvl` (numFmt + lvlText), e.g. a
+/// lower-letter enum level. Levels without an override keep the shared
+/// abstract definition (decimal `"%{n}."` / bullet).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelOverride {
+    /// Zero-based level (`w:ilvl`).
+    pub ilvl: u32,
+    /// OOXML `w:numFmt` value (`"decimal"`, `"lowerLetter"`, ...).
+    pub num_fmt: &'static str,
+    /// OOXML `w:lvlText` (e.g. `"%1)"` for an `"a)"` enum).
+    pub lvl_text: String,
+}
+
+/// A dynamically allocated list numbering instance: one top-level list's
+/// `w:num` entry, with its abstract numbering definition (1=ordered,
+/// 2=unordered), level-0 start value, and per-level overrides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListNumInstance {
+    /// Unique `w:numId` for this list.
+    pub num_id: u32,
+    /// `w:abstractNumId` this instance points at.
+    pub abstract_num_id: u32,
+    /// Level-0 start value (1 unless the author wrote `#enum(start: N)`).
+    pub start: u32,
+    /// Per-level overrides, in ascending `ilvl` order.
+    pub level_overrides: Vec<LevelOverride>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Document {
     pub body: Body,
@@ -1027,10 +1076,9 @@ pub struct Document {
     /// Counter for generating unique list numbering IDs (starts at 4;
     /// 1=ordered, 2=unordered, 3=Chinese headings are reserved).
     pub next_list_id: u32,
-    /// Mapping of dynamically allocated list IDs to their abstract numbering
-    /// definition (1=ordered, 2=unordered) and level-0 start value. Used to
-    /// generate `w:num` entries with a `startOverride`.
-    pub list_num_instances: Vec<(u32, u32, u32)>,
+    /// Dynamically allocated list numbering instances. Used to generate
+    /// `w:num` entries with a `startOverride` and per-level overrides.
+    pub list_num_instances: Vec<ListNumInstance>,
     /// Bibliography sources for Word's citation data store (customXml/item1.xml).
     pub citation_sources: Vec<CitationSource>,
 }
@@ -1132,11 +1180,40 @@ impl Document {
     /// `ordered` selects abstractNum 1 (decimal) or 2 (bullet); `start` is the
     /// list's first number (1 unless the author wrote `#enum(start: N)`).
     pub fn allocate_list_id(&mut self, ordered: bool, start: u32) -> u32 {
+        self.allocate_list_id_with_overrides(ordered, start, Vec::new())
+    }
+
+    /// Allocate a unique list numbering ID, with per-level overrides (e.g. an
+    /// enum's non-decimal numbering pattern). Overrides are in ascending
+    /// `ilvl` order; levels without one keep the shared abstract definition.
+    pub fn allocate_list_id_with_overrides(
+        &mut self,
+        ordered: bool,
+        start: u32,
+        level_overrides: Vec<LevelOverride>,
+    ) -> u32 {
         let id = self.next_list_id;
         self.next_list_id += 1;
         let abstract_num = if ordered { 1 } else { 2 };
-        self.list_num_instances.push((id, abstract_num, start));
+        self.list_num_instances.push(ListNumInstance {
+            num_id: id,
+            abstract_num_id: abstract_num,
+            start,
+            level_overrides,
+        });
         id
+    }
+
+    /// Replace the per-level overrides of an already allocated list instance
+    /// (the walk discovers nested-level patterns after allocation).
+    pub fn set_list_overrides(&mut self, num_id: u32, level_overrides: Vec<LevelOverride>) {
+        if let Some(instance) = self
+            .list_num_instances
+            .iter_mut()
+            .find(|instance| instance.num_id == num_id)
+        {
+            instance.level_overrides = level_overrides;
+        }
     }
 
     /// Add a footnote and return its ID (starting from 2, since 0 and 1 are reserved by OOXML).
