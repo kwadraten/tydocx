@@ -1,5 +1,7 @@
 # typort
 
+[中文](README.zh-CN.md)
+
 Universal Typst to Word (.docx) converter. Any valid `.typ` file should convert to an editable `.docx`.
 
 ## Install
@@ -24,13 +26,12 @@ for the schema); none are bundled.
 typort compiles your Typst document and generates a Word file directly — no intermediate PDF, no Pandoc, no template required.
 
 ```mermaid
-flowchart LR
-    INPUT["input.typ"] --> COMP["Typst compiler"]
-    COMP --> HTML["HtmlDocument (structure)"]
-    COMP --> PAGED["PagedDocument (layout)"]
-    HTML --> ENG["typort conversion engine"]
-    PAGED --> ENG
-    ENG --> OUT["output.docx"]
+flowchart TD
+    SRC["input.typ"] --> EVAL["Typst evaluator"]
+    EVAL --> REAL["Realization: Content + StyleChain"]
+    REAL --> IR["Styled Semantic IR"]
+    IR --> LOW["OOXML lowering"]
+    LOW --> OUT["output.docx"]
 ```
 
 ## Supported features
@@ -66,15 +67,9 @@ flowchart LR
 
 ## How it works
 
-typort reads the document from **three sources**:
+typort is a real DOCX compiler backend, not a format converter. Compilation evaluates the document once, then [`typst-realize`](docs/spike-realize.md) yields `(Content, StyleChain)` pairs: every element with the style chain that applies to it. Styles are computed from the `StyleChain`, never inferred back from rendered glyphs. Layout content (`#align`, `#place`, `#grid`, …) is positioned naturally while walking the Content tree — no geometric recovery afterwards.
 
-1. **HtmlDocument** — Typst's HTML export gives us semantic structure: which text is a heading, which is a footnote, where tables begin and end.
-
-2. **PagedDocument** — Typst's page layout gives us visual properties: actual fonts, sizes, colors, alignment, page dimensions, and content that has no HTML representation (like `#align(center)[...]` or `#grid(...)`).
-
-3. **Source AST** — typort also re-parses the `.typ` source (and its imports) for `set` rules like `#set text(font: ...)`. Values the author declared explicitly are authoritative and override the heuristics derived from rendering.
-
-The converter walks the HTML structure for document ordering, queries the Introspector for content details, and cross-references the PagedDocument for styling. All values (fonts, sizes, spacing, indentation, alignment) are detected from the actual rendering or the source — nothing is hardcoded for any particular document. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
+The pairs lower into an owned **Styled Semantic IR** (plain data, no lifetimes), and a pure lowering turns the IR into WordprocessingML, OMML for math, and DrawingML for vector graphics, packaged as a `.docx`. Nothing is hardcoded for any particular document. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and [`docs/PLAN-docx-backend.md`](docs/PLAN-docx-backend.md) for the migration status (step 1, compile/export split, is done; the realize path is step 2).
 
 OOXML XML is generated directly via `quick-xml`. No docx-rs, no intermediate format.
 
