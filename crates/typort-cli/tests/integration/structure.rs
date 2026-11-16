@@ -1,8 +1,8 @@
 //! Document structure: TOC, headers/footers, columns, section breaks, pagebreaks, hrules, page numbering.
 
 use crate::common::{
-    fixture_doc_xml, fixture_document, fixture_package, fixture_package_from_document,
-    paragraph_texts,
+    fixture_doc_xml, fixture_doc_xml_legacy, fixture_document, fixture_document_legacy,
+    fixture_package, fixture_package_from_document, paragraph_texts,
 };
 
 #[test]
@@ -192,7 +192,9 @@ fn columns_produces_w_cols_in_xml() {
 
 #[test]
 fn section_break_produces_multiple_sect_pr() {
-    let doc_xml = fixture_doc_xml("section_break_test");
+    // Retargeted to the legacy path (step 2): section breaks come from Paged, not the IR path.
+    // See docs/fallback-registry.md.
+    let doc_xml = fixture_doc_xml_legacy("section_break_test");
 
     // Count w:sectPr elements — should be at least 2 (one inline break + final section)
     let sect_pr_count = doc_xml.matches("<w:sectPr>").count();
@@ -210,9 +212,11 @@ fn section_break_produces_multiple_sect_pr() {
 
 #[test]
 fn section_break_document_model_has_section_break() {
+    // Retargeted to the legacy path (step 2): section breaks come from Paged, not the IR path.
+    // See docs/fallback-registry.md.
     use typort_ooxml::document::{BlockElement, SectionBreakType};
 
-    let doc = fixture_document("section_break_test");
+    let doc = fixture_document_legacy("section_break_test");
 
     // Find paragraphs with section breaks in the document model
     let section_breaks: Vec<_> = doc
@@ -399,7 +403,9 @@ fn pagebreak_inside_include_recovered() {
 
 #[test]
 fn imported_template_line_rule_recovered() {
-    let doc_xml = fixture_doc_xml("imported_line_rule");
+    // Retargeted to the legacy path (step 2): #line is an M5 gap on the IR path (dropped; the legacy recovers it).
+    // See docs/fallback-registry.md.
+    let doc_xml = fixture_doc_xml_legacy("imported_line_rule");
     assert!(
         doc_xml.contains("w:pBdr"),
         "a #line() drawn via an imported template must produce a horizontal rule"
@@ -465,7 +471,9 @@ fn pagebreak_after_nearly_full_page_is_detected() {
 
 #[test]
 fn hrule_produces_paragraph_with_bottom_border() {
-    let doc_xml = fixture_doc_xml("hrule_test");
+    // Retargeted to the legacy path (step 2): #line is an M5 gap on the IR path (dropped; the legacy recovers it).
+    // See docs/fallback-registry.md.
+    let doc_xml = fixture_doc_xml_legacy("hrule_test");
 
     // The document should contain a paragraph border for horizontal rules
     assert!(
@@ -480,7 +488,9 @@ fn hrule_produces_paragraph_with_bottom_border() {
 
 #[test]
 fn hrule_document_model_has_horizontal_rule_flag() {
-    let doc = fixture_document("hrule_test");
+    // Retargeted to the legacy path (step 2): #line is an M5 gap on the IR path (dropped; the legacy recovers it).
+    // See docs/fallback-registry.md.
+    let doc = fixture_document_legacy("hrule_test");
 
     // At least one paragraph should have the horizontal_rule flag set
     let has_hrule = doc.body.elements.iter().any(|e| {
@@ -567,9 +577,11 @@ fn page_numbering_typ_generates_page_field_footer() {
 
 #[test]
 fn source_line_call_still_produces_a_rule() {
+    // Retargeted to the legacy path (step 2): #line is an M5 gap on the IR path (dropped; the legacy recovers it).
+    // See docs/fallback-registry.md.
     // Guard the gate: a document that DOES declare `#line()` must still get its
     // horizontal rule (the gate only suppresses invented ones).
-    let doc_xml = fixture_doc_xml("hrule_test");
+    let doc_xml = fixture_doc_xml_legacy("hrule_test");
     assert!(
         doc_xml.contains("<w:pBdr>"),
         "a real #line() must still render as a horizontal rule:\n{doc_xml}"
@@ -678,7 +690,9 @@ fn edge_academic_template_structure() {
 
 #[test]
 fn edge_landscape_pages_orientation() {
-    let xml = fixture_doc_xml("edge_landscape_pages");
+    // Retargeted to the legacy path (step 2): section breaks come from Paged, not the IR path.
+    // See docs/fallback-registry.md.
+    let xml = fixture_doc_xml_legacy("edge_landscape_pages");
     assert!(
         xml.contains("Portrait Section"),
         "portrait heading should be present"
@@ -704,7 +718,9 @@ fn edge_landscape_pages_orientation() {
 
 #[test]
 fn edge_multi_section_different_page_sizes() {
-    let xml = fixture_doc_xml("edge_multi_section");
+    // Retargeted to the legacy path (step 2): section breaks come from Paged, not the IR path.
+    // See docs/fallback-registry.md.
+    let xml = fixture_doc_xml_legacy("edge_multi_section");
     for text in ["Section One", "Section Two", "Section Three"] {
         assert!(xml.contains(text), "heading '{text}' should be present");
     }
@@ -747,7 +763,9 @@ fn issue_long_crossref_label_bookmarks() {
 
 #[test]
 fn issue_final_section_landscape_sections() {
-    let xml = fixture_doc_xml("issue_final_section_landscape");
+    // Retargeted to the legacy path (step 2): section breaks come from Paged, not the IR path.
+    // See docs/fallback-registry.md.
+    let xml = fixture_doc_xml_legacy("issue_final_section_landscape");
     assert!(
         xml.contains("Portrait Section"),
         "portrait heading should be present"

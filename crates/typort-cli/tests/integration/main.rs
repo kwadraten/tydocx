@@ -11,6 +11,7 @@ mod formatting;
 mod golden;
 mod headings;
 mod images;
+mod ir_path;
 mod lists;
 mod math;
 mod misc;

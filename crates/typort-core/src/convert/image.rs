@@ -52,7 +52,7 @@ fn collect_frame_image_sizes(frame: &Frame, sizes: &mut HashMap<u64, (u64, u64)>
     }
 }
 
-fn hash_bytes(bytes: &[u8]) -> u64 {
+pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()

@@ -19,12 +19,13 @@ mod units;
 use super::{frames, stats};
 
 pub use hanging_indent::{ParHangingRule, collect_par_hanging_indent_rules};
-pub use language::localize_cjk_fonts;
+pub use language::{canonicalize_font_names, localize_cjk_fonts};
 pub use margin::{
     MarginsPt, detect_page_numbering, extract_footer, extract_header, extract_page_settings,
 };
 pub use reachable::{collect_reachable_source_texts, extract_import_paths};
 pub use run_style::apply_styles_from_paged;
+pub(crate) use run_style::{effective_style, effective_weight, extract_non_black_color};
 pub use sections::{DetectedSection, apply_section_breaks, detect_section_breaks};
 pub use source_ast::{
     SourceStyleOverrides, extract_show_template_names_from_source, extract_source_style_overrides,

@@ -1,7 +1,7 @@
 //! Image embedding and figure-caption tests.
 
 use crate::common;
-use crate::common::{fixture_doc_xml, fixture_document, fixture_package};
+use crate::common::{fixture_doc_xml, fixture_doc_xml_legacy, fixture_document, fixture_package};
 
 #[test]
 fn image_embeds_in_docx() {
@@ -36,7 +36,9 @@ fn image_embeds_in_docx() {
 
 #[test]
 fn text_figure_does_not_steal_drawing_raster() {
-    let doc_xml = fixture_doc_xml("figure_kinds_no_steal");
+    // Retargeted to the legacy path (step 2): drawn/vector figure rasterization is a registered IR gap.
+    // See docs/fallback-registry.md.
+    let doc_xml = fixture_doc_xml_legacy("figure_kinds_no_steal");
     assert!(
         doc_xml.contains("QUOTE-BODY-SENTENCE"),
         "the quote figure's body must stay editable text, not be replaced by an image"
@@ -217,7 +219,9 @@ fn figure_caption_is_single_paragraph() {
 /// table, and both captions must survive.
 #[test]
 fn drawing_figure_is_rasterized_not_leaked() {
-    let xml = fixture_doc_xml("edge_figure_rasterized");
+    // Retargeted to the legacy path (step 2): drawn/vector figure rasterization is a registered IR gap.
+    // See docs/fallback-registry.md.
+    let xml = fixture_doc_xml_legacy("edge_figure_rasterized");
     assert_eq!(
         xml.matches("<w:drawing").count(),
         1,

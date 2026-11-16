@@ -65,9 +65,9 @@ flowchart TD
 
 ## 工作原理
 
-typort 是真正的 DOCX 编译后端，不是格式转换器。编译先对文档求值一次，然后 [`typst-realize`](docs/spike-realize.md) 产出 `(Content, StyleChain)` 对：每个元素连同适用于它的样式链。样式由 `StyleChain` 计算得到，绝不从渲染后的字形反推。布局内容（`#align`、`#place`、`#grid`、……）在遍历 Content 树时天然有位置，不再事后按几何找回。
+typort 是真正的 DOCX 编译后端，不是格式转换器。编译把文档 realize 为 [`typst-realize`](docs/spike-realize.md) 的 `(Content, StyleChain)` 对：每个元素连同适用于它的样式链（另加一次伴生 Paged 编译，补 pairs 拿不到的几何信息）。样式由 `StyleChain` 计算得到，绝不从渲染后的字形反推。布局内容（`#align`、`#place`、`#grid`、……）在遍历 Content 树时天然有位置，不再事后按几何找回。
 
-这些对降为自有的 **Styled Semantic IR**（纯数据，无生命周期），再由纯 lowering 把 IR 转为 WordprocessingML、数学的 OMML、矢量图形的 DrawingML，打包为 `.docx`。不针对任何特定文档硬编码。完整设计见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，迁移状态见 [`docs/PLAN-docx-backend.md`](docs/PLAN-docx-backend.md)（步骤 1，编译/导出分离，已完成；realize 路径是步骤 2）。
+这些对降为自有的 **Styled Semantic IR**（纯数据，无生命周期），再由纯 lowering 把 IR 转为 WordprocessingML、数学的 OMML、矢量图形的 DrawingML，打包为 `.docx`。不针对任何特定文档硬编码。完整设计见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，迁移状态见 [`docs/PLAN-docx-backend.md`](docs/PLAN-docx-backend.md)（步骤 1–2，编译/导出分离与 realize 路径，均已完成；旧 tag-walker 路径保留为 fallback 与等价性基线）。
 
 OOXML XML 直接用 `quick-xml` 生成。不用 docx-rs，无中间格式。
 
@@ -77,6 +77,7 @@ OOXML XML 直接用 `quick-xml` 生成。不用 docx-rs，无中间格式。
 flowchart TD
     CRATES["crates/"] --> CLI["typort-cli/ — CLI 二进制（clap）"]
     CRATES --> CORE["typort-core/ — Typst 编译 + 转换引擎"]
+    CRATES --> IR["typort-ir/ — 自有 realize IR + 纯 lowering"]
     CRATES --> OOXML["typort-ooxml/ — OOXML 文档模型 + XML 写入器 + ZIP 打包"]
     CRATES --> MATH["typort-math/ — Typst 数学 → OMML 转换"]
 ```

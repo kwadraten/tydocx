@@ -1,7 +1,6 @@
 use hayagriva::types::{EntryType, Person};
 use typort_ooxml::document::{CitationSource, SourceType};
 use typst::comemo::Track;
-use typst_html::HtmlDocument;
 use typst_library::foundations::{NativeElement, PathOrStr};
 use typst_library::introspection::Introspector;
 use typst_library::loading::DataSource;
@@ -15,14 +14,15 @@ use crate::world::TyportWorld;
 /// re-read and re-parse the `.bib`/`.yaml` files ourselves using hayagriva.
 /// The introspector gives us the citation keys to know which entries matter;
 /// the `DataSource` paths tell us where the files live on disk.
+///
+/// The introspector is taken as `&dyn Introspector` so both conversion
+/// paths can use it: the legacy path passes the `HtmlDocument`'s
+/// introspector, the realize path passes the `DocxDocument`'s.
 pub fn extract_bibliography_sources(
-    html_doc: &HtmlDocument,
+    introspector: &dyn Introspector,
     world: &TyportWorld,
 ) -> Vec<CitationSource> {
-    // `track()` is provided by `#[comemo::track]` on the `Introspector` trait,
-    // so the receiver must be coerced to `&dyn Introspector` (the wrapper struct
-    // `HtmlIntrospector` no longer exposes an inherent `track`).
-    let introspector: &dyn Introspector = &**html_doc.introspector();
+    // `track()` is provided by `#[comemo::track]` on the `Introspector` trait.
     let tracked = introspector.track();
 
     // Find every BibliographyElem to access source file paths. `find` was

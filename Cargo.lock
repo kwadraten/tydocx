@@ -2660,6 +2660,7 @@ dependencies = [
  "time",
  "tiny-skia",
  "ttf-parser",
+ "typort-ir",
  "typort-math",
  "typort-ooxml",
  "typst",
@@ -2667,9 +2668,18 @@ dependencies = [
  "typst-kit",
  "typst-layout",
  "typst-library",
+ "typst-realize",
  "typst-render",
  "typst-syntax",
  "typst-utils",
+]
+
+[[package]]
+name = "typort-ir"
+version = "0.2.0"
+dependencies = [
+ "typort-ooxml",
+ "typst-syntax",
 ]
 
 [[package]]

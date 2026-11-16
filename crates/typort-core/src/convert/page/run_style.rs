@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use typort_ooxml::document::{Alignment, InlineElement, Paragraph, ParagraphStyle, Run};
-use typst::layout::{Frame, FrameItem};
+use typst::layout::{Frame, FrameItem, Point};
 use typst_layout::PagedDocument;
 
 use super::body_size::{
@@ -65,11 +65,34 @@ fn collect_styles_from_frame(
     page_idx: usize,
     items: &mut Vec<PagedRunStyle>,
 ) {
-    super::frames::visit_frame_items(frame, false, &mut |position, item| {
+    collect_styles_at(frame, Point::zero(), page_width, page_idx, items);
+}
+
+/// Recursive run-style walk, skipping footnote entry groups (see
+/// `is_footnote_entry_group`): footnote text renders at 0.85em, and
+/// counting it here misdetects the body size — a document whose
+/// footnote text outnumbers its body text then gets a body-size
+/// override re-added onto every body run.
+fn collect_styles_at(
+    frame: &Frame,
+    offset: Point,
+    page_width: f64,
+    page_idx: usize,
+    items: &mut Vec<PagedRunStyle>,
+) {
+    for (position, item) in frame.items() {
+        let absolute = Point::new(offset.x + position.x, offset.y + position.y);
+        if let FrameItem::Group(group) = item {
+            if super::frames::is_footnote_entry_group(group) {
+                continue;
+            }
+            collect_styles_at(&group.frame, absolute, page_width, page_idx, items);
+            continue;
+        }
         if let FrameItem::Text(text_item) = item {
             let text = text_item.text.to_string();
             if text.is_empty() {
-                return;
+                continue;
             }
             let info = text_item.font.info();
             let spans: Vec<typst_syntax::Span> =
@@ -93,13 +116,13 @@ fn collect_styles_from_frame(
                 ),
                 is_math_font,
                 is_whitespace,
-                x: position.x.to_pt(),
+                x: absolute.x.to_pt(),
                 text_width: text_item.width().to_pt(),
                 page_width,
                 page_idx,
             });
         }
-    });
+    }
 }
 
 /// Finds the resolved coordinate for a variation axis on a shaped
@@ -135,7 +158,7 @@ fn variation_coordinate(
 /// `wght` axis from `variant.weight`, typst-library `text/font/variations.rs`).
 /// So for a VF run we must read the resolved `wght` coordinate — falling back to
 /// `info().variant.weight` when the font has no `wght` axis (variations empty).
-fn effective_weight(instance: &typst_library::text::FontInstance) -> u16 {
+pub(crate) fn effective_weight(instance: &typst_library::text::FontInstance) -> u16 {
     let wght = variation_coordinate(instance, typst_library::text::StandardAxes::WGHT)
         .map(typst_library::text::FontWeight::from_wght);
     wght.unwrap_or(instance.info().variant.weight).to_number()
@@ -167,7 +190,9 @@ fn effective_weight(instance: &typst_library::text::FontInstance) -> u16 {
 ///
 /// Falls back to `info().variant.style` when neither axis is present in
 /// `variations()` (a non-VF face, or a VF with no `ital`/`slnt` axis at all).
-fn effective_style(instance: &typst_library::text::FontInstance) -> typst_library::text::FontStyle {
+pub(crate) fn effective_style(
+    instance: &typst_library::text::FontInstance,
+) -> typst_library::text::FontStyle {
     use typst_library::text::{FontStyle, StandardAxes};
 
     if variation_coordinate(instance, StandardAxes::ITAL)
@@ -241,7 +266,7 @@ fn detect_rendered_body_style(styles: &[PagedRunStyle]) -> RenderedBodyStyle {
     }
 }
 
-fn extract_non_black_color(paint: &typst_library::visualize::Paint) -> Option<String> {
+pub(crate) fn extract_non_black_color(paint: &typst_library::visualize::Paint) -> Option<String> {
     let typst_library::visualize::Paint::Solid(color) = paint else {
         return None;
     };

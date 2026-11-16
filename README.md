@@ -67,9 +67,9 @@ flowchart TD
 
 ## How it works
 
-typort is a real DOCX compiler backend, not a format converter. Compilation evaluates the document once, then [`typst-realize`](docs/spike-realize.md) yields `(Content, StyleChain)` pairs: every element with the style chain that applies to it. Styles are computed from the `StyleChain`, never inferred back from rendered glyphs. Layout content (`#align`, `#place`, `#grid`, …) is positioned naturally while walking the Content tree — no geometric recovery afterwards.
+typort is a real DOCX compiler backend, not a format converter. Compilation realizes the document into [`typst-realize`](docs/spike-realize.md) `(Content, StyleChain)` pairs: every element with the style chain that applies to it (plus a companion Paged compile for geometry the pairs cannot carry). Styles are computed from the `StyleChain`, never inferred back from rendered glyphs. Layout content (`#align`, `#place`, `#grid`, …) is positioned naturally while walking the Content tree — no geometric recovery afterwards.
 
-The pairs lower into an owned **Styled Semantic IR** (plain data, no lifetimes), and a pure lowering turns the IR into WordprocessingML, OMML for math, and DrawingML for vector graphics, packaged as a `.docx`. Nothing is hardcoded for any particular document. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and [`docs/PLAN-docx-backend.md`](docs/PLAN-docx-backend.md) for the migration status (step 1, compile/export split, is done; the realize path is step 2).
+The pairs lower into an owned **Styled Semantic IR** (plain data, no lifetimes), and a pure lowering turns the IR into WordprocessingML, OMML for math, and DrawingML for vector graphics, packaged as a `.docx`. Nothing is hardcoded for any particular document. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and [`docs/PLAN-docx-backend.md`](docs/PLAN-docx-backend.md) for the migration status (steps 1–2, compile/export split and the realize path, are done; the legacy tag-walker path is kept as fallback and equivalence baseline).
 
 OOXML XML is generated directly via `quick-xml`. No docx-rs, no intermediate format.
 
@@ -79,6 +79,7 @@ OOXML XML is generated directly via `quick-xml`. No docx-rs, no intermediate for
 flowchart TD
     CRATES["crates/"] --> CLI["typort-cli/ — CLI binary (clap)"]
     CRATES --> CORE["typort-core/ — Typst compilation + conversion engine"]
+    CRATES --> IR["typort-ir/ — Owned realize IR + pure lowering"]
     CRATES --> OOXML["typort-ooxml/ — OOXML document model + XML writer + ZIP packaging"]
     CRATES --> MATH["typort-math/ — Typst math → OMML conversion"]
 ```

@@ -44,9 +44,19 @@ D 如复杂 SVG 绘图；E 为最后手段。
 1. **拆分编译与导出**：`convert(world)` 拆为编译与导出两段，导出接受已编译文档，
    不再内部编译；诊断保留 span 信息；写盘原子化。
 2. **Styled IR**：以前置 spike 的结论为准，决定两条路之一：上游 typst-html 暴露
-   样式信息，或自己走一遍 Content 树（改发 OOXML）。
+   样式信息，或自己走一遍 Content 树（改发 OOXML）。**已完成（2026-11-16，分支
+   `feature/step2-ir`）**：走 realize 路——`DocxDocument: Output`
+   （`Target::Paged`）一次 realize 拿 `(Content, StyleChain)` 对，收进自有
+   `typort-ir` crate 的 owned IR，纯 lowering 到 `typort_ooxml::Document`，
+   `convert` 已切到新路径；旧 tag-walker 路保留为 `convert_legacy`/`export`
+   fallback 与等价性基线。逐项删除清单见 `docs/fallback-registry.md`。
 3. **去掉源码 AST 第三路**：set 规则、分页符、小型大写、悬挂缩进都从 StyleChain 拿。
-4. **去掉 recovery/**：布局内容在 Content 树 walk 里直接处理。
+   **未做**：步骤 2 仍把源码 AST 与 Paged 编译作为显式注入的 fallback 输入
+   （页设置/页眉页脚仍走旧提取，smallcaps/悬挂缩进仍走源码后处理）；删除条件
+   见 `docs/fallback-registry.md`。
+4. **去掉 recovery/**：布局内容在 Content 树 walk 里直接处理。**未做**：步骤 2
+   的 realize 路径不跑 recovery，但 `recovery/` 仍在旧路径里；删除条件见
+   `docs/fallback-registry.md`。
 5. **Conformance suite + OOXML 加固**：结构、样式、可视三层检查；回退报告；
    严格校验（Word + LibreOffice + python-docx 回读）。
 
