@@ -93,7 +93,7 @@ A 级（原生语义对象）最优先：标题、脚注、OMML、表格、编�
 | #31 表格内列表缺少 numbering part 引用 | L1（numbering 完整性） | 已修复（batch 1，d4cba26；L1 顺带修了） |
 | #33 编译错误丢 span 信息 | 步骤 1（诊断保留 span，CLI 打印 `file:line:col: message`） | 已修复（独立验收通过：`cargo test --workspace` 全过；新测试 `diagnostics::compile_error_keeps_span`、`cli::cli_reports_compile_error_with_span` 断言 `compile_error_span.typ:3:10:`） |
 | #34 写失败留半截文件 | 步骤 1（原子写盘：同目录 staging + rename） | 已修复（独立验收通过；新测试 `cli::cli_writes_output_atomically`、`cli::cli_failed_write_leaves_no_partial_output`；失败时不留 staging 文件） |
-| #19 / #20 / #21 / #22 / #23 / #25 / #26 / #27 / #28 / #32 / #35 | 行内收集模式统一、emphasis 旁路、preset 脚注字符串匹配、API 整理、空白 run 误标 smallcaps、东亚字体猜测、等宽/数学字体名子串匹配、三个 body-size 检测器直方图不一致、import 相对项目根解析、margin em 值假定 12pt、换行与段落换行语义 | 已逐项核对，见 `docs/audit-upstream-issues.md`：#23、#32 已修复（batch 1，d4cba26）；#20 已修复（batch 2，cf044c5）；#35、#21、#22 已修复（batch 3，ebecad5）；#19、#26 已修复（batch 4，269b53d）；#25、#28 部分修复；其余仍在 |
+| #19 / #20 / #21 / #22 / #23 / #25 / #26 / #27 / #28 / #32 / #35 | 行内收集模式统一、emphasis 旁路、preset 脚注字符串匹配、API 整理、空白 run 误标 smallcaps、东亚字体猜测、等宽/数学字体名子串匹配、三个 body-size 检测器直方图不一致、import 相对项目根解析、margin em 值假定 12pt、换行与段落换行语义 | 已逐项核对，见 `docs/audit-upstream-issues.md`：#23、#32 已修复（batch 1，d4cba26）；#20 已修复（batch 2，cf044c5）；#35、#21、#22 已修复（batch 3，ebecad5）；#19、#26 已修复（batch 4，269b53d）；#27 已修复（ec6536a、3cc79b8，合并 8e3cb0a）；#25、#28 部分修复；其余仍在 |
 
 ## 先补顺序（建议）
 
