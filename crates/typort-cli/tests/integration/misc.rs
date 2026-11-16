@@ -1,9 +1,6 @@
 //! Tests that don't fit a more specific area.
 
-use crate::common::{
-    fixture_dir, fixture_doc_xml, fixture_document, fixture_package, fixture_package_from_document,
-    fixture_styles_xml,
-};
+use crate::common::{fixture_doc_xml, fixture_document, fixture_package, fixture_styles_xml};
 
 #[test]
 fn italic_text_produces_w_i_element() {
@@ -72,45 +69,6 @@ fn metadata_title_extracted_from_first_heading() {
         doc.metadata.title.as_deref(),
         Some("Hello World"),
         "metadata title should be extracted from first heading"
-    );
-}
-
-#[test]
-fn preset_overrides_page_margins() {
-    let mut doc = fixture_document("hello");
-
-    // Load the test preset fixture
-    let preset = typort_presets::load_preset(&fixture_dir("presets"), "example").unwrap();
-    preset.apply(&mut doc);
-
-    // Verify margins were overridden
-    assert_eq!(
-        doc.page_settings.margin_top, 1440,
-        "top margin should be 2.54cm = 1440 twips"
-    );
-    assert_eq!(
-        doc.page_settings.margin_bottom, 1440,
-        "bottom margin should be 2.54cm = 1440 twips"
-    );
-    assert_eq!(
-        doc.page_settings.margin_left, 1797,
-        "left margin should be 3.17cm = 1797 twips"
-    );
-    assert_eq!(
-        doc.page_settings.margin_right, 1797,
-        "right margin should be 3.17cm = 1797 twips"
-    );
-
-    // Write and verify margins appear in the XML
-    let package = fixture_package_from_document(&doc);
-    let doc_xml = package.part_text("word/document.xml");
-    assert!(
-        doc_xml.contains("w:top=\"1440\""),
-        "page margins should reflect preset values"
-    );
-    assert!(
-        doc_xml.contains("w:left=\"1797\""),
-        "page margins should reflect preset values"
     );
 }
 

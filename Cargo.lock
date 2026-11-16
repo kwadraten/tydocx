@@ -2642,7 +2642,6 @@ dependencies = [
  "time",
  "typort-core",
  "typort-ooxml",
- "typort-presets",
  "typst",
  "typst-layout",
  "typst-pdf",
@@ -2691,16 +2690,6 @@ dependencies = [
  "quick-xml 0.37.5",
  "typst-syntax",
  "zip",
-]
-
-[[package]]
-name = "typort-presets"
-version = "0.2.0"
-dependencies = [
- "serde",
- "tempfile",
- "toml",
- "typort-ooxml",
 ]
 
 [[package]]

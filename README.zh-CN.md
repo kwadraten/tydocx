@@ -15,10 +15,9 @@ cargo install --path crates/typort-cli  # 从 checkout 安装
 
 ```bash
 typort input.typ -o output.docx
-typort input.typ --preset myjournal   # 应用 ./presets/myjournal.toml（页边距、脚注样式）
 ```
 
-预设是用户提供的 TOML 文件（schema 见 `tests/fixtures/presets/example.toml`）；不内置任何预设。
+版式（页边距、脚注样式等）完全由 Typst 源码控制（`#set page(margin: …)`、`#set footnote(numbering: …)`），没有外部预设。
 
 ## 功能
 
@@ -80,7 +79,6 @@ flowchart TD
     CRATES --> CORE["typort-core/ — Typst 编译 + 转换引擎"]
     CRATES --> OOXML["typort-ooxml/ — OOXML 文档模型 + XML 写入器 + ZIP 打包"]
     CRATES --> MATH["typort-math/ — Typst 数学 → OMML 转换"]
-    CRATES --> PRESETS["typort-presets/ — 期刊预设加载"]
 ```
 
 ## 构建与测试

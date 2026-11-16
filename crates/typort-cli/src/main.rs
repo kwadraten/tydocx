@@ -23,11 +23,6 @@ struct Cli {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Preset name: loads `<name>.toml` from the standard preset search path
-    /// (none are bundled; supply your own)
-    #[arg(long)]
-    preset: Option<String>,
-
     /// Compat mode: c1 (minimal: intersection only), c2 (graphical,
     /// default), c3 (dynamic: field codes on top of c2)
     #[arg(long, value_parser = parse_compat, default_value = "c2")]
@@ -60,17 +55,7 @@ fn main() {
         }
         process::exit(1);
     });
-    let mut doc = outcome.document;
-
-    // Apply preset if specified
-    if let Some(preset_name) = &cli.preset {
-        let preset =
-            typort_presets::load_preset_from_search_path(preset_name).unwrap_or_else(|e| {
-                eprintln!("error: {e}");
-                process::exit(1);
-            });
-        preset.apply(&mut doc);
-    }
+    let doc = outcome.document;
 
     write_docx_atomically(&doc, &output_path).unwrap_or_else(|e| {
         eprintln!("error: failed to write .docx: {e}");

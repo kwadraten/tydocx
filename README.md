@@ -15,11 +15,11 @@ cargo install --path crates/typort-cli  # from a checkout
 
 ```bash
 typort input.typ -o output.docx
-typort input.typ --preset myjournal   # applies ./presets/myjournal.toml (page margins, footnote style)
 ```
 
-Presets are user-supplied TOML files (see `tests/fixtures/presets/example.toml`
-for the schema); none are bundled.
+Layout (page margins, footnote style, …) is controlled entirely by the
+Typst source (`#set page(margin: …)`, `#set footnote(numbering: …)`); there
+are no sidecar presets.
 
 ## What it does
 
@@ -81,7 +81,6 @@ flowchart TD
     CRATES --> CORE["typort-core/ — Typst compilation + conversion engine"]
     CRATES --> OOXML["typort-ooxml/ — OOXML document model + XML writer + ZIP packaging"]
     CRATES --> MATH["typort-math/ — Typst math → OMML conversion"]
-    CRATES --> PRESETS["typort-presets/ — Journal preset loading"]
 ```
 
 ## Build & test

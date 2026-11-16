@@ -128,7 +128,6 @@ flowchart TD
     CRATES --> CORE["typort-core/ — Typst compilation + the conversion engine (the brain)"]
     CRATES --> OOXML["typort-ooxml/ — The OOXML document model (IR) + XML writer + ZIP packaging"]
     CRATES --> MATH["typort-math/ — Typst math Content tree → OMML"]
-    CRATES --> PRESETS["typort-presets/ — Journal/style preset loading"]
 ```
 
 `typort-ooxml/src/lib.rs` is the crate's public API index: it contains only module

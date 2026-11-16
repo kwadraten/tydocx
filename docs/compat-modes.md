@@ -537,7 +537,7 @@ REF、PAGEREF 不满足“增量”的定义——它们本身就是交集的原
 ### 7.1 CLI
 
 ```text
-typort input.typ -o output.docx [--compat c1|c2|c3] [--preset NAME] [--degradation-report PATH]
+typort input.typ -o output.docx [--compat c1|c2|c3] [--degradation-report PATH]
 ```
 
 - `--compat`：取值 `c1` / `c2` / `c3`，默认 `c2`。只接受三档短名，不另设
@@ -545,7 +545,6 @@ typort input.typ -o output.docx [--compat c1|c2|c3] [--preset NAME] [--degradati
   避免解析面膨胀）。
 - `--degradation-report <path>`：C1 警告的 sidecar 报告（§4.1），可选；
   不指定时警告只走 stderr。
-- `--preset` 现状不变（§7.3）。
 
 ### 7.2 API
 
@@ -560,23 +559,19 @@ typort input.typ -o output.docx [--compat c1|c2|c3] [--preset NAME] [--degradati
 - 对 `convert`/`export` 的签名改动是 breaking 的，调用点（CLI、集成测试
   的 helper）随之迁移，属机械改动，在 Phase 0 一并做掉。
 
-### 7.3 与 preset 的组合
+### 7.3 preset：已删除
 
-- preset（`typort-presets`）现状：TOML（`journal`/`page`/`footnote`），
-  `main.rs` 在 `convert` **之后**调 `Preset::apply(&mut Document)` 改页边距
-  与脚注格式。preset 改的是已生成的 IR，不能改变转换决策。
-- 所以 preset 里声明 compat 默认值需要改顺序：先读 preset（`--preset`
-  指定时），取其中 `compat` 字段作默认值，再由 CLI `--compat` 覆盖，最后
-  把模式传进 `convert`。建议 preset TOML 加可选字段 `compat = "c1" | "c2" |
-  "c3"`；不写则默认 C2。`Preset::apply` 本身不动。
-- 优先级：CLI `--compat` > preset `compat` > 默认 C2。
+本节已作废（2026-11-16）：`typort-presets` 已删除，布局完全由 Typst
+源码控制（`#set page(margin: …)`、`#set footnote(numbering: …)`）。D6
+（preset 声明 compat 默认值）随之作废；compat 只由 CLI `--compat`
+控制，默认 C2。
 
 ### 7.4 逐文档覆盖：暂不提供
 
 Typst 源码目前没有向 typort 传选项的通道。可能的做法（`#metadata` 约定，
 例如 `#metadata((typort-compat: "c1"))`）存在但不建议现在做：metadata 在
 输出中不可见所以不污染文档，但不可发现、且与 Typst 版本耦合。Phase 0
-只做 CLI + preset；逐文档覆盖列为 §9 D3，待用户决定是否需要。
+只做 CLI；逐文档覆盖列为 §9 D3，待用户决定是否需要。
 
 ### 7.5 默认 C2 对现有输出的影响
 
@@ -633,10 +628,10 @@ flowchart LR
 | --- | --- | --- | --- |
 | D1 | C3 是 C2 之上的叠加（C3 = C2 + 域），还是独立模式？ | 叠加（§1.1、§6）。域与 trick 正交，叠加最简单且可检验 | 若独立，C3 需另定 trick 清单，工作量翻倍 |
 | D2 | C3 的文内引用是否发 CITATION 域？这与 L6“标记而非域”的定论冲突 | C3 发域，L6 定论只约束默认（C2）。C3 是 opt-in，冲突只发生在用户主动选 C3 时 | 若否，C3 的引用与 C2 同（标记 + 超链接），§6.2 删 CITATION 行 |
-| D3 | 是否要逐文档覆盖（如 `#metadata` 约定）？ | 暂不做，只 CLI + preset（§7.4） | 若要做，需另定约定与发现方式 |
+| D3 | 是否要逐文档覆盖（如 `#metadata` 约定）？ | 暂不做，只 CLI（§7.4） | 若要做，需另定约定与发现方式 |
 | D4 | 警告通道：stderr + exit 0，另加 `--degradation-report` sidecar？ | 是（§4.1）。不设 `--warnings-as-errors`（以后再说） | 若只要 stderr，sidecar 延后到 Phase 1 之后 |
 | D5 | `w:updateFields` 是否 C2 也写？ | C2 与 C3 都写（两者都有域） | 若只 C3 写，C2 的 TOC/PAGE 仍需用户手动更新 |
-| D6 | preset 可否声明 compat 默认值（需改 main.rs 先读 preset 再转换）？ | 可以，小重构（§7.3） | 若否，preset 与 compat 正交，互不影响 |
+| D6 | ~~preset 可否声明 compat 默认值（需改 main.rs 先读 preset 再转换）？~~ 已作废（2026-11-16）：`typort-presets` 已删除（§7.3），布局完全由 Typst 源码控制 | — | — |
 | D7 | C1 警告去重与上限策略（同类只报首次 + 计数、总打印上限）？ | 按 §4.1 实施 | 若全量打印，长文档的 stderr 会很长 |
 | D8 | C1 的“跳过”是按方面（本文解释）还是按元素（整元素丢弃）？ | 按方面（§1.2b、§4.2） | 若按元素，SVG 整图丢弃、浮动内容整段丢弃，需重写 §4 |
 | D9 | L2“可表示”的边界：`Numbering::Func` 与不可映射 symbol 回退字面文本（§5.9 映射表）？ | 按 §5.9 执行，映射表实现时按 ECMA-376 核对 | 若边界另定，第七批实现前改 §5.9 |
