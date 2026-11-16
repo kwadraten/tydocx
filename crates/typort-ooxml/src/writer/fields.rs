@@ -98,6 +98,15 @@ pub(super) fn write_field_pageref<W: Write>(
     write_complex_field(writer, &instr, display_text, true)
 }
 
+/// Write a current-page field (` PAGE `) with the cached display text
+/// (the page number Typst rendered at this spot).
+pub(super) fn write_field_page<W: Write>(
+    writer: &mut Writer<W>,
+    display_text: &str,
+) -> io::Result<()> {
+    write_complex_field(writer, " PAGE ", display_text, true)
+}
+
 pub(super) fn write_hyperlink<W: Write>(
     writer: &mut Writer<W>,
     url: &str,

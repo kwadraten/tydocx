@@ -372,7 +372,12 @@ mod tests {
     // ── 10. Footnote reference (circled) ────────────────────────────────
 
     #[test]
-    fn footnote_ref_circled_emits_custom_mark_follows() {
+    fn footnote_ref_circled_is_word_generated() {
+        // Circled footnote numbering used to be emitted as a literal ①
+        // character with `customMarkFollows`, freezing the global sequence.
+        // Word now generates the mark from `decimalEnclosedCircle`: the
+        // reference is a plain `w:footnoteReference`, and the footnote body
+        // starts with a `w:footnoteRef` mark run — no literal mark anywhere.
         let mut doc = Document::new();
         doc.style.footnote_format = FootnoteFormat::CircledNumber;
         let fn_id = doc.add_footnote(vec![document::InlineElement::Text(document::Run::new(
@@ -384,14 +389,25 @@ mod tests {
 
         let buf = build_docx(&doc);
         let xml = read_zip_entry(&buf, "word/document.xml");
+        let expected = format!(r#"<w:footnoteReference w:id="{fn_id}"/>"#);
+        assert!(xml.contains(&expected), "expected {expected} in: {xml}");
         assert!(
-            xml.contains(r#"w:customMarkFollows="1""#),
-            "expected customMarkFollows in: {xml}"
+            !xml.contains("customMarkFollows"),
+            "circled mode should not have customMarkFollows"
         );
         // fn_id=2, seq_num=1 => circled char U+2460 = \u{2460}
         assert!(
-            xml.contains('\u{2460}'),
-            "expected circled digit 1 (\u{2460}) in: {xml}"
+            !xml.contains('\u{2460}'),
+            "no literal circled digit should be emitted in the body: {xml}"
+        );
+        let fn_xml = read_zip_entry(&buf, "word/footnotes.xml");
+        assert!(
+            fn_xml.contains("w:footnoteRef"),
+            "footnote body should start with a generated mark run: {fn_xml}"
+        );
+        assert!(
+            !fn_xml.contains('\u{2460}'),
+            "no literal circled digit should be emitted in footnote bodies: {fn_xml}"
         );
     }
 
@@ -1177,6 +1193,9 @@ mod tests {
     fn page_numbering_decimal_generates_footer_with_page_field() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
+        // The format alone does not conjure a footer; the generated footer
+        // is requested separately (a bare number was detected in the margin).
+        doc.page_number_footer = true;
         let mut para = document::Paragraph::new();
         para.add_run("body text");
         doc.add_paragraph(para);
@@ -1218,6 +1237,7 @@ mod tests {
     fn page_numbering_footer_does_not_contain_static_page_number_body() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
+        doc.page_number_footer = true;
         let mut para = document::Paragraph::new();
         para.add_run("body text");
         doc.add_paragraph(para);
@@ -1238,6 +1258,7 @@ mod tests {
     fn page_numbering_sect_pr_references_footer() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
+        doc.page_number_footer = true;
         let mut para = document::Paragraph::new();
         para.add_run("text");
         doc.add_paragraph(para);
@@ -1292,6 +1313,7 @@ mod tests {
     fn page_numbering_generates_content_types_and_rels() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
+        doc.page_number_footer = true;
         let mut para = document::Paragraph::new();
         para.add_run("text");
         doc.add_paragraph(para);
@@ -1322,6 +1344,35 @@ mod tests {
         assert!(
             !zip_has_entry(&buf, "word/footer1.xml"),
             "ZIP should NOT contain footer1.xml when no page numbering and no footer"
+        );
+    }
+
+    // ── 42b. Numbering format alone does not conjure a footer ──────────
+
+    #[test]
+    fn page_numbering_format_without_footer_flag_generates_no_footer() {
+        // `page_numbering` is only the `pgNumType` format; the generated
+        // footer needs `page_number_footer`. A declared `#set
+        // page(numbering:)` with no rendered footer must not conjure one.
+        let mut doc = Document::new();
+        doc.page_numbering = Some(PageNumberFormat::LowerRoman);
+        let mut para = document::Paragraph::new();
+        para.add_run("text");
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        assert!(
+            !zip_has_entry(&buf, "word/footer1.xml"),
+            "ZIP should NOT contain footer1.xml when only the format is set"
+        );
+        let doc_xml = read_zip_entry(&buf, "word/document.xml");
+        assert!(
+            !doc_xml.contains("w:footerReference"),
+            "sectPr should not reference a footer: {doc_xml}"
+        );
+        assert!(
+            doc_xml.contains(r#"<w:pgNumType w:fmt="lowerRoman"/>"#),
+            "sectPr should still carry the declared format: {doc_xml}"
         );
     }
 

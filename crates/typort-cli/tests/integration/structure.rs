@@ -1,8 +1,8 @@
 //! Document structure: TOC, headers/footers, columns, section breaks, pagebreaks, hrules, page numbering.
 
 use crate::common::{
-    fixture_doc_xml, fixture_document, fixture_package, fixture_package_from_document,
-    paragraph_texts,
+    fixture_doc_xml, fixture_document, fixture_outcome, fixture_package,
+    fixture_package_from_document, paragraph_texts,
 };
 
 #[test]
@@ -562,6 +562,115 @@ fn page_numbering_typ_generates_page_field_footer() {
     assert!(
         doc_xml.contains("w:pgNumType"),
         "sectPr should contain pgNumType: {doc_xml}"
+    );
+}
+
+#[test]
+fn mixed_header_footer_page_numbers_become_page_fields() {
+    // A page number inside a mixed margin zone ("1 标题", "Page 1") must be
+    // split out as a PAGE field; the surrounding text stays literal.
+    let package = fixture_package("issue_mixed_header_footer_page_number");
+
+    let header_xml = package.part_text("word/header1.xml");
+    assert!(
+        header_xml.contains(" PAGE "),
+        "header page number should be a PAGE field, got: {header_xml}"
+    );
+    assert!(
+        header_xml.contains("标题"),
+        "header title text should survive, got: {header_xml}"
+    );
+    assert!(
+        !header_xml.contains(">1 标题</w:t>"),
+        "the header number must not survive as literal text, got: {header_xml}"
+    );
+
+    let footer_xml = package.part_text("word/footer1.xml");
+    assert!(
+        footer_xml.contains(" PAGE "),
+        "footer page number should be a PAGE field, got: {footer_xml}"
+    );
+    assert!(
+        footer_xml.contains("Page "),
+        "footer label text should survive, got: {footer_xml}"
+    );
+    assert!(
+        !footer_xml.contains(">Page 1</w:t>"),
+        "the footer number must not survive as literal text, got: {footer_xml}"
+    );
+}
+
+#[test]
+fn declared_page_numbering_format_wins_over_glyphs() {
+    use typort_ooxml::document::PageNumberFormat;
+    // The declaration ("1" → decimal) wins over the misleading footer glyph
+    // ("i", static text that merely looks like a Roman numeral): glyph
+    // guessing alone would find no consecutive numbering here, but the
+    // declared format still drives `pgNumType` — and the static footer must
+    // not become a generated page-number footer.
+    let doc = fixture_document("issue_page_numbering_declared_wins");
+    assert_eq!(
+        doc.page_numbering,
+        Some(PageNumberFormat::Decimal),
+        "declared numbering \"1\" must drive pgNumType despite the \"i\" glyph"
+    );
+    assert!(
+        !doc.page_number_footer,
+        "a static footer glyph must not become a generated page-number footer"
+    );
+}
+
+#[test]
+fn declared_page_numbering_does_not_conjure_footer() {
+    use typort_ooxml::document::PageNumberFormat;
+    // The declaration ("i") drives `pgNumType`; a declaration alone must not
+    // conjure a generated footer.
+    let doc = fixture_document("issue_page_numbering_declared");
+    assert_eq!(
+        doc.page_numbering,
+        Some(PageNumberFormat::LowerRoman),
+        "declared numbering \"i\" must drive pgNumType"
+    );
+    assert!(
+        !doc.page_number_footer,
+        "a declaration alone must not conjure a generated footer"
+    );
+
+    let package = fixture_package_from_document(&doc);
+    let names: Vec<&str> = package.part_names().collect();
+    assert!(
+        !names.contains(&"word/footer1.xml"),
+        "no footer part should exist without a footer, got: {names:?}"
+    );
+
+    let doc_xml = package.part_text("word/document.xml");
+    assert!(
+        doc_xml.contains("w:pgNumType"),
+        "sectPr should contain pgNumType: {doc_xml}"
+    );
+    assert!(
+        doc_xml.contains("lowerRoman"),
+        "sectPr should carry the declared lowerRoman format: {doc_xml}"
+    );
+}
+
+#[test]
+fn unmappable_page_numbering_is_reported() {
+    // A function-valued numbering has no `w:pgNumType` equivalent: the format
+    // falls back to glyph detection (which finds no footer number here) and
+    // the declaration is reported.
+    let outcome = fixture_outcome("issue_page_numbering_unmappable");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "page-numbering-pattern"),
+        "a function-valued numbering should be reported, got: {:?}",
+        outcome.degradations
+    );
+    assert!(
+        outcome.document.page_numbering.is_none(),
+        "glyph detection finds no footer number here, so no format is set"
     );
 }
 

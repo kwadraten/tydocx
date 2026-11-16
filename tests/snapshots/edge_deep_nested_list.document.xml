@@ -159,7 +159,6 @@
     </w:p>
     <w:sectPr>
       <w:footnotePr>
-        <w:numRestart w:val="eachPage"/>
       </w:footnotePr>
       <w:pgSz w:w="11906" w:h="16838"/>
       <w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417"/>

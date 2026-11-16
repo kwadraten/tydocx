@@ -189,6 +189,11 @@ pub enum InlineElement {
         bookmark_name: String,
         display_text: String,
     },
+    /// A current-page field (PAGE field code). The cached `display_text` is the
+    /// page number Typst rendered at this spot (e.g. from a bare
+    /// `counter(page).display()` or `counter(page).at(here())`); Word recomputes
+    /// the field, the cache is only the pre-update display value.
+    FieldPage { display_text: String },
     /// An external hyperlink using `fldSimple` with HYPERLINK field code.
     Hyperlink { url: String, runs: Vec<Run> },
     /// An internal hyperlink (`w:hyperlink w:anchor`) to a bookmark — e.g. a
@@ -507,6 +512,7 @@ impl Paragraph {
                 }
                 InlineElement::FieldRef { display_text, .. }
                 | InlineElement::FieldPageRef { display_text, .. }
+                | InlineElement::FieldPage { display_text }
                 | InlineElement::Citation { display_text, .. } => {
                     text.push_str(display_text);
                 }
@@ -591,6 +597,11 @@ impl Paragraph {
             bookmark_name,
             display_text,
         });
+    }
+
+    /// Add a current-page field (PAGE field code).
+    pub fn add_field_page(&mut self, display_text: String) {
+        self.inlines.push(InlineElement::FieldPage { display_text });
     }
 
     /// Add an external hyperlink.
@@ -959,6 +970,11 @@ pub struct DocumentStyle {
     /// first-line indent on the paragraph that follows a heading.
     pub first_line_indent_all: bool,
     pub footnote_format: FootnoteFormat,
+    /// Whether the footnote counter resets on every page. Typst's default is
+    /// continuous numbering across the whole document; per-page restart only
+    /// happens when the source resets the footnote counter in a page header
+    /// (`counter(footnote).update(0)` there).
+    pub footnote_restart_each_page: bool,
     /// Font used for code/raw blocks (detected from Typst rendering).
     pub code_font: String,
     /// Font size for code blocks in half-points.
@@ -1004,6 +1020,7 @@ impl Default for DocumentStyle {
             first_line_indent_chars: None,
             first_line_indent_all: false,
             footnote_format: FootnoteFormat::default(),
+            footnote_restart_each_page: false,
             code_font: "Courier New".to_string(),
             code_size_half_pt: 22, // Typst raw text uses body size by default
             footnote_size_half_pt: 18,
@@ -1073,6 +1090,10 @@ pub struct Document {
     /// If set, footer contains a PAGE field code with this number format.
     /// When this is `Some`, a footer is always generated (even if `footer` is `None`).
     pub page_numbering: Option<PageNumberFormat>,
+    /// Whether the footer is a generated PAGE field (a bare page number in the
+    /// footer margin zone). Decoupled from `page_numbering`: the number format
+    /// may be declared (`#set page(numbering:)`) without any footer existing.
+    pub page_number_footer: bool,
     /// Counter for generating unique list numbering IDs (starts at 4;
     /// 1=ordered, 2=unordered, 3=Chinese headings are reserved).
     pub next_list_id: u32,
@@ -1095,6 +1116,7 @@ impl Default for Document {
             header: None,
             footer: None,
             page_numbering: None,
+            page_number_footer: false,
             next_list_id: 4,
             list_num_instances: Vec::new(),
             citation_sources: Vec::new(),

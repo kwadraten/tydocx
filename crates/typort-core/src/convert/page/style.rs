@@ -202,6 +202,9 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
         first_line_indent_chars: None,
         first_line_indent_all: false,
         footnote_format: FootnoteFormat::default(),
+        // Geometry detection cannot see the source header rule; the
+        // source-AST detection (apply_page_and_style) sets this.
+        footnote_restart_each_page: false,
         code_font,
         body_spacing_before,
         body_spacing_after,

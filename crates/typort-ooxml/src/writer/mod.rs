@@ -53,7 +53,7 @@ impl DocParts {
         if doc.header.is_some() {
             relationships.push(RelKind::Header);
         }
-        if doc.footer.is_some() || doc.page_numbering.is_some() {
+        if doc.footer.is_some() || doc.page_number_footer {
             relationships.push(RelKind::Footer);
         }
         if !doc.citation_sources.is_empty() {
@@ -167,7 +167,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     }
 
     // Write footer XML — either a PAGE field for page numbering, or static content
-    if doc.page_numbering.is_some() {
+    if doc.page_number_footer {
         zip.start_file("word/footer1.xml", options)?;
         zip.write_all(&xml_part(generate_page_number_footer_xml)?)?;
     } else if let Some(footer) = &doc.footer {

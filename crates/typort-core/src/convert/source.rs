@@ -1,6 +1,7 @@
 use super::{
     BlockElement, Document, HangingIndent, InlineElement, ParagraphStyle, TyportWorld, page,
 };
+use crate::compat::{Degradation, DegradationAction};
 
 /// Apply authoritative values from source AST, overriding heuristic guesses.
 /// Resolve the declared first-line indent (Typst default: 0pt) onto the style.
@@ -85,6 +86,40 @@ pub(super) fn apply_body_font_split(fonts: &[String], doc: &mut Document, has_ge
     doc.style.body_font_east_asia = east_asia;
 }
 
+/// Apply the declared `#set page(numbering:)` format: the declared value
+/// wins over glyph guessing (which runs later in `apply_headers_and_footers`);
+/// an unmappable pattern falls back to glyph detection and is reported.
+fn apply_page_numbering_format(
+    ovr: &page::SourceStyleOverrides,
+    doc: &mut Document,
+    degradations: &mut Vec<Degradation>,
+) {
+    let Some(decl) = &ovr.page_numbering else {
+        return;
+    };
+    match decl {
+        page::PageNumberingDecl::Pattern(pattern) => {
+            match page::page_number_format_from_declaration(pattern) {
+                Some(fmt) => doc.page_numbering = Some(fmt),
+                None => degradations.push(Degradation::new(
+                    None,
+                    "page-numbering-pattern",
+                    DegradationAction::Literalized,
+                    format!(
+                        "page numbering pattern \"{pattern}\" has no OOXML equivalent; the number format is guessed from the rendered glyphs instead"
+                    ),
+                )),
+            }
+        }
+        page::PageNumberingDecl::Unmappable => degradations.push(Degradation::new(
+            None,
+            "page-numbering-pattern",
+            DegradationAction::Literalized,
+            "page numbering is declared as a function or computed value, which has no OOXML equivalent; the number format is guessed from the rendered glyphs instead",
+        )),
+    }
+}
+
 /// Gather authoritative style overrides from the source AST: the main file plus
 /// every file reachable from it through `#import`/`#include` chains. Paths
 /// resolve the way Typst resolves them — relative to the importing file's
@@ -101,6 +136,19 @@ pub(super) fn gather_source_overrides(world: &TyportWorld) -> page::SourceStyleO
     let template_names = page::extract_show_template_names_from_source(main_text);
     let texts = page::collect_reachable_source_texts(world.root(), &world.main_dir(), main_text);
     merge_reachable_overrides(&texts, &template_names)
+}
+
+/// Whether the document resets the footnote counter in a page header (the
+/// opt-in for per-page footnote numbering). Checks the main source and every
+/// file reachable from it, reusing the same template names as
+/// [`gather_source_overrides`].
+pub(super) fn detect_footnote_restart_each_page(world: &TyportWorld) -> bool {
+    let main_text = world.main_source().text();
+    let template_names = page::extract_show_template_names_from_source(main_text);
+    let texts = page::collect_reachable_source_texts(world.root(), &world.main_dir(), main_text);
+    texts
+        .iter()
+        .any(|text| page::footnote_counter_reset_in_page_header(text, &template_names))
 }
 
 /// Merge `SourceStyleOverrides` from every reachable source text, main file
@@ -121,11 +169,15 @@ pub(super) fn apply_source_overrides(
     ovr: &page::SourceStyleOverrides,
     doc: &mut Document,
     has_geometry: bool,
+    degradations: &mut Vec<Degradation>,
 ) {
     // Columns
     if let Some(cols) = ovr.columns {
         doc.page_settings.columns = Some(cols);
     }
+
+    // Page numbering format: the declared value wins over glyph guessing.
+    apply_page_numbering_format(ovr, doc, degradations);
 
     // Body text font — split into ASCII and East-Asian defaults.
     if let Some(fonts) = &ovr.text_font {

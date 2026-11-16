@@ -1,6 +1,8 @@
 //! Heading semantics and formatting tests.
 
-use crate::common::{fixture_doc_xml, fixture_part, fixture_styles_xml, paragraph_containing};
+use crate::common::{
+    fixture_doc_xml, fixture_outcome, fixture_part, fixture_styles_xml, paragraph_containing,
+};
 
 #[test]
 fn issue_show_rule_heading_styles() {
@@ -365,5 +367,36 @@ fn issue_pageref_field_for_page_counter_reference() {
     assert!(
         xml.contains("<w:t xml:space=\"preserve\">1</w:t>"),
         "the field's cached display text should be the page number:\n{xml}"
+    );
+}
+
+#[test]
+fn issue_bare_page_counter_display_becomes_page_field() {
+    // A bare `counter(page).display()` (and `.at(here())`) must become a PAGE
+    // field with the rendered page number as the cached display text — not
+    // literal text. The arithmetic reference is the one that stays literal.
+    let xml = fixture_doc_xml("issue_pageref_display");
+    assert_eq!(
+        xml.matches(" PAGE ").count(),
+        2,
+        "both bare current-page references should emit a PAGE field:\n{xml}"
+    );
+    assert!(
+        xml.contains("One more than the introduction page:"),
+        "the arithmetic reference's text should survive:\n{xml}"
+    );
+}
+
+#[test]
+fn issue_uncomputable_page_counters_report_degradations() {
+    let outcome = fixture_outcome("issue_pageref_display");
+    let constructs: Vec<&str> = outcome.degradations.iter().map(|d| d.construct).collect();
+    assert!(
+        constructs.contains(&"page-counter-value"),
+        "arithmetic around counter(page) should be reported, got: {constructs:?}"
+    );
+    assert!(
+        constructs.contains(&"footnote-counter-reference"),
+        "counter(footnote) should be reported, got: {constructs:?}"
     );
 }

@@ -119,8 +119,9 @@ struct WalkCtx<'a> {
     /// Compat mode of this conversion. C1 gates degrade constructs the
     /// OOXML intersection cannot express; C2/C3 keep the current output.
     compat: CompatMode,
-    /// Degradations found so far (C1 only). The walk pushes; `export`
-    /// returns the list as part of [`ConvertOutcome`].
+    /// Degradations found so far. C1 gates push here, as do all-mode
+    /// literalizations (e.g. a page-counter value kept as literal text).
+    /// The walk pushes; `export` returns the list as part of [`ConvertOutcome`].
     degradations: &'a mut Vec<Degradation>,
 }
 
@@ -140,7 +141,8 @@ impl WalkCtx<'_> {
 ///
 /// Compiles both targets, then hands them to [`export`]. The returned
 /// outcome pairs the document with the degradations reported during
-/// conversion (empty until Phase 1 adds mode gates).
+/// conversion (page/footnote counters kept as literal text, unmappable
+/// numbering patterns, ...; Phase 1 adds the per-mode gates).
 ///
 /// # Errors
 /// Returns compilation errors, with their spans, if the Typst source cannot
@@ -172,7 +174,7 @@ pub fn export(
     let mut doc = Document::new();
 
     // 2. Apply page settings and document style.
-    apply_page_and_style(world, paged_doc, &mut doc);
+    apply_page_and_style(world, paged_doc, &mut doc, &mut degradations);
 
     // 3. Walk the HTML body.
     let body = walk_body(
@@ -220,6 +222,7 @@ fn apply_page_and_style(
     world: &TyportWorld,
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
+    degradations: &mut Vec<Degradation>,
 ) {
     // Extract page settings and document style from PagedDocument (heuristic).
     if let Some(paged) = paged_doc {
@@ -229,7 +232,11 @@ fn apply_page_and_style(
 
     // Override with authoritative values from source AST.
     let source_overrides = gather_source_overrides(world);
-    apply_source_overrides(&source_overrides, doc, paged_doc.is_some());
+    apply_source_overrides(&source_overrides, doc, paged_doc.is_some(), degradations);
+
+    // Footnote numbering restarts per page only when the source resets the
+    // footnote counter in a page header; Typst's default is continuous.
+    doc.style.footnote_restart_each_page = source::detect_footnote_restart_each_page(world);
 
     // Note: page column count comes solely from the source AST
     // (`#set page(columns:)` / `#page(columns:)`, parsed above). There is no
@@ -312,16 +319,22 @@ fn apply_headers_and_footers(
     // so a small author margin never misfiles body text as header/footer.
     if let Some(paged) = paged_doc {
         let margins = page::MarginsPt::from_settings(&doc.page_settings);
+        // The declared page-numbering format (from `#set page(numbering:)`,
+        // consumed in `apply_source_overrides`) wins over glyph guessing.
+        let declared = doc.page_numbering;
         if doc.header.is_none() {
-            doc.header = page::extract_header(paged, margins);
+            doc.header = page::extract_header(paged, margins, declared);
         }
         // Detect page numbering before extracting footer. If the footer is just
-        // a page number, set page_numbering so the writer generates a PAGE field.
+        // a page number, the writer generates a PAGE field footer instead.
         if let Some(fmt) = page::detect_page_numbering(paged, margins) {
-            doc.page_numbering = Some(fmt);
+            doc.page_number_footer = true;
+            if declared.is_none() {
+                doc.page_numbering = Some(fmt);
+            }
             // Don't set doc.footer — the writer will generate a PAGE field footer
         } else if doc.footer.is_none() {
-            doc.footer = page::extract_footer(paged, margins);
+            doc.footer = page::extract_footer(paged, margins, declared);
         }
         if compat == CompatMode::C1 {
             // M7: only the first page's header/footer survives; warn when a

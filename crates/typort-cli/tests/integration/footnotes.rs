@@ -151,15 +151,17 @@ fn footnote_text_size_is_body_size_not_marker_size() {
 fn features_footnote_restart_and_font_hint() {
     let package = fixture_package("complex_paper");
 
-    // Feature 1: Footnote per-page restart (matching Typst's default numbering)
+    // Feature 1: footnote properties are present, but numbering is
+    // continuous by default — Typst's default. Per-page restart only happens
+    // when the source resets the footnote counter in a page header.
     let settings_xml = package.part_text("word/settings.xml");
     assert!(
         settings_xml.contains("w:footnotePr"),
         "settings.xml should contain w:footnotePr"
     );
     assert!(
-        settings_xml.contains("eachPage"),
-        "settings.xml should restart numbering each page"
+        !settings_xml.contains("eachPage"),
+        "settings.xml must NOT restart numbering each page by default"
     );
 
     // Feature 1: sectPr also has footnote properties
@@ -192,6 +194,72 @@ fn footnote_circled_numbering_format_emitted() {
     assert!(
         settings_xml.contains("decimalEnclosedCircle"),
         "circled footnote numbering must emit w:numFmt=decimalEnclosedCircle, got: {settings_xml}"
+    );
+}
+
+#[test]
+fn footnote_per_page_restart_when_header_resets_counter() {
+    // A `#set page(header: context counter(footnote).update(0))` source opts
+    // into per-page footnote numbering: the writer must emit `eachPage`.
+    let package = fixture_package("issue_footnote_per_page");
+    let settings_xml = package.part_text("word/settings.xml");
+    assert!(
+        settings_xml.contains("eachPage"),
+        "a header counter reset must restart numbering each page, got: {settings_xml}"
+    );
+    let doc_xml = package.part_text("word/document.xml");
+    let sect_pr_pos = doc_xml.find("w:sectPr").expect("should have sectPr");
+    assert!(
+        doc_xml[sect_pr_pos..].contains("eachPage"),
+        "sectPr should restart numbering each page"
+    );
+}
+
+#[test]
+fn footnote_continuous_by_default() {
+    // No header reset anywhere: numbering is continuous, so no `eachPage`.
+    let package = fixture_package("issue_footnote_continuous");
+    let settings_xml = package.part_text("word/settings.xml");
+    assert!(
+        settings_xml.contains("w:footnotePr"),
+        "settings.xml should contain w:footnotePr"
+    );
+    assert!(
+        !settings_xml.contains("eachPage"),
+        "no header reset means continuous numbering, got: {settings_xml}"
+    );
+}
+
+#[test]
+fn circled_footnote_marks_are_word_generated() {
+    // Regression: circled footnote numbering used to be emitted as literal
+    // ①②③… characters (with customMarkFollows), freezing the global
+    // sequence and contradicting a per-page restart. Word now generates the
+    // marks from `decimalEnclosedCircle`; the writer emits no literal mark.
+    // (The recovery layer still re-inserts the Paged footnote-area text as
+    // literal superscript runs in stray body paragraphs — pre-existing,
+    // identical on the clean baseline, out of this batch's scope; it is why
+    // this test does NOT assert "no circled char anywhere in document.xml".)
+    let package = fixture_package("fn25_test");
+    let doc_xml = package.part_text("word/document.xml");
+    assert!(
+        !doc_xml.contains("customMarkFollows"),
+        "no literal custom marks should be emitted"
+    );
+    assert_eq!(
+        doc_xml.matches("FootnoteReference").count(),
+        25,
+        "exactly one FootnoteReference-styled run per reference (baseline had 50: one reference run plus one literal mark run each)"
+    );
+    let fn_xml = package.part_text("word/footnotes.xml");
+    assert!(
+        !fn_xml.contains('①') && !fn_xml.contains('㉑'),
+        "no literal circled characters should be emitted in footnote bodies"
+    );
+    assert_eq!(
+        fn_xml.matches("w:footnoteRef").count(),
+        25,
+        "each footnote body should start with a generated mark run"
     );
 }
 
