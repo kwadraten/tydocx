@@ -2,13 +2,17 @@ use std::collections::HashMap;
 
 use typst::World;
 
+use crate::compat::{CompatMode, Degradation, DegradationAction};
+
+use typst_library::visualize::ImageElem;
+
 use super::{
     Alignment, CiteElem, CiteGroup, EmphElem, EquationElem, HighlightElem, HighlightStyle,
     HtmlDocument, HtmlElement, HtmlNode, InlineFmt, LinkElem, Paragraph, RefElem, Run, StrongElem,
     Tag, WalkCtx, collect_flat_text, content_at_location, drain_text_runs, element_at_location,
     emit_block_equation, find_img_src, find_tag_end, first_biblioref_href, footnote,
     get_attr_value, has_attr_value, highlight_style, image, inline, is_block_equation, page,
-    run_with_span, sanitize_anchor, subtree_has_element, tag_name,
+    run_with_span, sanitize_anchor, subtree_has_element, tag_name, tag_span,
 };
 
 /// The behavior needed by a caller of the shared HTML inline collector.
@@ -124,6 +128,22 @@ pub(super) fn collect_inlines(
                     // Layouted-opaque inline content (e.g. a boxed drawing as a
                     // figure body): rasterize in place as an inline image.
                     if let Some(img) = image::rasterize_html_frame(frame) {
+                        // U21 (C1 only, Paragraph purpose only — the Generic
+                        // path carries no degradation sink): the frame's
+                        // vector/text content is no longer editable. The frame
+                        // carries no span or page, so the degradation is
+                        // span-less without a page hint.
+                        if options.purpose == InlinePurpose::Paragraph
+                            && let Some(ctx) = ctx.as_deref_mut()
+                            && ctx.compat == CompatMode::C1
+                        {
+                            ctx.degradations.push(Degradation::new(
+                                None,
+                                "html-frame",
+                                DegradationAction::Approximated,
+                                "HTML frame rasterized to PNG; content is no longer editable text",
+                            ));
+                        }
                         para.add_image(img);
                     }
                 }
@@ -326,7 +346,7 @@ pub(super) fn handle_inline_tag(
     match content.elem().name() {
         "strong" | "emph" => handle_emphasis_tag(tag, children, i, ctx, para),
         "equation" => handle_inline_equation_tag(tag, children, i, ctx, para),
-        "footnote" => handle_inline_footnote_tag(tag, children, i, para),
+        "footnote" => handle_inline_footnote_tag(tag, children, i, ctx, para),
         "image" => handle_inline_image_tag(tag, children, i, ctx, para),
         "ref" => handle_inline_ref_tag(tag, children, i, ctx, para),
         "link" => handle_inline_link_tag(tag, children, i, ctx, para),
@@ -412,10 +432,27 @@ pub(super) fn handle_inline_footnote_tag(
     tag: &Tag,
     children: &[HtmlNode],
     i: usize,
+    ctx: &mut WalkCtx,
     para: &mut Paragraph,
 ) -> usize {
     if let Some(id) = footnote::find_footnote_id_in_range(&children[i..]) {
         para.add_footnote_ref(id + 1);
+    }
+    // U26 (C1 only): a non-decimal, non-circled numbering has no OOXML
+    // equivalent. The marker text is the rendered numbering, so a `#set
+    // footnote(numbering: …)` rule is seen here even though the element
+    // field cannot see it. Span-less: the §4.1 dedup collapses a
+    // document's numbering to its first occurrence plus a count.
+    if ctx.compat == CompatMode::C1
+        && let Some(marker) = footnote::find_footnote_marker_text(&children[i..])
+        && !footnote::footnote_marker_representable(&marker)
+    {
+        ctx.degradations.push(Degradation::new(
+            None,
+            "footnote-numbering",
+            DegradationAction::Literalized,
+            format!("footnote numbering {marker:?} is not representable; references using it are dropped"),
+        ));
     }
     find_tag_end(children, i, tag.location())
 }
@@ -424,14 +461,32 @@ pub(super) fn handle_inline_image_tag(
     tag: &Tag,
     children: &[HtmlNode],
     i: usize,
-    ctx: &WalkCtx,
+    ctx: &mut WalkCtx,
     para: &mut Paragraph,
 ) -> usize {
     let end = find_tag_end(children, i, tag.location());
-    if let Some(src) = find_img_src(&children[i..=end])
-        && let Some(img_data) = image::image_data_from_src(&src, ctx.image_sizes)
+    let src = find_img_src(&children[i..=end]);
+    if let Some(src) = &src
+        && let Some(img_data) = image::image_data_from_src(src, ctx.image_sizes)
     {
         para.add_image(img_data);
+    }
+    if ctx.compat == CompatMode::C1 {
+        // L4: an SVG image is rasterized to PNG; the vector aspect is dropped.
+        if let Some(src) = &src
+            && image::is_vector_image_src(src)
+        {
+            ctx.degradations.push(Degradation::new(
+                tag_span(tag),
+                "vector-image",
+                DegradationAction::Approximated,
+                "SVG image rasterized to PNG; vector aspect dropped",
+            ));
+        }
+        // U19: a non-cover fit and a non-empty alt text are dropped.
+        if let Some(image_elem) = element_at_location::<ImageElem>(ctx.html_doc, tag.location()) {
+            image::report_image_aspects(&image_elem, tag_span(tag), ctx.degradations);
+        }
     }
     end
 }
@@ -500,7 +555,7 @@ pub(super) fn handle_inline_format_tag(
     tag: &Tag,
     children: &[HtmlNode],
     i: usize,
-    ctx: &WalkCtx,
+    ctx: &mut WalkCtx,
     para: &mut Paragraph,
 ) -> usize {
     let end = find_tag_end(children, i, tag.location());
@@ -511,6 +566,15 @@ pub(super) fn handle_inline_format_tag(
             let name = content.elem().name();
             if name == "highlight" {
                 apply_highlight_fill(ctx, tag, &mut run);
+            } else if name == "overline" && ctx.compat == CompatMode::C1 {
+                // M9: C1 drops the overline aspect instead of silently
+                // rewriting it as underline; the text survives unadorned.
+                ctx.degradations.push(Degradation::new(
+                    tag_span(tag),
+                    "overline",
+                    DegradationAction::Skipped,
+                    "overline dropped; text kept without decoration",
+                ));
             } else {
                 apply_inline_format(name, &mut run);
             }

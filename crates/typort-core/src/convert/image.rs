@@ -2,10 +2,15 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use typort_ooxml::document::{ImageData, ImageFormat};
+use typst::foundations::Packed;
 use typst::introspection::Location;
 use typst::layout::{Frame, FrameItem};
 use typst_html::HtmlFrame;
 use typst_layout::PagedDocument;
+use typst_library::visualize::{ImageElem, ImageFit};
+use typst_syntax::Span;
+
+use crate::compat::{Degradation, DegradationAction};
 
 /// Image CONTENT comes from the HTML `<img>` src data-URL (the semantic
 /// source, see `image_data_from_src`); the paged frames contribute only the
@@ -142,6 +147,46 @@ pub(super) fn image_data_from_src(
             })
         }
         _ => None,
+    }
+}
+
+/// Whether an image `src` data-URL is a vector image (SVG) whose vector
+/// aspect C1 drops by rasterizing it to PNG. Raster formats (PNG/JPEG)
+/// keep their aspect; GIF/WebP re-encode to PNG, losing only animation.
+#[must_use]
+pub fn is_vector_image_src(src: &str) -> bool {
+    src.starts_with("data:image/svg+xml")
+}
+
+/// In C1, report the aspects of one image the OOXML intersection drops
+/// (U19): a non-cover `fit` (cover is the default Word behavior; the
+/// display size Typst computed is kept, only the fit behavior is lost)
+/// and a non-empty `alt` text (no alt-text slot is written). The image
+/// itself is kept; only these aspects are reported.
+pub(super) fn report_image_aspects(
+    image: &Packed<ImageElem>,
+    span: Option<Span>,
+    degradations: &mut Vec<Degradation>,
+) {
+    if let Some(fit) = image.fit.as_option()
+        && *fit != ImageFit::Cover
+    {
+        degradations.push(Degradation::new(
+            span,
+            "image-fit",
+            DegradationAction::Skipped,
+            "image fit is not cover; the fit behavior is dropped",
+        ));
+    }
+    if let Some(Some(alt)) = image.alt.as_option()
+        && !alt.is_empty()
+    {
+        degradations.push(Degradation::new(
+            span,
+            "image-alt",
+            DegradationAction::Skipped,
+            "image alt text is dropped",
+        ));
     }
 }
 

@@ -27,6 +27,18 @@ pub(super) fn run_with_span(text: &str, span: typst_syntax::Span) -> Run {
     run
 }
 
+/// The span of a Tag's content, or `None` when the Tag is an End or its
+/// content's span is detached. Degradations never carry a fabricated span.
+pub(super) fn tag_span(tag: &Tag) -> Option<typst_syntax::Span> {
+    if let Tag::Start(content, _) = tag {
+        let span = content.span();
+        if !span.is_detached() {
+            return Some(span);
+        }
+    }
+    None
+}
+
 /// Whether an introspected equation is block-level.
 pub(super) fn is_block_equation(content: &Content) -> bool {
     content

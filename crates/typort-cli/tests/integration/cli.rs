@@ -135,7 +135,7 @@ fn cli_compat_modes_produce_identical_output() {
         );
         assert!(
             result.stderr.is_empty(),
-            "--compat {mode} should print no warnings in Phase 0, stderr was: {}",
+            "--compat {mode} should print no warnings on this fixture, stderr was: {}",
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(
@@ -153,9 +153,75 @@ fn cli_compat_modes_produce_identical_output() {
         String::from_utf8_lossy(&result.stderr)
     );
     xmls.push(document_xml(&default_output));
-    assert_eq!(xmls[0], xmls[1], "c1 must match c2 in Phase 0");
-    assert_eq!(xmls[1], xmls[2], "c2 must match c3 in Phase 0");
+    // complex_paper carries no gated constructs, so C1 matches C2/C3 here.
+    assert_eq!(xmls[0], xmls[1], "c1 must match c2 on this fixture");
+    assert_eq!(xmls[1], xmls[2], "c2 must match c3 on this fixture");
     assert_eq!(xmls[2], xmls[3], "default must match c2");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cli_degradation_report_sidecar() {
+    let dir = temp_dir("degradation-report");
+    let output = dir.join("out.docx");
+    let report = dir.join("report.json");
+    let result = run_typort_extra(
+        &fixture_path("issue_c1_misc"),
+        Some(&output),
+        &[
+            "--compat",
+            "c1",
+            "--degradation-report",
+            report.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        result.status.success(),
+        "c1 conversion should succeed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(output.exists(), "output was not written");
+    let json = fs::read_to_string(&report).unwrap();
+    assert!(
+        json.starts_with("{\"degradations\": ["),
+        "report should be a degradations JSON object, got: {json}"
+    );
+    for construct in [
+        "figure-placement",
+        "outline-target",
+        "outline-indent",
+        "list-marker",
+        "enum-reversed",
+        "image-fit",
+        "image-alt",
+    ] {
+        assert!(
+            json.contains(&format!("\"construct\": \"{construct}\"")),
+            "report should list {construct}, got: {json}"
+        );
+    }
+    // A C2 run reports nothing: the sidecar is an empty list.
+    let report_c2 = dir.join("report-c2.json");
+    let result = run_typort_extra(
+        &fixture_path("issue_c1_misc"),
+        Some(&output),
+        &[
+            "--compat",
+            "c2",
+            "--degradation-report",
+            report_c2.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        result.status.success(),
+        "c2 conversion should succeed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&report_c2).unwrap(),
+        "{\"degradations\": []}",
+        "c2 sidecar should be empty"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 

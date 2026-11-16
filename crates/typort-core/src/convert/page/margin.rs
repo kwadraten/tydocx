@@ -4,6 +4,8 @@ use typort_ooxml::document::{
 use typst::layout::{Frame, FrameItem};
 use typst_layout::PagedDocument;
 
+use crate::compat::{Degradation, DegradationAction};
+
 use super::units::pt_to_twips;
 
 /// Fraction of each margin retained as a guard between body and margin content.
@@ -271,37 +273,158 @@ fn page_number_value(s: &str, fmt: PageNumberFormat) -> u32 {
     }
 }
 
-/// Extract footer text from a single page frame (text in the bottom margin zone).
-fn extract_footer_text_from_page(frame: &Frame, margins: MarginsPt) -> Option<String> {
+/// Extract margin-zone text from a single page frame (text in the top or
+/// bottom margin zone), in frame order. Returns `None` when the zone is
+/// empty.
+fn extract_zone_text_from_page(
+    frame: &Frame,
+    zone: MarginZone,
+    margins: MarginsPt,
+) -> Option<String> {
     let page_width = frame.width().to_pt();
     let page_height = frame.height().to_pt();
 
     let mut fragments = Vec::new();
     collect_text_fragments(frame, &mut fragments);
 
-    let (_body_top, body_bottom) = find_body_zone(
+    let (body_top, body_bottom) = find_body_zone(
         page_width,
         page_height,
         Some(margins.top),
         Some(margins.bottom),
     );
 
-    let footer_items: Vec<&TextFragment> = fragments
+    let items: Vec<&TextFragment> = fragments
         .iter()
-        .filter(|f| f.y > body_bottom && f.y <= page_height)
+        .filter(|f| match zone {
+            MarginZone::Top => f.y < body_top && f.y > 0.0,
+            MarginZone::Bottom => f.y > body_bottom && f.y <= page_height,
+        })
         .collect();
 
-    if footer_items.is_empty() {
+    if items.is_empty() {
         return None;
     }
 
-    let text: String = footer_items.iter().map(|f| f.text.as_str()).collect();
+    let text: String = items.iter().map(|f| f.text.as_str()).collect();
     let trimmed = text.trim().to_string();
     if trimmed.is_empty() {
         None
     } else {
         Some(trimmed)
     }
+}
+
+/// Extract footer text from a single page frame (text in the bottom margin zone).
+fn extract_footer_text_from_page(frame: &Frame, margins: MarginsPt) -> Option<String> {
+    extract_zone_text_from_page(frame, MarginZone::Bottom, margins)
+}
+
+/// Normalize a margin-zone text for variant comparison: every run of ASCII
+/// digits collapses to a single `#`, so a page number ("Page 1" vs
+/// "Page 2") does not read as a header/footer variant. A header that
+/// differs only in a number (e.g. a chapter number) is missed by the same
+/// token — a deliberate false-negative bias: warnings must not fire on
+/// ordinary paginated documents.
+fn normalize_zone_text_for_comparison(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_digits = false;
+    for c in text.chars() {
+        if c.is_ascii_digit() {
+            if !in_digits {
+                out.push('#');
+                in_digits = true;
+            }
+        } else {
+            out.push(c);
+            in_digits = false;
+        }
+    }
+    out
+}
+
+/// In C1, check whether any later page's header or footer text differs
+/// from page 1's (after digit normalization, so page numbers don't count).
+/// C1 keeps only the first page's header/footer, so a variant means the
+/// later pages' headers/footers are lost. Returns a span-less degradation
+/// naming the first differing page, or `None` when all pages agree (or the
+/// document has a single page).
+#[must_use]
+pub fn header_footer_variant(paged: &PagedDocument, margins: MarginsPt) -> Option<Degradation> {
+    let doc_pages = paged.pages();
+    if doc_pages.len() < 2 {
+        return None;
+    }
+    for zone in [MarginZone::Top, MarginZone::Bottom] {
+        let zone_name = match zone {
+            MarginZone::Top => "header",
+            MarginZone::Bottom => "footer",
+        };
+        let first = extract_zone_text_from_page(&doc_pages[0].frame, zone, margins)
+            .map(|text| normalize_zone_text_for_comparison(&text));
+        for (index, page) in doc_pages.iter().enumerate().skip(1) {
+            let text = extract_zone_text_from_page(&page.frame, zone, margins)
+                .map(|text| normalize_zone_text_for_comparison(&text));
+            if text != first {
+                return Some(Degradation::new(
+                    None,
+                    "header-footer-variant",
+                    DegradationAction::Skipped,
+                    format!(
+                        "page {} {zone_name} differs from page 1; only the first page's {zone_name} is kept",
+                        index + 1
+                    ),
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// In C1, check whether the first page's header/footer text carries run
+/// styles the flattened extraction drops: a size other than the body size,
+/// or a bold weight (same 700 threshold as `run_style`'s
+/// `BOLD_WEIGHT_THRESHOLD`; a warning heuristic, not layout). Returns
+/// `true` when any such fragment exists in either margin zone.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "font sizes are non-negative; half-point rounding is intentional"
+)]
+pub fn header_footer_style_lost(
+    paged: &PagedDocument,
+    margins: MarginsPt,
+    body_size_half_pt: u32,
+) -> bool {
+    let Some(page) = paged.pages().first() else {
+        return false;
+    };
+    let page_width = page.frame.width().to_pt();
+    let page_height = page.frame.height().to_pt();
+    let (body_top, body_bottom) = find_body_zone(
+        page_width,
+        page_height,
+        Some(margins.top),
+        Some(margins.bottom),
+    );
+    let mut lost = false;
+    super::super::frames::visit_frame_items(&page.frame, false, &mut |position, item| {
+        if lost {
+            return;
+        }
+        if let FrameItem::Text(text_item) = item {
+            let y = position.y.to_pt();
+            if y < body_top || y > body_bottom {
+                let size_half_pt = (text_item.size.to_pt() * 2.0).round() as u32;
+                let bold = text_item.font.info().variant.weight.to_number() >= 700;
+                if size_half_pt != body_size_half_pt || bold {
+                    lost = true;
+                }
+            }
+        }
+    });
+    lost
 }
 
 /// Classify a string as a page number format.
@@ -502,6 +625,33 @@ mod tests {
         assert_eq!(page_number_value("z", PageNumberFormat::LowerLetter), 26);
         assert_eq!(page_number_value("A", PageNumberFormat::UpperLetter), 1);
         assert_eq!(page_number_value("C", PageNumberFormat::UpperLetter), 3);
+    }
+
+    #[test]
+    fn normalize_zone_text_masks_digit_runs() {
+        assert_eq!(normalize_zone_text_for_comparison("Page 1"), "Page #");
+        assert_eq!(
+            normalize_zone_text_for_comparison("Page 12 of 300"),
+            "Page # of #"
+        );
+        assert_eq!(normalize_zone_text_for_comparison("1"), "#");
+        assert_eq!(normalize_zone_text_for_comparison(""), "");
+        assert_eq!(
+            normalize_zone_text_for_comparison("No digits here"),
+            "No digits here"
+        );
+    }
+
+    #[test]
+    fn normalize_zone_text_keeps_text_differences() {
+        assert_ne!(
+            normalize_zone_text_for_comparison("Chapter 1: Intro"),
+            normalize_zone_text_for_comparison("Chapter 2: Methods")
+        );
+        assert_eq!(
+            normalize_zone_text_for_comparison("Chapter 1: Intro"),
+            normalize_zone_text_for_comparison("Chapter 2: Intro")
+        );
     }
 
     #[test]

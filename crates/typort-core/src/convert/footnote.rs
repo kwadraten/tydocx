@@ -35,14 +35,33 @@ pub(super) fn extract_add_and_size_footnotes(
 /// `<sup>` child we read the noteref element's own text content (which is `N`
 /// either way) and only fall back to the nested-`<sup>` scan.
 pub(super) fn find_footnote_id_in_range(children: &[HtmlNode]) -> Option<u32> {
+    let text = find_footnote_marker_text(children)?;
+    let trimmed = text.trim();
+    if let Ok(n) = trimmed.parse() {
+        return Some(n);
+    }
+    parse_circled_number(trimmed)
+}
+
+/// Read the rendered marker text of a footnote reference
+/// (`role="doc-noteref"`) in the given range, e.g. `"1"`, `"①"`, or `"(1)"`.
+/// The marker reflects the resolved numbering (including `#set
+/// footnote(numbering: …)`), which the `FootnoteElem` field alone cannot
+/// see. Returns `None` when no noteref element is found or its text is empty.
+pub(super) fn find_footnote_marker_text(children: &[HtmlNode]) -> Option<String> {
     for child in children {
         match child {
             HtmlNode::Element(elem) => {
                 if has_attr_value(elem, "role", "doc-noteref") {
-                    return noteref_number(elem);
+                    let text = super::collect_deep_text(&elem.children);
+                    let trimmed = text.trim().to_string();
+                    if trimmed.is_empty() {
+                        return None;
+                    }
+                    return Some(trimmed);
                 }
-                if let Some(id) = find_footnote_id_in_range(&elem.children) {
-                    return Some(id);
+                if let Some(text) = find_footnote_marker_text(&elem.children) {
+                    return Some(text);
                 }
             }
             HtmlNode::Tag(tag) => {
@@ -56,19 +75,16 @@ pub(super) fn find_footnote_id_in_range(children: &[HtmlNode]) -> Option<u32> {
     None
 }
 
-/// Read the footnote number carried by a `role="doc-noteref"` element.
-///
-/// typst 0.15 nests the number one level deeper (`<sup role="doc-noteref"><a>N</a>`)
-/// than 0.14 (`<a role="doc-noteref"><sup>N`), so a direct-children-only text read
-/// misses it. Recursively gather all descendant text (the number `N` regardless of
-/// the `<sup>`/`<a>` order) and parse it as a decimal or circled number.
-fn noteref_number(elem: &typst_html::HtmlElement) -> Option<u32> {
-    let text = super::collect_deep_text(&elem.children);
-    let trimmed = text.trim();
-    if let Ok(n) = trimmed.parse() {
-        return Some(n);
+/// Whether a rendered footnote marker is representable in Word: a plain
+/// decimal (`"1"`) or a circled number (`"①"`, via `numFmt
+/// decimalEnclosedCircle`). Anything else — `"(1)"`, `"i"`, `"a"` — has no
+/// OOXML footnote numbering equivalent (U26).
+#[must_use]
+pub(super) fn footnote_marker_representable(marker: &str) -> bool {
+    if marker.parse::<u32>().is_ok() {
+        return true;
     }
-    parse_circled_number(trimmed)
+    parse_circled_number(marker).is_some()
 }
 
 pub(super) fn parse_circled_number(s: &str) -> Option<u32> {
@@ -137,7 +153,7 @@ pub(super) fn detect_footnote_format(children: &[HtmlNode], doc: &mut Document) 
                 // is `<a>N`), not on an `<a>` with a `<sup>` child as in 0.14, so a
                 // `<sup>`-child scan never matches. Read all descendant text (the
                 // number, regardless of `<sup>`/`<a>` order) and test it — the same
-                // approach `noteref_number` already uses.
+                // approach `find_footnote_marker_text` uses.
                 let text = super::collect_deep_text(&elem.children);
                 if parse_circled_number(text.trim()).is_some() {
                     doc.style.footnote_format = FootnoteFormat::CircledNumber;
@@ -149,5 +165,32 @@ pub(super) fn detect_footnote_format(children: &[HtmlNode], doc: &mut Document) 
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn footnote_marker_representable_decimal() {
+        assert!(footnote_marker_representable("1"));
+        assert!(footnote_marker_representable("42"));
+    }
+
+    #[test]
+    fn footnote_marker_representable_circled() {
+        assert!(footnote_marker_representable("①"));
+        assert!(footnote_marker_representable("⑳"));
+    }
+
+    #[test]
+    fn footnote_marker_not_representable() {
+        // Parenthesized (the manuscript's "(n)"), roman, and letter
+        // numberings have no OOXML footnote numbering equivalent.
+        assert!(!footnote_marker_representable("(1)"));
+        assert!(!footnote_marker_representable("i"));
+        assert!(!footnote_marker_representable("a"));
+        assert!(!footnote_marker_representable(""));
     }
 }

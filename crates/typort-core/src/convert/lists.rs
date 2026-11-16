@@ -2,13 +2,17 @@ use std::fmt::Write as _;
 
 use codex::numeral_systems::NamedNumeralSystem;
 use typort_ooxml::document::LevelOverride;
+use typst::foundations::StyleChain;
 use typst::model::Numbering;
-use typst_library::model::EnumElem;
+use typst_library::model::{EnumElem, ListElem, ListMarker};
+use typst_library::text::TextElem;
+
+use crate::compat::{CompatMode, Degradation, DegradationAction};
 
 use super::{
-    Document, HtmlDocument, HtmlElement, HtmlNode, InlineFmt, InlineOptions, ListInfo, Location,
-    Paragraph, Tag, WalkCtx, collect_inlines, element_at_location, find_first_element,
-    find_tag_end, get_attr_value, tag_name, walk_tags,
+    HtmlDocument, HtmlElement, HtmlNode, InlineFmt, InlineOptions, ListInfo, Location, Paragraph,
+    Tag, WalkCtx, collect_inlines, element_at_location, find_first_element, find_tag_end,
+    get_attr_value, tag_name, tag_span, walk_tags,
 };
 
 /// The OOXML `numFmt` + `lvlText` for one numbering level, derived from a
@@ -83,6 +87,18 @@ pub struct EnumNumbering {
     pub full: bool,
 }
 
+/// The default list marker (Typst's `ListElem.marker` default): bullet,
+/// triangular bullet, en-dash, cycling by depth. The field default is
+/// materialized, so `as_option` is always `Some` — compare the value
+/// against this instead of testing presence.
+fn default_list_marker() -> ListMarker {
+    ListMarker::Content(vec![
+        TextElem::packed('\u{2022}'),
+        TextElem::packed('\u{2023}'),
+        TextElem::packed('\u{2013}'),
+    ])
+}
+
 /// Resolve an enum's numbering pattern from its introspection location.
 /// Returns `None` when the element can't be queried (the list keeps the
 /// shared decimal definition).
@@ -120,12 +136,38 @@ pub(super) fn enum_location_before(nodes: &[HtmlNode], idx: usize) -> Option<Loc
 pub(super) fn handle_list_tag(
     children: &[HtmlNode],
     i: usize,
-    location: Location,
+    tag: &Tag,
     ordered: bool,
     ctx: &mut WalkCtx,
 ) -> usize {
+    let location = tag.location();
     let end = find_tag_end(children, i, location);
     let numbering = enum_numbering_at(ctx.html_doc, location);
+    // U24/U25 (C1 only): a custom list marker and a reversed enum have no
+    // OOXML equivalent; the list falls back to the default marker/order.
+    if ctx.compat == CompatMode::C1 {
+        if ordered {
+            if let Some(enum_elem) = element_at_location::<EnumElem>(ctx.html_doc, location)
+                && let Some(true) = enum_elem.reversed.as_option().as_ref()
+            {
+                ctx.degradations.push(Degradation::new(
+                    tag_span(tag),
+                    "enum-reversed",
+                    DegradationAction::Literalized,
+                    "reversed enum is not representable; items are numbered in order",
+                ));
+            }
+        } else if let Some(list_elem) = element_at_location::<ListElem>(ctx.html_doc, location)
+            && list_elem.marker.get_ref(StyleChain::default()) != &default_list_marker()
+        {
+            ctx.degradations.push(Degradation::new(
+                tag_span(tag),
+                "list-marker",
+                DegradationAction::Literalized,
+                "custom list marker is not representable; the default bullet is used",
+            ));
+        }
+    }
     handle_list(&children[i..=end], ordered, numbering, ctx);
     end
 }
@@ -140,7 +182,7 @@ pub(super) fn handle_list(
 ) {
     let list_tag = if ordered { "ol" } else { "ul" };
     if let Some(list) = find_first_element(slice, &|element| tag_name(element) == list_tag) {
-        convert_html_list(list, ctx.doc, ordered, numbering, ctx.html_doc);
+        convert_html_list(list, ordered, numbering, ctx);
         return;
     }
     // Fallback: walk inner children normally
@@ -151,21 +193,14 @@ pub(super) fn handle_list(
 /// Convert an HTML `<ol>` or `<ul>` element into list paragraphs.
 pub(super) fn convert_html_list(
     elem: &HtmlElement,
-    doc: &mut Document,
     ordered: bool,
     numbering: Option<EnumNumbering>,
-    html_doc: &HtmlDocument,
+    ctx: &mut WalkCtx,
 ) {
-    let paras = convert_html_list_to_paragraphs(
-        elem,
-        doc,
-        ordered,
-        numbering,
-        html_doc,
-        InlineFmt::default(),
-    );
+    let paras =
+        convert_html_list_to_paragraphs(elem, ordered, numbering, ctx, InlineFmt::default());
     for para in paras {
-        doc.add_paragraph(para);
+        ctx.doc.add_paragraph(para);
     }
 }
 
@@ -174,10 +209,9 @@ pub(super) fn convert_html_list(
 /// list handling for cell paragraphs (upstream #31).
 pub(super) fn convert_html_list_to_paragraphs(
     elem: &HtmlElement,
-    doc: &mut Document,
     ordered: bool,
     numbering: Option<EnumNumbering>,
-    html_doc: &HtmlDocument,
+    ctx: &mut WalkCtx,
     fmt: InlineFmt,
 ) -> Vec<Paragraph> {
     // typst-html carries `#enum(start: N)` as `<ol start="N">`; Word needs it
@@ -185,7 +219,7 @@ pub(super) fn convert_html_list_to_paragraphs(
     let start = get_attr_value(elem, "start")
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(1);
-    let list_id = doc.allocate_list_id(ordered, start);
+    let list_id = ctx.doc.allocate_list_id(ordered, start);
     // Collect one level definition per nesting level the walk actually
     // reaches (first writer wins per level); levels whose definition equals
     // the shared abstract one need no override.
@@ -195,7 +229,7 @@ pub(super) fn convert_html_list_to_paragraphs(
         origin: 0,
     });
     let mut walker = ListWalker {
-        html_doc,
+        html_doc: ctx.html_doc,
         fmt,
         list_id,
         level_defs: Vec::new(),
@@ -220,7 +254,21 @@ pub(super) fn convert_html_list_to_paragraphs(
         })
         .collect();
     if !overrides.is_empty() {
-        doc.set_list_overrides(list_id, overrides);
+        if ctx.compat == CompatMode::C1 {
+            // M1: C1 keeps the shared decimal definition; the enum's
+            // numbering pattern is not linked. Span-less: the overrides
+            // come from the whole nested walk, not one element — the §4.1
+            // dedup collapses a document's enums to the first plus a count.
+            let first = overrides.first().map_or("?", |o| o.lvl_text.as_str());
+            ctx.degradations.push(Degradation::new(
+                None,
+                "enum-numbering",
+                DegradationAction::Literalized,
+                format!("enum numbering pattern ({first}) fell back to decimal"),
+            ));
+        } else {
+            ctx.doc.set_list_overrides(list_id, overrides);
+        }
     }
     paras
 }

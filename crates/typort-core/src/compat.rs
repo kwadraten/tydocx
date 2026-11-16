@@ -7,9 +7,9 @@
 //! these functions only build, deduplicate, and format what they are given.
 //!
 //! The design lives in `docs/compat-modes.md` (§1 modes, §4.1 warning
-//! channel and dedup, §4.2 skip semantics, §7 option shape). Phase 0 only
-//! adds the plumbing: no mode gate exists yet, so every mode converts
-//! identically and no degradation is ever reported.
+//! channel and dedup, §4.2 skip semantics, §7 option shape). Phase 1 adds
+//! the mode gates: C1 skips aspects the intersection cannot express and
+//! reports each skip as a degradation; C2/C3 keep the current output.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -123,8 +123,8 @@ impl Degradation {
 }
 
 /// The result of one conversion run: the document plus everything that was
-/// degraded while building it. Phase 0 emits no degradations; the list only
-/// grows once Phase 1 adds mode gates.
+/// degraded while building it. C1 mode gates append here; C2/C3 conversions
+/// leave the list empty.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConvertOutcome {
     /// The converted document.
@@ -201,6 +201,97 @@ pub fn format_degradation(degradation: &Degradation, location: Option<&str>) -> 
 /// Dedup runs first, so this only bites when many distinct constructs
 /// degrade.
 pub const MAX_PRINTED_WARNINGS: usize = 50;
+
+/// The short name of a degradation action, as written to the JSON sidecar
+/// report (`--degradation-report`).
+#[must_use]
+pub fn action_name(action: DegradationAction) -> &'static str {
+    match action {
+        DegradationAction::Skipped => "skipped",
+        DegradationAction::Approximated => "approximated",
+        DegradationAction::Literalized => "literalized",
+    }
+}
+
+/// One degradation with its span resolved to a `file:line:col` string (or
+/// `None` when the span points nowhere), ready for the JSON sidecar report.
+/// The span resolution needs the world, so it happens at the CLI boundary;
+/// everything here stays pure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DegradationReportEntry {
+    /// `file:line:col` when the span resolved, else `None`.
+    pub location: Option<String>,
+    /// Stable construct identifier, as in [`Degradation::construct`].
+    pub construct: &'static str,
+    /// How the aspect was degraded.
+    pub action: DegradationAction,
+    /// Human-readable detail, as in [`Degradation::message`].
+    pub message: String,
+}
+
+impl DegradationReportEntry {
+    /// Pair a degradation with its already-resolved location.
+    #[must_use]
+    pub fn from_resolved(location: Option<String>, degradation: &Degradation) -> Self {
+        Self {
+            location,
+            construct: degradation.construct,
+            action: degradation.action,
+            message: degradation.message.clone(),
+        }
+    }
+}
+
+/// Escape a string for inclusion in a JSON string literal: quotes,
+/// backslashes, and control characters are escaped; everything else
+/// (including non-ASCII text) passes through unchanged.
+fn escape_json_string(value: &str, out: &mut String) {
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{c:04x}", c = c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+}
+
+/// Render the deduped degradation list as the JSON sidecar report
+/// (`--degradation-report`, §4.1): `{"degradations": [...]}` with one
+/// object per warning. The sidecar carries the full deduped list (the
+/// stderr print cap in [`cap_warning_lines`] is a display concern only).
+#[must_use]
+pub fn degradation_report_json(entries: &[DegradationReportEntry]) -> String {
+    let mut out = String::from("{\"degradations\": [");
+    for (i, entry) in entries.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str("{\"location\": ");
+        match &entry.location {
+            Some(location) => {
+                out.push('"');
+                escape_json_string(location, &mut out);
+                out.push('"');
+            }
+            None => out.push_str("null"),
+        }
+        out.push_str(", \"construct\": \"");
+        escape_json_string(entry.construct, &mut out);
+        out.push_str("\", \"action\": \"");
+        out.push_str(action_name(entry.action));
+        out.push_str("\", \"message\": \"");
+        escape_json_string(&entry.message, &mut out);
+        out.push_str("\"}");
+    }
+    out.push_str("]}");
+    out
+}
 
 /// Split already-formatted warning lines into the lines to print and an
 /// optional summary line, enforcing the §4.1 print cap.
@@ -444,6 +535,54 @@ mod tests {
         assert_eq!(
             summary,
             Some("... and 3 more degradation warnings not shown".to_string())
+        );
+    }
+
+    #[test]
+    fn action_names_are_stable_identifiers() {
+        assert_eq!(action_name(DegradationAction::Skipped), "skipped");
+        assert_eq!(action_name(DegradationAction::Approximated), "approximated");
+        assert_eq!(action_name(DegradationAction::Literalized), "literalized");
+    }
+
+    #[test]
+    fn degradation_report_json_empty() {
+        assert_eq!(degradation_report_json(&[]), "{\"degradations\": []}");
+    }
+
+    #[test]
+    fn degradation_report_json_with_and_without_location() {
+        let entries = [
+            DegradationReportEntry {
+                location: Some("doc.typ:3:1".to_string()),
+                construct: "overline",
+                action: DegradationAction::Skipped,
+                message: "dropped; text kept".to_string(),
+            },
+            DegradationReportEntry {
+                location: None,
+                construct: "grid-layout",
+                action: DegradationAction::Skipped,
+                message: "page 2 grid".to_string(),
+            },
+        ];
+        assert_eq!(
+            degradation_report_json(&entries),
+            "{\"degradations\": [{\"location\": \"doc.typ:3:1\", \"construct\": \"overline\", \"action\": \"skipped\", \"message\": \"dropped; text kept\"}, {\"location\": null, \"construct\": \"grid-layout\", \"action\": \"skipped\", \"message\": \"page 2 grid\"}]}"
+        );
+    }
+
+    #[test]
+    fn degradation_report_json_escapes_special_characters() {
+        let entries = [DegradationReportEntry {
+            location: None,
+            construct: "shape",
+            action: DegradationAction::Approximated,
+            message: "a \"quoted\" \\ path\nand a tab\tthen \u{1} control".to_string(),
+        }];
+        assert_eq!(
+            degradation_report_json(&entries),
+            "{\"degradations\": [{\"location\": null, \"construct\": \"shape\", \"action\": \"approximated\", \"message\": \"a \\\"quoted\\\" \\\\ path\\nand a tab\\tthen \\u0001 control\"}]}"
         );
     }
 }

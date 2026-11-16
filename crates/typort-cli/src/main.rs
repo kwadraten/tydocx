@@ -27,6 +27,12 @@ struct Cli {
     /// default), c3 (dynamic: field codes on top of c2)
     #[arg(long, value_parser = parse_compat, default_value = "c2")]
     compat: CompatMode,
+
+    /// Write the full deduplicated degradation list as JSON to this path
+    /// (no 50-line cap — the cap is a display concern, the report is the
+    /// complete record)
+    #[arg(long)]
+    degradation_report: Option<PathBuf>,
 }
 
 /// Parse a `--compat` value: only the three short names are accepted.
@@ -64,6 +70,13 @@ fn main() {
 
     print_degradations(&world, &outcome.degradations);
 
+    if let Some(report_path) = &cli.degradation_report {
+        write_degradation_report(&world, &outcome.degradations, report_path).unwrap_or_else(|e| {
+            eprintln!("error: failed to write degradation report: {e}");
+            process::exit(1);
+        });
+    }
+
     println!("wrote {}", output_path.display());
 }
 
@@ -94,13 +107,44 @@ fn print_degradations(world: &typort_core::TyportWorld, degradations: &[Degradat
 /// The world lookup (file id to source) is the only impure part; the
 /// formatting itself is the pure `typort_core::compat::format_degradation`.
 fn render_degradation(world: &typort_core::TyportWorld, degradation: &Degradation) -> String {
-    let location = degradation.span.and_then(|span| {
-        let id = span.id()?;
-        let source = world.source(id).ok()?;
-        let (line, column) = typort_core::diag::span_line_col(&source, span)?;
-        Some(format!("{}:{line}:{column}", display_path(world, id)))
-    });
+    let location = resolve_degradation_location(world, degradation);
     typort_core::compat::format_degradation(degradation, location.as_deref())
+}
+
+/// Resolve a degradation's span to a `file:line:col` string, or `None` when
+/// the span points nowhere. Shared by the stderr printer and the sidecar
+/// report writer.
+fn resolve_degradation_location(
+    world: &typort_core::TyportWorld,
+    degradation: &Degradation,
+) -> Option<String> {
+    let span = degradation.span?;
+    let id = span.id()?;
+    let source = world.source(id).ok()?;
+    let (line, column) = typort_core::diag::span_line_col(&source, span)?;
+    Some(format!("{}:{line}:{column}", display_path(world, id)))
+}
+
+/// Write the full deduplicated degradation list as JSON to `path` (§4.1/§8).
+/// Unlike the stderr print, the sidecar is NOT capped: the cap is a display
+/// concern, the report is the complete record. A failed write reports to
+/// stderr and exits 1 — after the .docx itself was written successfully.
+fn write_degradation_report(
+    world: &typort_core::TyportWorld,
+    degradations: &[Degradation],
+    path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let deduped = typort_core::compat::deduplicate_degradations(degradations.to_vec());
+    let entries: Vec<_> = deduped
+        .iter()
+        .map(|degradation| {
+            let location = resolve_degradation_location(world, degradation);
+            typort_core::compat::DegradationReportEntry::from_resolved(location, degradation)
+        })
+        .collect();
+    let json = typort_core::compat::degradation_report_json(&entries);
+    fs::write(path, json)?;
+    Ok(())
 }
 
 /// Render one compile diagnostic for the CLI: `file:line:col: message`, or

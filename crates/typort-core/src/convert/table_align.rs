@@ -89,12 +89,15 @@ pub fn paint_to_shd_hex(paint: &Paint) -> Option<String> {
 /// unfilled are untouched. Mirrors `apply_cell_alignment`: HTML supplies
 /// table *structure*, the introspector supplies the *styling* the HTML
 /// dropped.
+///
+/// Returns the number of cells that received a shading, so the C1 mode gate
+/// can report (and then strip) the dropped fills.
 pub(super) fn apply_cell_fill(
     table: &mut Table,
     table_elem: &TableElem,
     world: &TyportWorld,
     html_doc: &HtmlDocument,
-) {
+) -> usize {
     let semantic_cells = collect_cells(table_elem);
     let table_fill = table_elem.fill.get_ref(StyleChain::default());
     let mut sink = Sink::new();
@@ -111,6 +114,7 @@ pub(super) fn apply_cell_fill(
 
     // Walk the IR's origin cells (skipping `vMerge` continuation placeholders, which
     // have no semantic counterpart) in document order, alongside the semantic cells.
+    let mut filled = 0usize;
     let mut sem = semantic_cells.iter();
     for (row_idx, row) in table.rows.iter_mut().enumerate() {
         let mut col = 0usize;
@@ -119,13 +123,15 @@ pub(super) fn apply_cell_fill(
                 col += cell.colspan as usize;
                 continue;
             }
-            let Some(sc) = sem.next() else { return };
+            let Some(sc) = sem.next() else { return filled };
             if let Some(hex) = resolve_fill(sc, table_fill, col, row_idx, &mut engine) {
                 cell.shading = Some(hex);
+                filled += 1;
             }
             col += cell.colspan as usize;
         }
     }
+    filled
 }
 
 /// Resolve a cell's fill: a per-cell override wins; otherwise the table-level

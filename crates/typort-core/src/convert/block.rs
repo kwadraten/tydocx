@@ -1,14 +1,20 @@
 use super::text_norm::strip_cjk_spaces;
 
+use typst::foundations::{LocatableSelector, NativeElement, StyleChain};
+use typst_library::model::{FigureElem, HeadingElem};
+use typst_library::visualize::ImageElem;
+
+use crate::compat::{CompatMode, Degradation, DegradationAction};
+
 use super::{
     Alignment, BlockElement, Content, Document, EquationElem, EquationState, HangingIndent,
-    HtmlDocument, HtmlElement, HtmlNode, InlineElement, InlineFmt, InlineOptions, Location,
-    Numbering, OutlineElem, Paragraph, ParagraphStyle, Run, Tag, WalkCtx, children_are_inline,
+    HtmlDocument, HtmlElement, HtmlNode, InlineElement, InlineFmt, InlineOptions, Numbering,
+    OutlineElem, Paragraph, ParagraphStyle, Run, Tag, WalkCtx, children_are_inline,
     collect_deep_text, collect_inlines, collect_li_ids, content_at_location, convert_html_list,
     convert_html_table, detect_alignment, element_at_location, find_img_src, find_tag_end,
     footnote, handle_heading, handle_list_tag, handle_table_tag, has_attr_value, image,
     is_block_equation, is_doc_endnotes_section, run_with_span, sanitize_anchor,
-    subtree_has_element, tag_name,
+    subtree_has_element, tag_name, tag_span,
 };
 
 /// Recursively walk `HtmlNode` children, dispatching on `Tag::Start` element types.
@@ -39,6 +45,17 @@ pub(super) fn walk_tags(children: &[HtmlNode], ctx: &mut WalkCtx) {
                 // box): typst-html hands over the laid-out frame in document
                 // order — rasterize it in place.
                 if let Some(img) = image::rasterize_html_frame(frame) {
+                    // U21 (C1 only): the frame's vector/text content is no
+                    // longer editable. The frame carries no span or page,
+                    // so the degradation is span-less without a page hint.
+                    if ctx.compat == CompatMode::C1 {
+                        ctx.degradations.push(Degradation::new(
+                            None,
+                            "html-frame",
+                            DegradationAction::Approximated,
+                            "HTML frame rasterized to PNG; content is no longer editable text",
+                        ));
+                    }
                     let mut para = Paragraph::new();
                     para.alignment = Some(Alignment::Center);
                     para.add_image(img);
@@ -76,11 +93,11 @@ pub(super) fn handle_block_tag(
             find_tag_end(children, i, tag.location())
         }
         "table" => handle_table_tag(children, i, tag.location(), ctx),
-        "list" => handle_list_tag(children, i, tag.location(), false, ctx),
-        "enum" => handle_list_tag(children, i, tag.location(), true, ctx),
-        "image" => handle_block_image(children, i, tag.location(), ctx),
+        "list" => handle_list_tag(children, i, tag, false, ctx),
+        "enum" => handle_list_tag(children, i, tag, true, ctx),
+        "image" => handle_block_image(children, i, tag, ctx),
         "figure" | "section" => handle_figure_or_section(children, i, tag, content, ctx),
-        "outline" => handle_outline(children, i, tag.location(), ctx),
+        "outline" => handle_outline(children, i, tag, ctx),
         // NOTE: no "pagebreak"/"colbreak" arms — in typst 0.15 both elements
         // carry a plain `#[elem]` (no Location), so explicit breaks are recovered
         // from the source AST (`breaks.rs`). Inline and unknown tags are skipped.
@@ -91,16 +108,35 @@ pub(super) fn handle_block_tag(
 pub(super) fn handle_block_image(
     children: &[HtmlNode],
     i: usize,
-    location: Location,
+    tag: &Tag,
     ctx: &mut WalkCtx,
 ) -> usize {
+    let location = tag.location();
     let end = find_tag_end(children, i, location);
-    if let Some(src) = find_img_src(&children[i..=end])
-        && let Some(img_data) = image::image_data_from_src(&src, ctx.image_sizes)
+    let src = find_img_src(&children[i..=end]);
+    if let Some(src) = &src
+        && let Some(img_data) = image::image_data_from_src(src, ctx.image_sizes)
     {
         let mut para = Paragraph::new();
         para.add_image(img_data);
         ctx.doc.add_paragraph(para);
+    }
+    if ctx.compat == CompatMode::C1 {
+        // L4: an SVG image is rasterized to PNG; the vector aspect is dropped.
+        if let Some(src) = &src
+            && image::is_vector_image_src(src)
+        {
+            ctx.degradations.push(Degradation::new(
+                tag_span(tag),
+                "vector-image",
+                DegradationAction::Approximated,
+                "SVG image rasterized to PNG; vector aspect dropped",
+            ));
+        }
+        // U19: a non-cover fit and a non-empty alt text are dropped.
+        if let Some(image_elem) = element_at_location::<ImageElem>(ctx.html_doc, location) {
+            image::report_image_aspects(&image_elem, tag_span(tag), ctx.degradations);
+        }
     }
     end
 }
@@ -134,6 +170,16 @@ pub(super) fn handle_figure_or_section(
         && !subtree_has_element(inner, "image")
         && let Some(img) = ctx.figure_rasters.remove(&location)
     {
+        // L4 (C1 only): the drawing is rasterized to PNG; the vector
+        // aspect is dropped.
+        if ctx.compat == CompatMode::C1 {
+            ctx.degradations.push(Degradation::new(
+                tag_span(tag),
+                "vector-drawing",
+                DegradationAction::Approximated,
+                "figure drawing rasterized to PNG; vector aspect dropped",
+            ));
+        }
         let mut para = Paragraph::new();
         para.alignment = Some(Alignment::Center);
         para.add_image(img);
@@ -142,19 +188,59 @@ pub(super) fn handle_figure_or_section(
     } else {
         walk_tags(inner, ctx);
     }
+    // U5 (C1 only): a custom figure placement is dropped; the figure is
+    // emitted as a normal block figure. `auto` is the default and is kept.
+    if is_figure
+        && ctx.compat == CompatMode::C1
+        && let Some(figure) = element_at_location::<FigureElem>(ctx.html_doc, location)
+        && let Some(Some(typst::foundations::Smart::Custom(_))) = figure.placement.as_option()
+    {
+        ctx.degradations.push(Degradation::new(
+            tag_span(tag),
+            "figure-placement",
+            DegradationAction::Skipped,
+            "figure placement is custom; placed as a normal block figure",
+        ));
+    }
     end
 }
 
 pub(super) fn handle_outline(
     children: &[HtmlNode],
     i: usize,
-    location: Location,
+    tag: &Tag,
     ctx: &mut WalkCtx,
 ) -> usize {
+    let location = tag.location();
     let depth = element_at_location::<OutlineElem>(ctx.html_doc, location)
         .and_then(|outline| *outline.depth.as_option())
         .flatten()
         .map_or(3, |depth| u8::try_from(depth.get()).unwrap_or(3));
+    // U6 (C1 only): a custom outline target or indent is dropped; the TOC
+    // field lists headings with the default indent. The target's default
+    // (headings) is materialized, so `as_option` is always `Some` — compare
+    // the value against the default instead of testing presence.
+    if ctx.compat == CompatMode::C1
+        && let Some(outline) = element_at_location::<OutlineElem>(ctx.html_doc, location)
+    {
+        let default_target = LocatableSelector(HeadingElem::ELEM.select());
+        if outline.target.get_ref(StyleChain::default()) != &default_target {
+            ctx.degradations.push(Degradation::new(
+                tag_span(tag),
+                "outline-target",
+                DegradationAction::Skipped,
+                "outline target is not headings; the table of contents lists headings",
+            ));
+        }
+        if let Some(typst::foundations::Smart::Custom(_)) = outline.indent.as_option().as_ref() {
+            ctx.degradations.push(Degradation::new(
+                tag_span(tag),
+                "outline-indent",
+                DegradationAction::Skipped,
+                "outline indent is custom; the table of contents uses the default indent",
+            ));
+        }
+    }
     let mut para = Paragraph::new();
     para.add_toc(depth);
     ctx.doc.add_paragraph(para);
@@ -178,7 +264,6 @@ pub(super) fn emit_figure_caption(nodes: &[HtmlNode], ctx: &mut WalkCtx) {
 
 /// Handle an HTML element (non-Tag node) — dispatches on element tag name.
 pub(super) fn handle_html_element(elem: &HtmlElement, ctx: &mut WalkCtx) {
-    let html = ctx.html_doc;
     let tag = tag_name(elem);
     match tag.as_str() {
         "pre" => convert_code_block(elem, ctx.doc),
@@ -186,9 +271,9 @@ pub(super) fn handle_html_element(elem: &HtmlElement, ctx: &mut WalkCtx) {
         "dl" => convert_term_list(elem, ctx.doc),
         // A bare `<ol>`/`<ul>` with no enclosing enum/list Tag carries no
         // numbering pattern to resolve — the shared definition applies.
-        "ol" => convert_html_list(elem, ctx.doc, true, None, ctx.html_doc),
-        "ul" => convert_html_list(elem, ctx.doc, false, None, ctx.html_doc),
-        "table" => convert_html_table(elem, None, ctx.doc, html, ctx.world),
+        "ol" => convert_html_list(elem, true, None, ctx),
+        "ul" => convert_html_list(elem, false, None, ctx),
+        "table" => convert_html_table(elem, None, ctx),
         "figcaption" => {
             // Collect all figcaption content into a single paragraph
             let mut para = Paragraph::new();

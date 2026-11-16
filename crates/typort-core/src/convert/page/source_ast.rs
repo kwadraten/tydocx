@@ -210,6 +210,190 @@ fn collect_global_set_rules(
     }
 }
 
+/// The page-setting fields whose mid-document change starts a new Typst
+/// section (M6): column count and the four margins, on both the absolute
+/// (twips) and em tracks. A numbering change is deliberately excluded —
+/// it is a separate concern (T-08, Phase 2c), not a section break.
+#[derive(Clone, PartialEq)]
+struct PageSettingSnapshot {
+    columns: Option<u32>,
+    margin_top: Option<u32>,
+    margin_bottom: Option<u32>,
+    margin_left: Option<u32>,
+    margin_right: Option<u32>,
+    margin_top_em: Option<f64>,
+    margin_bottom_em: Option<f64>,
+    margin_left_em: Option<f64>,
+    margin_right_em: Option<f64>,
+}
+
+impl PageSettingSnapshot {
+    /// Snapshot the page-setting fields of a merged overrides value.
+    fn from_overrides(ovr: &SourceStyleOverrides) -> Self {
+        Self {
+            columns: ovr.columns,
+            margin_top: ovr.margin_top,
+            margin_bottom: ovr.margin_bottom,
+            margin_left: ovr.margin_left,
+            margin_right: ovr.margin_right,
+            margin_top_em: ovr.margin_top_em,
+            margin_bottom_em: ovr.margin_bottom_em,
+            margin_left_em: ovr.margin_left_em,
+            margin_right_em: ovr.margin_right_em,
+        }
+    }
+}
+
+/// Merge one `#set page(...)` / `#page(...)` call's values into the running
+/// settings, overwriting the fields it sets. Per side, a margin value sets
+/// exactly one track (twips or em), so both tracks are copied together — a
+/// switch from one track to the other clears the old one.
+fn merge_page_settings(current: &mut SourceStyleOverrides, step: &SourceStyleOverrides) {
+    if step.columns.is_some() {
+        current.columns = step.columns;
+    }
+    macro_rules! merge_side {
+        ($twips:ident, $em:ident) => {
+            if step.$twips.is_some() || step.$em.is_some() {
+                current.$twips = step.$twips;
+                current.$em = step.$em;
+            }
+        };
+    }
+    merge_side!(margin_top, margin_top_em);
+    merge_side!(margin_bottom, margin_bottom_em);
+    merge_side!(margin_left, margin_left_em);
+    merge_side!(margin_right, margin_right_em);
+}
+
+/// Mutable state for the page-setting-change walk: the running merged
+/// settings, the previous snapshot, and the first change found.
+struct PageSettingChangeState {
+    current: SourceStyleOverrides,
+    previous: Option<PageSettingSnapshot>,
+    found: Option<typst_syntax::Span>,
+}
+
+impl PageSettingChangeState {
+    fn new() -> Self {
+        Self {
+            current: SourceStyleOverrides::default(),
+            previous: None,
+            found: None,
+        }
+    }
+
+    /// Fold one global `#set page(...)` / `#page(...)` call into the
+    /// running settings; when the snapshot changes against the previous
+    /// one, record the call's span as the first change.
+    fn record_step(&mut self, args: typst_syntax::ast::Args<'_>, span: typst_syntax::Span) {
+        let mut step = SourceStyleOverrides::default();
+        parse_page_args(args, &mut step);
+        merge_page_settings(&mut self.current, &step);
+        let snapshot = PageSettingSnapshot::from_overrides(&self.current);
+        match &self.previous {
+            None => self.previous = Some(snapshot),
+            Some(prev) => {
+                // The walker stops at the first change (`found.is_some()`),
+                // so `previous` never needs updating after a change; when
+                // the snapshot is unchanged it already equals `previous`.
+                if *prev != snapshot {
+                    self.found = Some(span);
+                }
+            }
+        }
+    }
+}
+
+/// Detect a mid-document change of page columns or margins (M6).
+///
+/// Walks the source AST in document order, with the same scope rules as
+/// [`collect_global_set_rules`] (show-rule recipes are not descended;
+/// content blocks and non-template closures are local). Each global
+/// `#set page(...)` / `#page(...)` call snapshots the running page
+/// settings; the first snapshot only establishes the baseline. A later
+/// snapshot that changes `columns` or any margin means Typst starts a new
+/// section there — C1 keeps a single section, so the change is dropped.
+/// Returns the span of the first changing rule, or `None` when the
+/// settings never change. Only the main source is scanned; a change in an
+/// imported file is not detected (same scope as
+/// [`extract_source_style_overrides`]).
+///
+/// Takes the `Source`, not its text: spans are numbered against the source
+/// only when it is constructed (`Source::new` numberizes the tree), while a
+/// bare `typst_syntax::parse` leaves every node detached.
+#[must_use]
+pub fn detect_page_setting_change(
+    source: &typst_syntax::Source,
+    template_names: &[String],
+) -> Option<typst_syntax::Span> {
+    let mut state = PageSettingChangeState::new();
+    collect_page_setting_changes(source.root(), template_names, true, &mut state);
+    state.found
+}
+
+/// Recursive walker for [`detect_page_setting_change`]; mirrors
+/// [`collect_global_set_rules`] scope handling.
+fn collect_page_setting_changes(
+    node: &typst_syntax::SyntaxNode,
+    template_names: &[String],
+    in_global_scope: bool,
+    state: &mut PageSettingChangeState,
+) {
+    use typst_syntax::SyntaxKind;
+    use typst_syntax::ast;
+
+    if state.found.is_some() {
+        return;
+    }
+
+    match node.kind() {
+        // A show rule's recipe applies to specific elements, not globally — and
+        // its own `set` rules are element-scoped. Don't descend.
+        SyntaxKind::ShowRule => return,
+        // A content block (`[...]` / `#block[...]`) introduces a local scope.
+        SyntaxKind::ContentBlock => {
+            for child in node.children() {
+                collect_page_setting_changes(child, template_names, false, state);
+            }
+            return;
+        }
+        // A `#let NAME(...) = …` closure. The show-template closure holds the
+        // real document globals; any other closure is a local helper.
+        SyntaxKind::LetBinding => {
+            if let Some(binding) = node.cast::<ast::LetBinding<'_>>()
+                && let ast::LetBindingKind::Closure(name) = binding.kind()
+            {
+                let child_global = template_names.iter().any(|t| t == name.as_str());
+                for child in node.children() {
+                    collect_page_setting_changes(child, template_names, child_global, state);
+                }
+                return;
+            }
+        }
+        _ => {}
+    }
+
+    if in_global_scope {
+        if node.kind() == SyntaxKind::SetRule
+            && let Some(set) = node.cast::<ast::SetRule<'_>>()
+            && let ast::Expr::Ident(ident) = set.target()
+            && ident.as_str() == "page"
+        {
+            state.record_step(set.args(), node.span());
+        } else if node.kind() == SyntaxKind::FuncCall
+            && let Some(call) = node.cast::<ast::FuncCall<'_>>()
+            && matches!(call.callee(), ast::Expr::Ident(i) if i.as_str() == "page")
+        {
+            state.record_step(call.args(), node.span());
+        }
+    }
+
+    for child in node.children() {
+        collect_page_setting_changes(child, template_names, in_global_scope, state);
+    }
+}
+
 fn parse_page_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverrides) {
     for arg in args.items() {
         let typst_syntax::ast::Arg::Named(named) = arg else {
@@ -481,6 +665,14 @@ fn extract_font_list(expr: typst_syntax::ast::Expr<'_>) -> Option<Vec<String>> {
 mod tests {
     use super::super::units::pt_to_twips;
     use super::*;
+    use crate::diag::span_line_col;
+    use typst_syntax::{RootedPath, Source, VirtualPath, VirtualRoot};
+
+    fn test_source(text: &str) -> Source {
+        let vpath = VirtualPath::new("/m6-test.typ").unwrap();
+        let id = RootedPath::new(VirtualRoot::Project, vpath).intern();
+        Source::new(id, text.to_string())
+    }
 
     #[test]
     fn source_ast_extracts_text_size_and_par_spacing() {
@@ -598,5 +790,70 @@ Body."#;
         assert!(top_names.is_empty());
         let ovr_top = extract_source_style_overrides(top_level, &top_names);
         assert_eq!(ovr_top.text_size_half_pt, Some(21));
+    }
+
+    #[test]
+    fn page_setting_change_detects_columns_change() {
+        let source = test_source("#set page(columns: 1)\nBody.\n\n#set page(columns: 2)\nMore.\n");
+        assert!(detect_page_setting_change(&source, &[]).is_some());
+    }
+
+    #[test]
+    fn page_setting_change_span_points_at_changing_rule() {
+        let source = test_source("#set page(columns: 1)\nBody.\n\n#set page(columns: 2)\nMore.\n");
+        let span = detect_page_setting_change(&source, &[]).expect("a change is detected");
+        // Column 2, not 1: the `#` occupies column 1; the rule's span
+        // starts at the `set` keyword.
+        assert_eq!(span_line_col(&source, span), Some((4, 2)));
+    }
+
+    #[test]
+    fn page_setting_change_detects_margin_change() {
+        let source =
+            test_source("#set page(margin: 2cm)\nBody.\n\n#set page(margin: 1cm)\nMore.\n");
+        assert!(detect_page_setting_change(&source, &[]).is_some());
+    }
+
+    #[test]
+    fn page_setting_change_detects_page_call_change() {
+        let source = test_source("#set page(columns: 1)\nBody.\n\n#page(columns: 2)[More.]\n");
+        assert!(detect_page_setting_change(&source, &[]).is_some());
+    }
+
+    #[test]
+    fn page_setting_change_ignores_repeated_same_value() {
+        let source = test_source("#set page(columns: 2)\nBody.\n\n#set page(columns: 2)\nMore.\n");
+        assert!(detect_page_setting_change(&source, &[]).is_none());
+    }
+
+    #[test]
+    fn page_setting_change_ignores_single_set() {
+        let source = test_source("#set page(columns: 2)\nBody.\n");
+        assert!(detect_page_setting_change(&source, &[]).is_none());
+    }
+
+    #[test]
+    fn page_setting_change_ignores_numbering_only() {
+        // A numbering change is T-08, not a section break.
+        let source = test_source(
+            "#set page(numbering: \"1\")\nBody.\n\n#set page(numbering: \"i\")\nMore.\n",
+        );
+        assert!(detect_page_setting_change(&source, &[]).is_none());
+    }
+
+    #[test]
+    fn page_setting_change_ignores_scoped_set_in_block() {
+        let source =
+            test_source("#set page(columns: 1)\nBody.\n\n#block[#set page(columns: 2)]\nMore.\n");
+        assert!(detect_page_setting_change(&source, &[]).is_none());
+    }
+
+    #[test]
+    fn page_setting_change_tracks_em_margin_switch() {
+        // Switching margin tracks (twips to em) is a change even when the
+        // rendered length could coincide.
+        let source =
+            test_source("#set page(margin: 2cm)\nBody.\n\n#set page(margin: 2em)\nMore.\n");
+        assert!(detect_page_setting_change(&source, &[]).is_some());
     }
 }

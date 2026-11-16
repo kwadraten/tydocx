@@ -51,7 +51,7 @@ use typst_library::model::{
 };
 use typst_library::text::{HighlightElem, Lang, Region, SmartQuoteElem, SmartQuoter, SmartQuotes};
 
-use crate::compat::{ConvertOptions, ConvertOutcome};
+use crate::compat::{CompatMode, ConvertOptions, ConvertOutcome, Degradation, DegradationAction};
 use crate::world::TyportWorld;
 use fmt::InlineFmt;
 
@@ -61,7 +61,7 @@ use dom::{
     detect_alignment, drain_text_runs, element_at_location, find_body, find_first_element,
     find_img_src, find_tag_end, first_biblioref_href, get_attr_value, has_attr_value,
     is_block_equation, is_doc_endnotes_section, run_with_span, sanitize_anchor,
-    subtree_has_element, tag_name,
+    subtree_has_element, tag_name, tag_span,
 };
 use headings::handle_heading;
 use highlight::{HighlightStyle, highlight_style};
@@ -116,6 +116,12 @@ struct WalkCtx<'a> {
     /// of these is a citation (rendered as a marker like `[27]`), not a
     /// cross-reference to a bookmarked figure/equation/heading.
     bib_keys: &'a HashSet<String>,
+    /// Compat mode of this conversion. C1 gates degrade constructs the
+    /// OOXML intersection cannot express; C2/C3 keep the current output.
+    compat: CompatMode,
+    /// Degradations found so far (C1 only). The walk pushes; `export`
+    /// returns the list as part of [`ConvertOutcome`].
+    degradations: &'a mut Vec<Degradation>,
 }
 
 impl WalkCtx<'_> {
@@ -161,10 +167,7 @@ pub fn export(
     world: &TyportWorld,
     options: &ConvertOptions,
 ) -> ConvertOutcome {
-    // Phase 0: the mode is threaded but no mode gate exists yet, so every
-    // mode converts identically and no degradation is reported. Phase 1
-    // threads `options` into the walk to skip aspects per mode.
-    let _ = options;
+    let mut degradations = Vec::new();
 
     let mut doc = Document::new();
 
@@ -172,15 +175,30 @@ pub fn export(
     apply_page_and_style(world, paged_doc, &mut doc);
 
     // 3. Walk the HTML body.
-    let body = walk_body(world, html_doc, paged_doc, &mut doc);
+    let body = walk_body(
+        world,
+        html_doc,
+        paged_doc,
+        &mut doc,
+        options.compat,
+        &mut degradations,
+    );
 
     // 4. Apply headers and footers.
-    apply_headers_and_footers(paged_doc, &mut doc);
+    apply_headers_and_footers(paged_doc, &mut doc, options.compat, &mut degradations);
 
     // 5. Run post-processing passes.
-    run_post_passes(world, html_doc, paged_doc, body, &mut doc);
+    run_post_passes(
+        world,
+        html_doc,
+        paged_doc,
+        body,
+        &mut doc,
+        options.compat,
+        &mut degradations,
+    );
 
-    ConvertOutcome::new(doc, Vec::new())
+    ConvertOutcome::new(doc, degradations)
 }
 
 fn compile_both_targets(
@@ -226,6 +244,8 @@ fn walk_body<'a>(
     html_doc: &'a HtmlDocument,
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
 ) -> &'a HtmlElement {
     // From the PagedDocument: on-page image display sizes keyed by content
     // hash (content itself comes from each <img>'s src data-URL during the
@@ -268,6 +288,8 @@ fn walk_body<'a>(
             figure_rasters: &mut figure_rasters,
             bookmarks: &mut bookmarks,
             bib_keys: &bib_keys,
+            compat,
+            degradations,
         };
         walk_tags(&body.children, &mut ctx);
     }
@@ -278,7 +300,12 @@ fn walk_body<'a>(
     body
 }
 
-fn apply_headers_and_footers(paged_doc: Option<&PagedDocument>, doc: &mut Document) {
+fn apply_headers_and_footers(
+    paged_doc: Option<&PagedDocument>,
+    doc: &mut Document,
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
+) {
     // Extract headers and footers before content recovery so header/footer text
     // is not misidentified as missing body content. All margin-zone consumers
     // share the resolved margins (paged default overridden by the source AST),
@@ -296,6 +323,23 @@ fn apply_headers_and_footers(paged_doc: Option<&PagedDocument>, doc: &mut Docume
         } else if doc.footer.is_none() {
             doc.footer = page::extract_footer(paged, margins);
         }
+        if compat == CompatMode::C1 {
+            // M7: only the first page's header/footer survives; warn when a
+            // later page's differs (page numbers are normalized away).
+            if let Some(degradation) = page::header_footer_variant(paged, margins) {
+                degradations.push(degradation);
+            }
+            // L3: the margin-zone extraction flattens runs to plain text;
+            // warn when a size or bold weight is flattened away.
+            if page::header_footer_style_lost(paged, margins, doc.style.body_size_half_pt) {
+                degradations.push(Degradation::new(
+                    None,
+                    "header-footer-style",
+                    DegradationAction::Skipped,
+                    "header/footer run styles (size or bold) are flattened to plain text",
+                ));
+            }
+        }
     }
 }
 
@@ -305,10 +349,12 @@ fn run_post_passes(
     paged_doc: Option<&PagedDocument>,
     body: &HtmlElement,
     doc: &mut Document,
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
 ) {
     // Recover missing content from PagedDocument (e.g. #align(center) blocks).
     if let Some(paged) = paged_doc {
-        recovery::recover_missing_content(paged, doc);
+        recovery::recover_missing_content(paged, doc, compat, degradations);
         // Set table borders from the rules actually drawn (three-line vs grid).
         recovery::detect_three_line_tables(paged, doc);
     }
@@ -354,6 +400,22 @@ fn run_post_passes(
         let sections = page::detect_section_breaks(paged);
         if !sections.is_empty() {
             page::apply_section_breaks(doc, &sections, &element_page_map);
+        }
+    }
+
+    // M6 (C1 only): a mid-document columns/margins change starts a new
+    // Typst section; C1 keeps a single section, so the change is dropped.
+    // Size-only section breaks stay in all modes (compat-modes §1.3).
+    if compat == CompatMode::C1 {
+        let main = world.main_source();
+        let template_names = page::extract_show_template_names_from_source(main.text());
+        if let Some(span) = page::detect_page_setting_change(main, &template_names) {
+            degradations.push(Degradation::new(
+                Some(span),
+                "section-break",
+                DegradationAction::Skipped,
+                "page columns or margins change mid-document; kept as a single section",
+            ));
         }
     }
 
