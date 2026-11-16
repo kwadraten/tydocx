@@ -7,7 +7,7 @@
 //! functions only format what they are given.
 
 use typst::diag::SourceDiagnostic;
-use typst::syntax::{DiagSpanKind, Source};
+use typst::syntax::{DiagSpanKind, Source, Span, SpanKind};
 
 /// Byte offset in `source_text` to a 1-based `(line, column)` pair.
 ///
@@ -32,6 +32,37 @@ pub fn line_col(source_text: &str, byte_offset: usize) -> (usize, usize) {
         }
     }
     (line, column)
+}
+
+/// Resolve a bare `Span` to a 1-based `(line, column)` in `source`.
+///
+/// Same span handling as [`format_diagnostic`], except a bare `Span` carries
+/// no sub-range, so a numbered span resolves to its whole node range (a
+/// `SourceDiagnostic` can narrow that with its sub-range). Returns `None`
+/// when the span is detached, points into another file, or cannot be
+/// resolved in this source.
+///
+/// Caller contract: `source` must be the source the span points into — the
+/// one whose id the span carries. Span numbers are unique only within their
+/// own file, so both span kinds are checked against that id.
+#[must_use]
+pub fn span_line_col(source: &Source, span: Span) -> Option<(usize, usize)> {
+    let range = match span.get() {
+        SpanKind::Detached => return None,
+        SpanKind::Number { id, num } => {
+            if id != source.id() {
+                return None;
+            }
+            source.range(num, None)?
+        }
+        SpanKind::Range { id, range } => {
+            if id != source.id() {
+                return None;
+            }
+            range
+        }
+    };
+    Some(line_col(source.text(), range.start))
 }
 
 /// Render one Typst diagnostic as `file:line:col: message`.
@@ -195,6 +226,40 @@ mod tests {
             format_diagnostic(&diagnostic, Some(("diag-test.typ", &source))),
             "something broke"
         );
+    }
+
+    #[test]
+    fn span_line_col_numbered_span() {
+        let source = test_source("= Title\n\nBody text\n");
+        let span = LinkedNode::new(source.root())
+            .leaf_at(9, Side::After)
+            .unwrap()
+            .span();
+        assert_eq!(span_line_col(&source, span), Some((3, 1)));
+    }
+
+    #[test]
+    fn span_line_col_detached_span_has_no_location() {
+        let source = test_source("= Title\n");
+        assert_eq!(
+            span_line_col(&source, typst::syntax::Span::detached()),
+            None
+        );
+    }
+
+    #[test]
+    fn span_line_col_span_for_other_file_has_no_location() {
+        let source = test_source("= Title\n\nBody text\n");
+        let other_source = {
+            let vpath = VirtualPath::new("/other.typ").unwrap();
+            let id = RootedPath::new(VirtualRoot::Project, vpath).intern();
+            Source::new(id, "= Title\n\nBody text\n".to_string())
+        };
+        let span = LinkedNode::new(other_source.root())
+            .leaf_at(9, Side::After)
+            .unwrap()
+            .span();
+        assert_eq!(span_line_col(&source, span), None);
     }
 
     #[test]

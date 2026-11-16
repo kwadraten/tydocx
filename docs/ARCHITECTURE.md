@@ -85,12 +85,14 @@ re-parses the main source **and its imports** (template `lib.typ` files often hi
 
 ## The pipeline
 
-`typort_core::convert::convert(world) -> Result<Document, Vec<SourceDiagnostic>>`
+`typort_core::convert::convert(world, &options) -> Result<ConvertOutcome, Vec<SourceDiagnostic>>`
 is the heart of the system. It is a thin wrapper: it compiles both targets
 (`compile_both_targets`) and hands them to `export`, which runs the pipeline.
-`export(html_doc, paged_doc, world) -> Document` is the backend-shaped entry
+`export(html_doc, paged_doc, world, &options) -> ConvertOutcome` is the backend-shaped entry
 point for the numbered phases 2–5 — callers that already hold compiled documents
-(a host compiler, a test) use it instead of `convert`. Compilation failures keep
+(a host compiler, a test) use it instead of `convert`. The outcome pairs the
+document with its degradation report (`ConvertOutcome { document, degradations }`);
+the compat mode rides in `ConvertOptions` (see `docs/compat-modes.md`). Compilation failures keep
 their spans: they are returned as `Vec<SourceDiagnostic>`, never as plain
 strings. The steps are grouped here by purpose; see the numbered comments in
 `crates/typort-core/src/convert/mod.rs` for the exact order.
@@ -100,7 +102,7 @@ flowchart TD
     INPUT["input.typ"] --> WORLD["TyportWorld (World trait: source, fonts, packages, Feature::Html)"]
     WORLD -->|compile::&lt;HtmlDocument&gt; — semantics + introspector| COMPILE["convert(): thin wrapper<br/>1 compile HTML + Paged targets"]
     WORLD -->|compile::&lt;PagedDocument&gt; — geometry + frames| COMPILE
-    COMPILE --> EXPORT["export(html_doc, paged_doc, world): phases 2–5<br/>2 apply page + style, then AST overrides<br/>3 walk HTML body → emit BlockElements; decode &lt;img&gt; data URLs; attach figure rasters by Location<br/>4 apply headers/footers/page numbering<br/>5 run recovery and post-processing passes (metadata, bibliography, per-run styles, source breaks/smallcaps/hanging indents, sections, rules, merging, coalescing)"]
+    COMPILE --> EXPORT["export(html_doc, paged_doc, world, &options): phases 2–5<br/>2 apply page + style, then AST overrides<br/>3 walk HTML body → emit BlockElements; decode &lt;img&gt; data URLs; attach figure rasters by Location<br/>4 apply headers/footers/page numbering<br/>5 run recovery and post-processing passes (metadata, bibliography, per-run styles, source breaks/smallcaps/hanging indents, sections, rules, merging, coalescing)"]
     EXPORT --> IR["typort_ooxml::Document (the IR)"]
     IR --> WRITER["writer → XML parts → ZIP"]
     WRITER --> OUT["output.docx"]

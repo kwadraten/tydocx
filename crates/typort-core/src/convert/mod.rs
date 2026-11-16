@@ -51,6 +51,7 @@ use typst_library::model::{
 };
 use typst_library::text::{HighlightElem, Lang, Region, SmartQuoteElem, SmartQuoter, SmartQuotes};
 
+use crate::compat::{ConvertOptions, ConvertOutcome};
 use crate::world::TyportWorld;
 use fmt::InlineFmt;
 
@@ -131,15 +132,20 @@ impl WalkCtx<'_> {
 
 /// Convert a Typst source file to an OOXML `Document` using the tag-walker approach.
 ///
-/// Compiles both targets, then hands them to [`export`].
+/// Compiles both targets, then hands them to [`export`]. The returned
+/// outcome pairs the document with the degradations reported during
+/// conversion (empty until Phase 1 adds mode gates).
 ///
 /// # Errors
 /// Returns compilation errors, with their spans, if the Typst source cannot
 /// be compiled.
-pub fn convert(world: &TyportWorld) -> Result<Document, Vec<SourceDiagnostic>> {
+pub fn convert(
+    world: &TyportWorld,
+    options: &ConvertOptions,
+) -> Result<ConvertOutcome, Vec<SourceDiagnostic>> {
     // 1. Compile both targets.
     let (html_doc, paged_doc) = compile_both_targets(world)?;
-    Ok(export(&html_doc, paged_doc.as_ref(), world))
+    Ok(export(&html_doc, paged_doc.as_ref(), world, options))
 }
 
 /// Export already-compiled documents to an OOXML `Document`.
@@ -153,7 +159,13 @@ pub fn export(
     html_doc: &HtmlDocument,
     paged_doc: Option<&PagedDocument>,
     world: &TyportWorld,
-) -> Document {
+    options: &ConvertOptions,
+) -> ConvertOutcome {
+    // Phase 0: the mode is threaded but no mode gate exists yet, so every
+    // mode converts identically and no degradation is reported. Phase 1
+    // threads `options` into the walk to skip aspects per mode.
+    let _ = options;
+
     let mut doc = Document::new();
 
     // 2. Apply page settings and document style.
@@ -168,7 +180,7 @@ pub fn export(
     // 5. Run post-processing passes.
     run_post_passes(world, html_doc, paged_doc, body, &mut doc);
 
-    doc
+    ConvertOutcome::new(doc, Vec::new())
 }
 
 fn compile_both_targets(
@@ -376,9 +388,10 @@ mod tests {
     #[test]
     fn export_matches_convert() {
         let world = hello_world();
-        let via_convert = convert(&world).unwrap();
+        let options = ConvertOptions::default();
+        let via_convert = convert(&world, &options).unwrap();
         let (html_doc, paged_doc) = compile_both_targets(&world).unwrap();
-        let via_export = export(&html_doc, paged_doc.as_ref(), &world);
+        let via_export = export(&html_doc, paged_doc.as_ref(), &world, &options);
         assert_eq!(via_convert, via_export);
     }
 
@@ -386,7 +399,8 @@ mod tests {
     fn export_without_paged_document_still_produces_headings() {
         let world = hello_world();
         let (html_doc, _) = compile_both_targets(&world).unwrap();
-        let doc = export(&html_doc, None, &world);
+        let outcome = export(&html_doc, None, &world, &ConvertOptions::default());
+        let doc = outcome.document;
         let headings = doc
             .body
             .elements

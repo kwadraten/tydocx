@@ -18,12 +18,29 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 fn run_typort(input: &Path, output: Option<&Path>) -> Output {
+    run_typort_extra(input, output, &[])
+}
+
+fn run_typort_extra(input: &Path, output: Option<&Path>, extra: &[&str]) -> Output {
     let mut cmd = Command::new(typort_bin());
     cmd.arg(input);
     if let Some(output) = output {
         cmd.arg("-o").arg(output);
     }
+    for arg in extra {
+        cmd.arg(arg);
+    }
     cmd.output().unwrap()
+}
+
+/// The `word/document.xml` part of a written .docx file.
+fn document_xml(docx: &Path) -> String {
+    let file = fs::File::open(docx).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut part = archive.by_name("word/document.xml").unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut part, &mut xml).unwrap();
+    xml
 }
 
 fn staging_leftovers(dir: &Path) -> Vec<String> {
@@ -97,5 +114,66 @@ fn cli_failed_write_leaves_no_partial_output() {
         "staging files left behind: {:?}",
         staging_leftovers(&dir)
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cli_compat_modes_produce_identical_output() {
+    let dir = temp_dir("compat-modes");
+    let mut xmls = Vec::new();
+    for mode in ["c1", "c2", "c3"] {
+        let output = dir.join(format!("out-{mode}.docx"));
+        let result = run_typort_extra(
+            &fixture_path("complex_paper"),
+            Some(&output),
+            &["--compat", mode],
+        );
+        assert!(
+            result.status.success(),
+            "--compat {mode} should succeed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            result.stderr.is_empty(),
+            "--compat {mode} should print no warnings in Phase 0, stderr was: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("wrote "),
+            "--compat {mode} should still report the written file"
+        );
+        xmls.push(document_xml(&output));
+    }
+    // No --compat flag means C2.
+    let default_output = dir.join("out-default.docx");
+    let result = run_typort(&fixture_path("complex_paper"), Some(&default_output));
+    assert!(
+        result.status.success(),
+        "default mode should succeed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    xmls.push(document_xml(&default_output));
+    assert_eq!(xmls[0], xmls[1], "c1 must match c2 in Phase 0");
+    assert_eq!(xmls[1], xmls[2], "c2 must match c3 in Phase 0");
+    assert_eq!(xmls[2], xmls[3], "default must match c2");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cli_compat_rejects_unknown_mode() {
+    let dir = temp_dir("compat-invalid");
+    let output = dir.join("out.docx");
+    let result = run_typort_extra(
+        &fixture_path("hello"),
+        Some(&output),
+        &["--compat", "minimal"],
+    );
+    assert!(
+        !result.status.success(),
+        "unknown --compat value should fail"
+    );
+    assert!(!output.exists(), "failed conversion must not leave output");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("invalid value"), "stderr was: {stderr}");
     let _ = fs::remove_dir_all(&dir);
 }

@@ -3,6 +3,7 @@ mod common;
 
 mod bibliography;
 mod cli;
+mod compat;
 mod diagnostics;
 mod fonts_cjk;
 mod footnotes;

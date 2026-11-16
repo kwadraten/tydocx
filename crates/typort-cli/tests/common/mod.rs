@@ -20,8 +20,34 @@ pub fn fixture_document_with_world(
     fixture: &str,
 ) -> (typort_core::TyportWorld, typort_ooxml::Document) {
     let world = typort_core::TyportWorld::new(&fixture_path(fixture)).unwrap();
-    let document = typort_core::convert::convert(&world).unwrap();
-    (world, document)
+    let outcome =
+        typort_core::convert::convert(&world, &typort_core::ConvertOptions::default()).unwrap();
+    (world, outcome.document)
+}
+
+/// Convert `tests/fixtures/<fixture>.typ` and return the full conversion
+/// outcome (document + degradation report).
+pub fn fixture_outcome(fixture: &str) -> typort_core::ConvertOutcome {
+    fixture_outcome_with_options(fixture, &typort_core::ConvertOptions::default())
+}
+
+/// Convert `tests/fixtures/<fixture>.typ` with explicit options and return
+/// the full conversion outcome (document + degradation report).
+pub fn fixture_outcome_with_options(
+    fixture: &str,
+    options: &typort_core::ConvertOptions,
+) -> typort_core::ConvertOutcome {
+    let world = typort_core::TyportWorld::new(&fixture_path(fixture)).unwrap();
+    typort_core::convert::convert(&world, options).unwrap()
+}
+
+/// Convert `tests/fixtures/<fixture>.typ` with explicit options and return
+/// the public document model.
+pub fn fixture_document_with_options(
+    fixture: &str,
+    options: &typort_core::ConvertOptions,
+) -> typort_ooxml::Document {
+    fixture_document_with_font_dirs_and_options(fixture, &[], options)
 }
 
 /// Convert `tests/fixtures/<fixture>.typ` with extra font directories loaded and
@@ -30,9 +56,24 @@ pub fn fixture_document_with_font_dirs(
     fixture: &str,
     font_dirs: &[PathBuf],
 ) -> typort_ooxml::Document {
+    fixture_document_with_font_dirs_and_options(
+        fixture,
+        font_dirs,
+        &typort_core::ConvertOptions::default(),
+    )
+}
+
+/// Convert a fixture with extra font directories and explicit options.
+pub fn fixture_document_with_font_dirs_and_options(
+    fixture: &str,
+    font_dirs: &[PathBuf],
+    options: &typort_core::ConvertOptions,
+) -> typort_ooxml::Document {
     let world =
         typort_core::TyportWorld::with_font_dirs(&fixture_path(fixture), font_dirs).unwrap();
-    typort_core::convert::convert(&world).unwrap()
+    typort_core::convert::convert(&world, options)
+        .unwrap()
+        .document
 }
 
 /// The parts produced by one fixture conversion.
@@ -68,6 +109,14 @@ impl FixturePackage {
 /// Convert `tests/fixtures/<fixture>.typ` and return all package parts.
 pub fn fixture_package(fixture: &str) -> FixturePackage {
     fixture_package_from_document(&fixture_document(fixture))
+}
+
+/// Convert a fixture with explicit options and return all package parts.
+pub fn fixture_package_with_options(
+    fixture: &str,
+    options: &typort_core::ConvertOptions,
+) -> FixturePackage {
+    fixture_package_from_document(&fixture_document_with_options(fixture, options))
 }
 
 /// Package a converted fixture document and return all parts.

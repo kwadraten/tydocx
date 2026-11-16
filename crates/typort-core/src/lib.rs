@@ -1,10 +1,12 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod compat;
 pub mod convert;
 pub mod diag;
 pub mod world;
 
+pub use compat::{CompatMode, ConvertOptions, ConvertOutcome, Degradation, DegradationAction};
 pub use convert::{convert, export};
 pub use world::{TyportWorld, compile};
 
@@ -12,7 +14,7 @@ pub use world::{TyportWorld, compile};
 mod tests {
     use std::path::Path;
 
-    use crate::TyportWorld;
+    use crate::{ConvertOptions, TyportWorld};
     use typort_ooxml::document::{BlockElement, ParagraphStyle};
 
     #[test]
@@ -29,7 +31,8 @@ mod tests {
     #[test]
     fn convert_produces_heading_and_paragraphs() {
         let world = TyportWorld::new(Path::new("../../tests/fixtures/hello.typ")).unwrap();
-        let doc = crate::convert::convert(&world).unwrap();
+        let outcome = crate::convert::convert(&world, &ConvertOptions::default()).unwrap();
+        let doc = outcome.document;
 
         assert!(
             doc.body.elements.len() >= 3,
@@ -49,7 +52,8 @@ mod tests {
     #[test]
     fn complex_paper_has_multiple_headings() {
         let world = TyportWorld::new(Path::new("../../tests/fixtures/complex_paper.typ")).unwrap();
-        let doc = crate::convert::convert(&world).unwrap();
+        let outcome = crate::convert::convert(&world, &ConvertOptions::default()).unwrap();
+        let doc = outcome.document;
 
         let heading_count = doc.body.elements.iter().filter(|e| {
             matches!(e, BlockElement::Paragraph(p) if matches!(p.style, Some(ParagraphStyle::Heading(_))))

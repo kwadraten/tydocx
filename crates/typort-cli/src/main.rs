@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::Parser;
+use typort_core::{CompatMode, Degradation};
 use typst::World as _;
 use typst::diag::SourceDiagnostic;
 use typst::syntax::{FileId, VirtualRoot};
@@ -26,6 +27,17 @@ struct Cli {
     /// (none are bundled; supply your own)
     #[arg(long)]
     preset: Option<String>,
+
+    /// Compat mode: c1 (minimal: intersection only), c2 (graphical,
+    /// default), c3 (dynamic: field codes on top of c2)
+    #[arg(long, value_parser = parse_compat, default_value = "c2")]
+    compat: CompatMode,
+}
+
+/// Parse a `--compat` value: only the three short names are accepted.
+fn parse_compat(value: &str) -> Result<CompatMode, String> {
+    CompatMode::from_short_name(value)
+        .ok_or_else(|| format!("invalid compat mode {value:?}: expected c1, c2 or c3"))
 }
 
 fn main() {
@@ -40,13 +52,15 @@ fn main() {
         process::exit(1);
     });
 
-    let mut doc = typort_core::convert(&world).unwrap_or_else(|errors| {
+    let options = typort_core::ConvertOptions::new(cli.compat);
+    let outcome = typort_core::convert(&world, &options).unwrap_or_else(|errors| {
         eprintln!("error: Typst compilation failed:");
         for diagnostic in &errors {
             eprintln!("  {}", render_diagnostic(&world, diagnostic));
         }
         process::exit(1);
     });
+    let mut doc = outcome.document;
 
     // Apply preset if specified
     if let Some(preset_name) = &cli.preset {
@@ -63,7 +77,45 @@ fn main() {
         process::exit(1);
     });
 
+    print_degradations(&world, &outcome.degradations);
+
     println!("wrote {}", output_path.display());
+}
+
+/// Print conversion degradations to stderr (§4.1), after the write so a
+/// failed conversion prints no warnings. Deduplicated and capped; the span
+/// of each warning is resolved to `file:line:col` here, at the boundary —
+/// the formatting itself is the pure
+/// `typort_core::compat::format_degradation`.
+fn print_degradations(world: &typort_core::TyportWorld, degradations: &[Degradation]) {
+    let deduped = typort_core::compat::deduplicate_degradations(degradations.to_vec());
+    let lines: Vec<String> = deduped
+        .iter()
+        .map(|degradation| render_degradation(world, degradation))
+        .collect();
+    let (printed, summary) = typort_core::compat::cap_warning_lines(&lines);
+    for line in printed {
+        eprintln!("{line}");
+    }
+    if let Some(summary) = summary {
+        eprintln!("{summary}");
+    }
+}
+
+/// Render one degradation warning for the CLI: `warning: file:line:col:
+/// <construct>: <message>`, or without a location when the span points
+/// nowhere.
+///
+/// The world lookup (file id to source) is the only impure part; the
+/// formatting itself is the pure `typort_core::compat::format_degradation`.
+fn render_degradation(world: &typort_core::TyportWorld, degradation: &Degradation) -> String {
+    let location = degradation.span.and_then(|span| {
+        let id = span.id()?;
+        let source = world.source(id).ok()?;
+        let (line, column) = typort_core::diag::span_line_col(&source, span)?;
+        Some(format!("{}:{line}:{column}", display_path(world, id)))
+    });
+    typort_core::compat::format_degradation(degradation, location.as_deref())
 }
 
 /// Render one compile diagnostic for the CLI: `file:line:col: message`, or
@@ -144,6 +196,16 @@ fn write_then_rename(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_compat_accepts_short_names_only() {
+        assert_eq!(parse_compat("c1"), Ok(CompatMode::C1));
+        assert_eq!(parse_compat("c2"), Ok(CompatMode::C2));
+        assert_eq!(parse_compat("c3"), Ok(CompatMode::C3));
+        assert!(parse_compat("minimal").is_err());
+        assert!(parse_compat("C2").is_err());
+        assert!(parse_compat("").is_err());
+    }
 
     #[test]
     fn staging_path_appends_tmp_suffix() {
