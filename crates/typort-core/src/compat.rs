@@ -123,8 +123,8 @@ impl Degradation {
 }
 
 /// The result of one conversion run: the document plus everything that was
-/// degraded while building it. Phase 0 emits no degradations; the list only
-/// grows once Phase 1 adds mode gates.
+/// degraded while building it (values kept as literal text, unmappable
+/// numbering patterns, ...; Phase 1 adds the per-mode gates).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConvertOutcome {
     /// The converted document.

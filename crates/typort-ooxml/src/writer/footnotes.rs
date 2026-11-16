@@ -1,7 +1,6 @@
 use std::io::{self, Write};
 
 use quick_xml::Writer;
-use quick_xml::events::BytesText;
 
 use super::WriteCtx;
 use super::image::write_image_inline;
@@ -9,10 +8,16 @@ use super::package::write_value_element;
 use super::run::{write_inline, write_text_run};
 use crate::document::{Document, FootnoteFormat, ImageData, InlineElement};
 
-/// Write `w:footnotePr` element with optional circled-number format and per-page restart.
+/// Write `w:footnotePr` element with optional circled-number format and
+/// per-page restart. `restart_each_page` mirrors Typst: the footnote counter
+/// restarts on every page only when the source resets it in a page header
+/// (`counter(footnote).update(0)` there); Typst's default is continuous
+/// numbering, so `w:numRestart` is omitted then (Word's own default is
+/// continuous too).
 pub(super) fn write_footnote_pr<W: Write>(
     writer: &mut Writer<W>,
     format: &FootnoteFormat,
+    restart_each_page: bool,
 ) -> io::Result<()> {
     writer
         .create_element("w:footnotePr")
@@ -22,45 +27,32 @@ pub(super) fn write_footnote_pr<W: Write>(
                     .with_attribute(("w:val", "decimalEnclosedCircle"))
                     .write_empty()?;
             }
-            fp.create_element("w:numRestart")
-                .with_attribute(("w:val", "eachPage"))
-                .write_empty()?;
+            if restart_each_page {
+                fp.create_element("w:numRestart")
+                    .with_attribute(("w:val", "eachPage"))
+                    .write_empty()?;
+            }
             Ok(())
         })?;
     Ok(())
 }
-fn write_footnote_mark_run<W: Write>(
-    writer: &mut Writer<W>,
-    mark: Option<&str>,
-    preserve_space: bool,
-) -> io::Result<()> {
+fn write_footnote_mark_run<W: Write>(writer: &mut Writer<W>) -> io::Result<()> {
+    // Word generates the marker from the footnote format, so the run holds
+    // only `w:footnoteRef` — never a literal marker character, which would
+    // freeze the global sequence and contradict a per-page restart.
     writer.create_element("w:r").write_inner_content(|w| {
         w.create_element("w:rPr").write_inner_content(|rpr| {
             write_value_element(rpr, "w:rStyle", "FootnoteReference")?;
             Ok(())
         })?;
-        if let Some(mark) = mark {
-            let mut text = w.create_element("w:t");
-            if preserve_space {
-                text = text.with_attribute(("xml:space", "preserve"));
-            }
-            text.write_text_content(BytesText::new(mark))?;
-        } else {
-            w.create_element("w:footnoteRef").write_empty()?;
-        }
+        w.create_element("w:footnoteRef").write_empty()?;
         Ok(())
     })?;
     Ok(())
 }
 
-pub(super) fn write_footnote_ref<W: Write>(
-    writer: &mut Writer<W>,
-    id: u32,
-    footnote_format: &FootnoteFormat,
-) -> io::Result<()> {
+pub(super) fn write_footnote_ref<W: Write>(writer: &mut Writer<W>, id: u32) -> io::Result<()> {
     let id_str = id.to_string();
-    let use_custom = *footnote_format == FootnoteFormat::CircledNumber;
-
     writer.create_element("w:r").write_inner_content(|w| {
         w.create_element("w:rPr").write_inner_content(|rpr| {
             rpr.create_element("w:rStyle")
@@ -68,36 +60,12 @@ pub(super) fn write_footnote_ref<W: Write>(
                 .write_empty()?;
             Ok(())
         })?;
-        if use_custom {
-            w.create_element("w:footnoteReference")
-                .with_attribute(("w:customMarkFollows", "1"))
-                .with_attribute(("w:id", id_str.as_str()))
-                .write_empty()?;
-        } else {
-            w.create_element("w:footnoteReference")
-                .with_attribute(("w:id", id_str.as_str()))
-                .write_empty()?;
-        }
+        w.create_element("w:footnoteReference")
+            .with_attribute(("w:id", id_str.as_str()))
+            .write_empty()?;
         Ok(())
     })?;
-
-    if use_custom {
-        let seq_num = id - 1; // id starts at 2, so fn 1 = id 2
-        let mark = circled_number_char(seq_num);
-        write_footnote_mark_run(writer, Some(&mark), true)?;
-    }
-
     Ok(())
-}
-
-fn circled_number_char(n: u32) -> String {
-    let c = match n {
-        1..=20 => char::from_u32(0x2460 + n - 1),   // ① to ⑳
-        21..=35 => char::from_u32(0x3251 + n - 21), // ㉑ to ㉟
-        36..=50 => char::from_u32(0x32B1 + n - 36), // ㊱ to ㊿
-        _ => None,
-    };
-    c.map_or_else(|| n.to_string(), |c| c.to_string())
 }
 
 /// Write `word/footnotes.xml`.
@@ -161,14 +129,9 @@ pub(super) fn generate_footnotes_xml(
                                 .write_empty()?;
                             Ok(())
                         })?;
-                        let use_custom = doc.style.footnote_format == FootnoteFormat::CircledNumber;
-                        if use_custom {
-                            let seq = footnote.id - 1;
-                            let mark = circled_number_char(seq);
-                            write_footnote_mark_run(p_w, Some(&mark), false)?;
-                        } else {
-                            write_footnote_mark_run(p_w, None, false)?;
-                        }
+                        // Word generates the marker from the footnote format;
+                        // never emit a literal marker character here.
+                        write_footnote_mark_run(p_w)?;
                         // Space after reference mark
                         write_text_run(p_w, " ", true)?;
                         // Content inlines. Images are intercepted here:

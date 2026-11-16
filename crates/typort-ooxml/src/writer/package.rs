@@ -265,7 +265,7 @@ pub(super) fn generate_settings(
             "http://schemas.openxmlformats.org/officeDocument/2006/math",
         ))
         .write_inner_content(|w| {
-            write_footnote_pr(w, &style.footnote_format)?;
+            write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
             w.create_element("w:compat").write_inner_content(|c| {
                 c.create_element("w:useFELayout").write_empty()?;
                 c.create_element("w:compatSetting")

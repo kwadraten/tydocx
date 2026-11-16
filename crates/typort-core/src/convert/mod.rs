@@ -51,7 +51,7 @@ use typst_library::model::{
 };
 use typst_library::text::{HighlightElem, Lang, Region, SmartQuoteElem, SmartQuoter, SmartQuotes};
 
-use crate::compat::{ConvertOptions, ConvertOutcome};
+use crate::compat::{ConvertOptions, ConvertOutcome, Degradation};
 use crate::world::TyportWorld;
 use fmt::InlineFmt;
 
@@ -116,6 +116,9 @@ struct WalkCtx<'a> {
     /// of these is a citation (rendered as a marker like `[27]`), not a
     /// cross-reference to a bookmarked figure/equation/heading.
     bib_keys: &'a HashSet<String>,
+    /// Degradations reported during the walk (e.g. a page-counter value kept
+    /// as literal text). Drained into the `ConvertOutcome` by `export`.
+    degradations: &'a mut Vec<Degradation>,
 }
 
 impl WalkCtx<'_> {
@@ -134,7 +137,8 @@ impl WalkCtx<'_> {
 ///
 /// Compiles both targets, then hands them to [`export`]. The returned
 /// outcome pairs the document with the degradations reported during
-/// conversion (empty until Phase 1 adds mode gates).
+/// conversion (page/footnote counters kept as literal text, unmappable
+/// numbering patterns, ...; Phase 1 adds the per-mode gates).
 ///
 /// # Errors
 /// Returns compilation errors, with their spans, if the Typst source cannot
@@ -162,17 +166,20 @@ pub fn export(
     options: &ConvertOptions,
 ) -> ConvertOutcome {
     // Phase 0: the mode is threaded but no mode gate exists yet, so every
-    // mode converts identically and no degradation is reported. Phase 1
-    // threads `options` into the walk to skip aspects per mode.
+    // mode converts identically. Phase 1 threads `options` into the walk to
+    // skip aspects per mode. Degradations for values that are literalized in
+    // every mode (page/footnote counters Word cannot recompute, unmappable
+    // numbering patterns) are already reported here.
     let _ = options;
 
     let mut doc = Document::new();
+    let mut degradations = Vec::new();
 
     // 2. Apply page settings and document style.
-    apply_page_and_style(world, paged_doc, &mut doc);
+    apply_page_and_style(world, paged_doc, &mut doc, &mut degradations);
 
     // 3. Walk the HTML body.
-    let body = walk_body(world, html_doc, paged_doc, &mut doc);
+    let body = walk_body(world, html_doc, paged_doc, &mut doc, &mut degradations);
 
     // 4. Apply headers and footers.
     apply_headers_and_footers(paged_doc, &mut doc);
@@ -180,7 +187,7 @@ pub fn export(
     // 5. Run post-processing passes.
     run_post_passes(world, html_doc, paged_doc, body, &mut doc);
 
-    ConvertOutcome::new(doc, Vec::new())
+    ConvertOutcome::new(doc, degradations)
 }
 
 fn compile_both_targets(
@@ -202,6 +209,7 @@ fn apply_page_and_style(
     world: &TyportWorld,
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
+    degradations: &mut Vec<Degradation>,
 ) {
     // Extract page settings and document style from PagedDocument (heuristic).
     if let Some(paged) = paged_doc {
@@ -211,7 +219,11 @@ fn apply_page_and_style(
 
     // Override with authoritative values from source AST.
     let source_overrides = gather_source_overrides(world);
-    apply_source_overrides(&source_overrides, doc, paged_doc.is_some());
+    apply_source_overrides(&source_overrides, doc, paged_doc.is_some(), degradations);
+
+    // Footnote numbering restarts per page only when the source resets the
+    // footnote counter in a page header; Typst's default is continuous.
+    doc.style.footnote_restart_each_page = source::detect_footnote_restart_each_page(world);
 
     // Note: page column count comes solely from the source AST
     // (`#set page(columns:)` / `#page(columns:)`, parsed above). There is no
@@ -226,6 +238,7 @@ fn walk_body<'a>(
     html_doc: &'a HtmlDocument,
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
+    degradations: &mut Vec<Degradation>,
 ) -> &'a HtmlElement {
     // From the PagedDocument: on-page image display sizes keyed by content
     // hash (content itself comes from each <img>'s src data-URL during the
@@ -268,6 +281,7 @@ fn walk_body<'a>(
             figure_rasters: &mut figure_rasters,
             bookmarks: &mut bookmarks,
             bib_keys: &bib_keys,
+            degradations,
         };
         walk_tags(&body.children, &mut ctx);
     }
@@ -285,16 +299,22 @@ fn apply_headers_and_footers(paged_doc: Option<&PagedDocument>, doc: &mut Docume
     // so a small author margin never misfiles body text as header/footer.
     if let Some(paged) = paged_doc {
         let margins = page::MarginsPt::from_settings(&doc.page_settings);
+        // The declared page-numbering format (from `#set page(numbering:)`,
+        // consumed in `apply_source_overrides`) wins over glyph guessing.
+        let declared = doc.page_numbering;
         if doc.header.is_none() {
-            doc.header = page::extract_header(paged, margins);
+            doc.header = page::extract_header(paged, margins, declared);
         }
         // Detect page numbering before extracting footer. If the footer is just
-        // a page number, set page_numbering so the writer generates a PAGE field.
+        // a page number, the writer generates a PAGE field footer instead.
         if let Some(fmt) = page::detect_page_numbering(paged, margins) {
-            doc.page_numbering = Some(fmt);
+            doc.page_number_footer = true;
+            if declared.is_none() {
+                doc.page_numbering = Some(fmt);
+            }
             // Don't set doc.footer — the writer will generate a PAGE field footer
         } else if doc.footer.is_none() {
-            doc.footer = page::extract_footer(paged, margins);
+            doc.footer = page::extract_footer(paged, margins, declared);
         }
     }
 }

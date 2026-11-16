@@ -119,7 +119,7 @@ fn write_section_properties<W: Write>(
                 .with_attribute(("r:id", rid.as_str()))
                 .write_empty()?;
         }
-        write_footnote_pr(w, &style.footnote_format)?;
+        write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
         // Page number format (w:pgNumType)
         if let Some(fmt) = page_numbering {
             w.create_element("w:pgNumType")

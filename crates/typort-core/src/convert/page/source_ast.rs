@@ -18,8 +18,10 @@ pub struct SourceStyleOverrides {
     pub margin_right_em: Option<f64>,
     // #set page(columns: N)
     pub columns: Option<u32>,
-    // #set page(numbering: "1"/"i"/...)
-    pub page_numbering: Option<String>,
+    // #set page(numbering: "1"/"i"/...) — a plain pattern, or a declared but
+    // unmappable value (a function, a computed value). `numbering: none`
+    // leaves this `None` (numbering disabled, nothing to consume).
+    pub page_numbering: Option<PageNumberingDecl>,
     // #set text(font: ..., size: ...)
     pub text_font: Option<Vec<String>>,
     pub text_size_half_pt: Option<u32>,
@@ -38,6 +40,16 @@ pub struct SourceStyleOverrides {
     pub par_spacing_twips: Option<u32>,
     pub par_spacing_em: Option<f64>,
     pub justify: Option<bool>,
+}
+
+/// How `#set page(numbering:)` was declared.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PageNumberingDecl {
+    /// A plain numbering pattern (`"1"`, `"i"`, `"a"`, …).
+    Pattern(String),
+    /// Declared, but not as a plain pattern — e.g. a function
+    /// (`n => "(" + str(n) + ")"`). Falls back to glyph detection.
+    Unmappable,
 }
 
 impl SourceStyleOverrides {
@@ -94,8 +106,133 @@ pub fn extract_source_style_overrides(
     ovr
 }
 
-/// Parse `source` and return the names of the closures applied as document
-/// templates via `#show: …` (e.g. `tmpl` for `#show: tmpl.with(...)`).
+/// Whether the source resets the footnote counter inside a page header
+/// (`#set page(header: …)` containing `counter(footnote).update(N)` with an
+/// integer literal `N`, or the `#page(header: …)` call form).
+///
+/// Per typst-library's `FootnoteElem` docs, that is the opt-in for per-page
+/// footnote numbering; the default is continuous numbering across the whole
+/// document. A function-valued update (`update(n => n + 1)`) is not a reset,
+/// and neither is an update anywhere but a page header — a mid-document
+/// `counter(footnote).update(0)` restarts numbering once, it does not make it
+/// per-page.
+///
+/// Only document-global rules count (top level, or inside a `#show:`
+/// template closure) — the same scoping as [`extract_source_style_overrides`].
+#[must_use]
+pub fn footnote_counter_reset_in_page_header(source: &str, template_names: &[String]) -> bool {
+    let root = typst_syntax::parse(source);
+    header_resets_footnote_counter(&root, template_names, true)
+}
+
+/// Mirror of [`collect_global_set_rules`]' scoping, answering whether any
+/// document-global page-header rule resets the footnote counter.
+fn header_resets_footnote_counter(
+    node: &typst_syntax::SyntaxNode,
+    template_names: &[String],
+    in_global_scope: bool,
+) -> bool {
+    use typst_syntax::SyntaxKind;
+    use typst_syntax::ast;
+
+    match node.kind() {
+        // A show rule's recipe applies to specific elements, not globally.
+        SyntaxKind::ShowRule => return false,
+        // A content block (`[...]`) introduces a local scope.
+        SyntaxKind::ContentBlock => {
+            return node
+                .children()
+                .any(|child| header_resets_footnote_counter(child, template_names, false));
+        }
+        // A `#let NAME(...) = …` closure. The show-template closure holds the
+        // real document globals; any other closure is a local helper.
+        SyntaxKind::LetBinding => {
+            if let Some(binding) = node.cast::<ast::LetBinding<'_>>()
+                && let ast::LetBindingKind::Closure(name) = binding.kind()
+            {
+                let child_global = template_names.iter().any(|t| t == name.as_str());
+                return node.children().any(|child| {
+                    header_resets_footnote_counter(child, template_names, child_global)
+                });
+            }
+        }
+        _ => {}
+    }
+
+    if in_global_scope {
+        if node.kind() == SyntaxKind::SetRule
+            && let Some(set) = node.cast::<ast::SetRule<'_>>()
+            && let ast::Expr::Ident(ident) = set.target()
+            && ident.as_str() == "page"
+            && page_header_resets_footnote_counter(set.args())
+        {
+            return true;
+        }
+
+        // Also honor the `#page(header: …)` function-call form.
+        if node.kind() == SyntaxKind::FuncCall
+            && let Some(call) = node.cast::<ast::FuncCall<'_>>()
+            && matches!(call.callee(), ast::Expr::Ident(i) if i.as_str() == "page")
+            && page_header_resets_footnote_counter(call.args())
+        {
+            return true;
+        }
+    }
+
+    node.children()
+        .any(|child| header_resets_footnote_counter(child, template_names, in_global_scope))
+}
+
+/// Whether the `header:` argument of a page rule resets the footnote counter.
+fn page_header_resets_footnote_counter(args: typst_syntax::ast::Args<'_>) -> bool {
+    use typst_syntax::ast::{self, AstNode};
+    for arg in args.items() {
+        if let ast::Arg::Named(named) = arg
+            && named.name().as_str() == "header"
+            && subtree_resets_footnote_counter(named.expr().to_untyped())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether any `counter(footnote).update(<int literal>)` call occurs under
+/// `node`.
+fn subtree_resets_footnote_counter(node: &typst_syntax::SyntaxNode) -> bool {
+    use typst_syntax::ast;
+    if let Some(call) = node.cast::<ast::FuncCall<'_>>()
+        && is_footnote_counter_update(call)
+    {
+        return true;
+    }
+    node.children().any(subtree_resets_footnote_counter)
+}
+
+/// Whether this call is `counter(footnote).update(<int literal>)`.
+fn is_footnote_counter_update(call: typst_syntax::ast::FuncCall<'_>) -> bool {
+    use typst_syntax::ast;
+    let ast::Expr::FieldAccess(access) = call.callee() else {
+        return false;
+    };
+    if access.field().get().as_str() != "update" {
+        return false;
+    }
+    let ast::Expr::FuncCall(inner) = access.target() else {
+        return false;
+    };
+    if !matches!(inner.callee(), ast::Expr::Ident(ident) if ident.get().as_str() == "counter") {
+        return false;
+    }
+    let mut counter_args = inner.args().items();
+    if !matches!(counter_args.next(), Some(ast::Arg::Pos(ast::Expr::Ident(ident)))
+        if ident.get().as_str() == "footnote")
+    {
+        return false;
+    }
+    let mut update_args = call.args().items();
+    matches!(update_args.next(), Some(ast::Arg::Pos(ast::Expr::Int(_))))
+}
 #[must_use]
 pub fn extract_show_template_names_from_source(source: &str) -> Vec<String> {
     let root = typst_syntax::parse(source);
@@ -222,11 +359,17 @@ fn parse_page_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverr
                     ovr.columns = u32::try_from(i.get()).ok();
                 }
             }
-            "numbering" => {
-                if let typst_syntax::ast::Expr::Str(s) = named.expr() {
-                    ovr.page_numbering = Some(s.get().to_string());
+            "numbering" => match named.expr() {
+                typst_syntax::ast::Expr::Str(s) => {
+                    ovr.page_numbering = Some(PageNumberingDecl::Pattern(s.get().to_string()));
                 }
-            }
+                // `numbering: none` disables numbering — no declaration.
+                typst_syntax::ast::Expr::None(_) => {}
+                // A function, a variable, … — declared but not mappable.
+                _ => {
+                    ovr.page_numbering = Some(PageNumberingDecl::Unmappable);
+                }
+            },
             _ => {}
         }
     }
@@ -598,5 +741,45 @@ Body."#;
         assert!(top_names.is_empty());
         let ovr_top = extract_source_style_overrides(top_level, &top_names);
         assert_eq!(ovr_top.text_size_half_pt, Some(21));
+    }
+
+    #[test]
+    fn footnote_counter_reset_in_page_header_cases() {
+        let none: &[String] = &[];
+        // The canonical per-page reset: an integer update in the header.
+        assert!(footnote_counter_reset_in_page_header(
+            "#set page(header: context counter(footnote).update(0))",
+            none
+        ));
+        // A function-valued update is not a reset.
+        assert!(!footnote_counter_reset_in_page_header(
+            "#set page(header: context counter(footnote).update(n => n + 1))",
+            none
+        ));
+        // A header without a reset does not count.
+        assert!(!footnote_counter_reset_in_page_header(
+            "#set page(header: [Running head])",
+            none
+        ));
+        // An update in the body restarts numbering once; it is not per-page.
+        assert!(!footnote_counter_reset_in_page_header(
+            "#set page(header: [Running head])\n\n#counter(footnote).update(0)",
+            none
+        ));
+        // The `#page(header: …)` call form counts too.
+        assert!(footnote_counter_reset_in_page_header(
+            "#page(header: context counter(footnote).update(0))[Body.]",
+            none
+        ));
+        // A header set rule buried in a content block is locally scoped.
+        assert!(!footnote_counter_reset_in_page_header(
+            "#block[#set page(header: context counter(footnote).update(0))]",
+            none
+        ));
+        // …but one inside the show-template closure is document-global.
+        let tmpl = "#let tmpl(..args) = {\n  set page(header: context counter(footnote).update(0))\n  args.pos().join()\n}\n#show: tmpl.with()\n= Heading\nBody.";
+        let names = extract_show_template_names_from_source(tmpl);
+        assert_eq!(names, vec!["tmpl".to_string()]);
+        assert!(footnote_counter_reset_in_page_header(tmpl, &names));
     }
 }

@@ -10,6 +10,7 @@ use super::{
     get_attr_value, has_attr_value, highlight_style, image, inline, is_block_equation, page,
     run_with_span, sanitize_anchor, subtree_has_element, tag_name,
 };
+use crate::compat::{Degradation, DegradationAction};
 
 /// The behavior needed by a caller of the shared HTML inline collector.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -586,22 +587,61 @@ pub(super) fn handle_inline_context_tag(
         return end;
     };
     let span = content.span();
-    let label = span
-        .id()
-        .and_then(|id| ctx.world.source(id).ok())
-        .and_then(|source| page::counter_page_label(&source, span));
-    match label {
-        Some(label) => {
-            let display = collect_flat_text(&children[i + 1..end]);
-            para.add_field_pageref(label, display);
-        }
-        None => {
-            collect_inlines(
-                &children[i + 1..end],
-                para,
-                Some(ctx),
-                InlineOptions::paragraph(),
-            );
+    let source = span.id().and_then(|id| ctx.world.source(id).ok());
+    let label = source
+        .as_ref()
+        .and_then(|source| page::counter_page_label(source, span));
+    if let Some(label) = label {
+        let display = collect_flat_text(&children[i + 1..end]);
+        para.add_field_pageref(label, display);
+    } else {
+        // A bare current-page reference becomes a PAGE field (an
+        // intersection-native field, present in all compat modes); the
+        // cached text is whatever Typst rendered at this spot.
+        let counter_use = source.as_ref().map_or(page::CounterUse::Other, |source| {
+            page::classify_counter_use(source, span)
+        });
+        match counter_use {
+            page::CounterUse::CurrentPage => {
+                let display = collect_flat_text(&children[i + 1..end]);
+                para.add_field_page(display);
+            }
+            page::CounterUse::PageCounterUnsupported => {
+                ctx.degradations.push(Degradation::new(
+                    Some(span),
+                    "page-counter-value",
+                    DegradationAction::Literalized,
+                    "page-counter value Word cannot recompute (e.g. arithmetic around counter(page)) kept as literal text",
+                ));
+                collect_inlines(
+                    &children[i + 1..end],
+                    para,
+                    Some(ctx),
+                    InlineOptions::paragraph(),
+                );
+            }
+            page::CounterUse::FootnoteCounter => {
+                ctx.degradations.push(Degradation::new(
+                    Some(span),
+                    "footnote-counter-reference",
+                    DegradationAction::Literalized,
+                    "footnote-counter reference kept as literal text (NOTEREF is a C3 field)",
+                ));
+                collect_inlines(
+                    &children[i + 1..end],
+                    para,
+                    Some(ctx),
+                    InlineOptions::paragraph(),
+                );
+            }
+            page::CounterUse::Other => {
+                collect_inlines(
+                    &children[i + 1..end],
+                    para,
+                    Some(ctx),
+                    InlineOptions::paragraph(),
+                );
+            }
         }
     }
     end
