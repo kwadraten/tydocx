@@ -25,9 +25,9 @@ use citation::{
     generate_custom_xml_item_props, generate_custom_xml_rels, generate_custom_xml_sources,
 };
 use document::generate_document_xml;
-use footnotes::generate_footnotes_xml;
+use footnotes::{generate_footnote_rels, generate_footnotes_xml};
 use header_footer::{generate_footer_xml, generate_header_xml, generate_page_number_footer_xml};
-use image::collect_images;
+use image::{collect_footnote_images, collect_images};
 use numbering::generate_numbering_xml;
 use package::{
     generate_content_types, generate_core_properties, generate_document_rels, generate_rels,
@@ -88,6 +88,25 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     let parts = DocParts::new(doc);
     let images = collect_images(doc);
     let has_images = !images.is_empty();
+    let footnote_images = collect_footnote_images(doc);
+    // Footnote images are numbered after the body images in the
+    // document-wide media numbering.
+    let footnote_image_base = images.len() - footnote_images.len();
+
+    // Running image/citation ids are shared across document.xml and
+    // footnotes.xml, so they never restart per part.
+    let image_counter = Cell::new(0_usize);
+    let citation_id_counter = Cell::new(1_000_000_u32);
+    let ps = &doc.page_settings;
+    let ctx = WriteCtx {
+        doc_style: &doc.style,
+        parts: &parts,
+        content_width_twips: ps
+            .width_twips
+            .saturating_sub(ps.margin_left + ps.margin_right),
+        image_counter: &image_counter,
+        citation_id_counter: &citation_id_counter,
+    };
 
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -114,12 +133,26 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
 
     zip.start_file("word/document.xml", options)?;
     zip.write_all(&xml_part(|w| {
-        generate_document_xml(w, doc, has_images, &parts)
+        generate_document_xml(w, doc, has_images, &ctx)
     })?)?;
 
     if parts.has(RelKind::Footnotes) {
         zip.start_file("word/footnotes.xml", options)?;
-        zip.write_all(&xml_part(|w| generate_footnotes_xml(w, doc))?)?;
+        zip.write_all(&xml_part(|w| {
+            generate_footnotes_xml(
+                w,
+                doc,
+                &ctx,
+                footnote_image_base,
+                !footnote_images.is_empty(),
+            )
+        })?)?;
+        if !footnote_images.is_empty() {
+            zip.start_file("word/_rels/footnotes.xml.rels", options)?;
+            zip.write_all(&xml_part(|w| {
+                generate_footnote_rels(w, &footnote_images, footnote_image_base)
+            })?)?;
+        }
     }
 
     if parts.has(RelKind::Numbering) {

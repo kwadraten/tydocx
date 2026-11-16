@@ -3,9 +3,11 @@ use std::io::{self, Write};
 use quick_xml::Writer;
 use quick_xml::events::BytesText;
 
+use super::WriteCtx;
+use super::image::write_image_inline;
 use super::package::write_value_element;
 use super::run::{write_inline, write_text_run};
-use crate::document::{Document, FootnoteFormat};
+use crate::document::{Document, FootnoteFormat, ImageData, InlineElement};
 
 /// Write `w:footnotePr` element with optional circled-number format and per-page restart.
 pub(super) fn write_footnote_pr<W: Write>(
@@ -98,11 +100,20 @@ fn circled_number_char(n: u32) -> String {
     c.map_or_else(|| n.to_string(), |c| c.to_string())
 }
 
+/// Write `word/footnotes.xml`.
+///
+/// `footnote_image_base` is the number of body images: footnote images are
+/// numbered after them in the document-wide media numbering, while their
+/// relationships live in `word/_rels/footnotes.xml.rels` (written by
+/// [`generate_footnote_rels`]) with ids restarting at `rId1`.
 pub(super) fn generate_footnotes_xml(
     writer: &mut Writer<&mut Vec<u8>>,
     doc: &Document,
+    ctx: &WriteCtx,
+    footnote_image_base: usize,
+    has_footnote_images: bool,
 ) -> io::Result<()> {
-    writer
+    let mut elem = writer
         .create_element("w:footnotes")
         .with_attribute((
             "xmlns:w",
@@ -111,45 +122,110 @@ pub(super) fn generate_footnotes_xml(
         .with_attribute((
             "xmlns:r",
             "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
-        ))
-        .write_inner_content(|w| {
-            // Separator footnotes (id 0 and 1 are reserved by OOXML spec)
-            write_separator_footnote(w, "0", "separator")?;
-            write_separator_footnote(w, "1", "continuationSeparator")?;
+        ));
+    if has_footnote_images {
+        elem = elem
+            .with_attribute((
+                "xmlns:wp",
+                "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+            ))
+            .with_attribute((
+                "xmlns:a",
+                "http://schemas.openxmlformats.org/drawingml/2006/main",
+            ))
+            .with_attribute((
+                "xmlns:pic",
+                "http://schemas.openxmlformats.org/drawingml/2006/picture",
+            ));
+    }
+    elem.write_inner_content(|w| {
+        // Separator footnotes (id 0 and 1 are reserved by OOXML spec)
+        write_separator_footnote(w, "0", "separator")?;
+        write_separator_footnote(w, "1", "continuationSeparator")?;
 
-            // Actual footnotes
-            for footnote in &doc.footnotes {
-                let id_str = footnote.id.to_string();
-                w.create_element("w:footnote")
-                    .with_attribute(("w:id", id_str.as_str()))
-                    .write_inner_content(|fn_w| {
-                        fn_w.create_element("w:p").write_inner_content(|p_w| {
-                            // Paragraph properties with footnote text style
-                            p_w.create_element("w:pPr").write_inner_content(|ppr| {
-                                ppr.create_element("w:pStyle")
-                                    .with_attribute(("w:val", "FootnoteText"))
-                                    .write_empty()?;
-                                Ok(())
-                            })?;
-                            let use_custom =
-                                doc.style.footnote_format == FootnoteFormat::CircledNumber;
-                            if use_custom {
-                                let seq = footnote.id - 1;
-                                let mark = circled_number_char(seq);
-                                write_footnote_mark_run(p_w, Some(&mark), false)?;
-                            } else {
-                                write_footnote_mark_run(p_w, None, false)?;
-                            }
-                            // Space after reference mark
-                            write_text_run(p_w, " ", true)?;
-                            // Content inlines
-                            for inline in &footnote.content {
-                                write_inline(p_w, inline, doc)?;
-                            }
+        // Actual footnotes. The image ordinal counts across all footnotes:
+        // `generate_footnote_rels` enumerates footnote images globally
+        // (rId{k+1}), so the ordinal must not reset per footnote or a later
+        // footnote's drawing would embed the first image again.
+        let mut image_ordinal = 0_usize;
+        for footnote in &doc.footnotes {
+            let id_str = footnote.id.to_string();
+            w.create_element("w:footnote")
+                .with_attribute(("w:id", id_str.as_str()))
+                .write_inner_content(|fn_w| {
+                    fn_w.create_element("w:p").write_inner_content(|p_w| {
+                        // Paragraph properties with footnote text style
+                        p_w.create_element("w:pPr").write_inner_content(|ppr| {
+                            ppr.create_element("w:pStyle")
+                                .with_attribute(("w:val", "FootnoteText"))
+                                .write_empty()?;
                             Ok(())
                         })?;
+                        let use_custom = doc.style.footnote_format == FootnoteFormat::CircledNumber;
+                        if use_custom {
+                            let seq = footnote.id - 1;
+                            let mark = circled_number_char(seq);
+                            write_footnote_mark_run(p_w, Some(&mark), false)?;
+                        } else {
+                            write_footnote_mark_run(p_w, None, false)?;
+                        }
+                        // Space after reference mark
+                        write_text_run(p_w, " ", true)?;
+                        // Content inlines. Images are intercepted here:
+                        // their relationship lives in
+                        // `word/_rels/footnotes.xml.rels`, not in
+                        // `document.xml.rels`, so the relationship id
+                        // restarts at `rId1` for this part while the
+                        // media file number continues the document-wide
+                        // image numbering.
+                        for inline in &footnote.content {
+                            if let InlineElement::Image(img) = inline {
+                                image_ordinal += 1;
+                                let n = footnote_image_base + image_ordinal;
+                                let rid = format!("rId{image_ordinal}");
+                                write_image_inline(p_w, img, n, &rid)?;
+                            } else {
+                                write_inline(p_w, inline, ctx)?;
+                            }
+                        }
                         Ok(())
                     })?;
+                    Ok(())
+                })?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Write `word/_rels/footnotes.xml.rels`: the relationships for footnote
+/// images. Relationship ids restart at `rId1` (this part has its own
+/// namespace); the media target keeps the document-wide image number so it
+/// matches the file written to `word/media/`.
+pub(super) fn generate_footnote_rels(
+    writer: &mut Writer<&mut Vec<u8>>,
+    footnote_images: &[&ImageData],
+    footnote_image_base: usize,
+) -> io::Result<()> {
+    writer
+        .create_element("Relationships")
+        .with_attribute((
+            "xmlns",
+            "http://schemas.openxmlformats.org/package/2006/relationships",
+        ))
+        .write_inner_content(|w| {
+            for (k, img) in footnote_images.iter().enumerate() {
+                let n = footnote_image_base + k + 1;
+                let ext = img.format.extension();
+                let target = format!("../media/image{n}.{ext}");
+                w.create_element("Relationship")
+                    .with_attribute(("Id", format!("rId{}", k + 1).as_str()))
+                    .with_attribute((
+                        "Type",
+                        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                    ))
+                    .with_attribute(("Target", target.as_str()))
+                    .write_empty()?;
             }
             Ok(())
         })?;

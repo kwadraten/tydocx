@@ -34,7 +34,7 @@ pub(super) use body_size::{
     BODY_SIZE_SAMPLE_PAGES, DEFAULT_BODY_SIZE_HALF_PT, dominant_body_size_half_pt,
 };
 pub(crate) use language::is_cjk_char;
-pub(super) use language::lang_region_to_bcp47;
+pub(super) use language::{is_cjk_language, lang_region_to_bcp47};
 pub(super) use margin::find_body_zone;
 pub(super) use style::apply_footnote_text_size;
 pub(super) use units::{pt_to_eighth_pt, pt_to_half_pt, pt_to_twips};

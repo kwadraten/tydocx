@@ -9,6 +9,8 @@ use crate::document::{
 
 /// Collect all images from the document model in order of appearance.
 /// Returns a `Vec<&ImageData>` where the index corresponds to the 1-based image number.
+/// Body images come first, footnote images after them — the footnote writer
+/// relies on this order for the document-wide media numbering.
 pub(super) fn collect_images(doc: &Document) -> Vec<&ImageData> {
     let mut images = Vec::new();
     for el in &doc.body.elements {
@@ -21,6 +23,23 @@ pub(super) fn collect_images(doc: &Document) -> Vec<&ImageData> {
                 for p in paragraphs {
                     collect_images_from_para(p, &mut images);
                 }
+            }
+        }
+    }
+    images.extend(collect_footnote_images(doc));
+    images
+}
+
+/// Collect the images embedded in footnotes, in document order. They are
+/// appended after the body images in [`collect_images`], so their media file
+/// numbers continue the document-wide numbering while their relationships
+/// live in `word/_rels/footnotes.xml.rels`.
+pub(super) fn collect_footnote_images(doc: &Document) -> Vec<&ImageData> {
+    let mut images = Vec::new();
+    for footnote in &doc.footnotes {
+        for inline in &footnote.content {
+            if let InlineElement::Image(img) = inline {
+                images.push(img);
             }
         }
     }

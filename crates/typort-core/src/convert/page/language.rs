@@ -3,6 +3,15 @@ use std::collections::{HashMap, HashSet};
 use typort_ooxml::document::{Document, Run};
 use typst::World;
 
+/// Whether a declared Typst language code is an East-Asian language
+/// (Chinese, Japanese, Korean) — the languages whose text Word tags
+/// `w:eastAsia` and whose documents carry the East-Asian hint. Compares the
+/// primary subtag only, so `zh-Hant` still counts as Chinese.
+pub(in crate::convert) fn is_cjk_language(lang: &str) -> bool {
+    let primary = lang.split(['-', '_']).next().unwrap_or("");
+    matches!(primary.to_ascii_lowercase().as_str(), "zh" | "ja" | "ko")
+}
+
 pub(crate) fn is_cjk_char(c: char) -> bool {
     matches!(c,
         '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' |
@@ -202,6 +211,18 @@ fn localized_name_via_book(world: &dyn World, family: &str, lang_ids: &[u16]) ->
 mod tests {
     use super::*;
     use typort_ooxml::document::Paragraph;
+    #[test]
+    fn is_cjk_language_matches_cjk_primaries() {
+        // Chinese, Japanese, and Korean — in any case, with or without a
+        // script/region subtag — count as East-Asian languages.
+        for lang in ["zh", "ja", "ko", "ZH", "Ja", "zh-Hant", "zh_CN"] {
+            assert!(is_cjk_language(lang), "{lang} should count as CJK");
+        }
+        for lang in ["en", "de", "fr", "ru", ""] {
+            assert!(!is_cjk_language(lang), "{lang} should not count as CJK");
+        }
+    }
+
     #[test]
     fn cjk_localized_lang_ids_zh_cn_prefers_prc() {
         // zh-CN must prefer the PRC localized-name record (LCID 0x0804 → 宋体).

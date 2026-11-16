@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::{
     Alignment, CiteElem, CiteGroup, EmphElem, EquationElem, HighlightElem, HighlightStyle,
     HtmlDocument, HtmlElement, HtmlNode, InlineFmt, LinkElem, Paragraph, RefElem, Run, StrongElem,
@@ -22,6 +24,10 @@ pub(super) struct InlineOptions<'a> {
     fmt: InlineFmt,
     html_doc: Option<&'a HtmlDocument>,
     purpose: InlinePurpose,
+    /// Display sizes of rendered images, keyed by content hash. Only
+    /// populated for footnote walks — body walks read sizes through the
+    /// shared `WalkCtx` instead.
+    image_sizes: Option<&'a HashMap<u64, (u64, u64)>>,
 }
 
 impl<'a> InlineOptions<'a> {
@@ -30,6 +36,7 @@ impl<'a> InlineOptions<'a> {
             fmt: InlineFmt::default(),
             html_doc: None,
             purpose: InlinePurpose::Paragraph,
+            image_sizes: None,
         }
     }
 
@@ -38,6 +45,7 @@ impl<'a> InlineOptions<'a> {
             fmt,
             html_doc,
             purpose: InlinePurpose::Generic,
+            image_sizes: None,
         }
     }
 
@@ -46,14 +54,16 @@ impl<'a> InlineOptions<'a> {
             fmt: InlineFmt::default(),
             html_doc: None,
             purpose: InlinePurpose::FormattedRun,
+            image_sizes: None,
         }
     }
 
-    pub(super) fn footnote(fmt: InlineFmt) -> Self {
+    pub(super) fn footnote(fmt: InlineFmt, image_sizes: &'a HashMap<u64, (u64, u64)>) -> Self {
         Self {
             fmt,
             html_doc: None,
             purpose: InlinePurpose::Footnote,
+            image_sizes: Some(image_sizes),
         }
     }
 
@@ -167,6 +177,34 @@ pub(super) fn collect_inline_element(
                 // and the break is silently dropped, gluing the surrounding words.
                 para.push_run(Run::line_break());
                 return;
+            }
+            if options.purpose == InlinePurpose::Footnote {
+                // A hyperlink in a footnote keeps its target: only the
+                // display runs are collected from its children.
+                if tag == "a"
+                    && let Some(href) = get_attr_value(elem, "href")
+                {
+                    let mut tmp = collect_children_generic(&elem.children, options.fmt, None);
+                    let runs = drain_text_runs(&mut tmp);
+                    if !runs.is_empty() {
+                        para.add_hyperlink(href, runs);
+                    }
+                    return;
+                }
+                // An image in a footnote embeds like a body image: the
+                // `<img>` src data-URL carries the bytes and the display
+                // size comes from the paged render, falling back to the
+                // image's intrinsic size when no rendered size is known.
+                if tag == "img"
+                    && let Some(src) = get_attr_value(elem, "src")
+                {
+                    let empty = HashMap::new();
+                    let sizes = options.image_sizes.unwrap_or(&empty);
+                    if let Some(img) = image::image_data_from_src(&src, sizes) {
+                        para.add_image(img);
+                    }
+                    return;
+                }
             }
             let fmt = options.fmt.for_tag(&tag);
             collect_inlines(&elem.children, para, None, options.with_fmt(fmt));

@@ -253,3 +253,110 @@ fn smoke_style_footnotes() {
         "docx output should be non-trivial"
     );
 }
+
+#[test]
+fn issue_footnote_hyperlink_and_image() {
+    // A footnote carrying an external hyperlink and an image: the link must
+    // survive as a hyperlink field (not plain text) and the image as an
+    // embedded drawing with its own relationships part.
+    let package = fixture_package("issue_footnote_hyperlink_image");
+    let footnotes_xml = package.part_text("word/footnotes.xml");
+    assert!(
+        footnotes_xml.contains("HYPERLINK"),
+        "footnote link must survive as a hyperlink field, got:\n{footnotes_xml}"
+    );
+    assert!(
+        footnotes_xml.contains("https://example.com"),
+        "footnote link URL must survive, got:\n{footnotes_xml}"
+    );
+    assert!(
+        footnotes_xml.contains("the example site"),
+        "footnote link display text must survive, got:\n{footnotes_xml}"
+    );
+    assert!(
+        footnotes_xml.contains("wp:inline"),
+        "footnote image must survive as an inline drawing, got:\n{footnotes_xml}"
+    );
+    assert!(
+        footnotes_xml.contains("a:blip"),
+        "footnote image drawing must reference embedded media, got:\n{footnotes_xml}"
+    );
+    // 3cm wide image: 1080000 EMU is the laid-out display size, not the
+    // 10px intrinsic size (95250 EMU).
+    assert!(
+        footnotes_xml.contains(r#"cx="1080000""#),
+        "footnote image must use its laid-out 3cm width, got:\n{footnotes_xml}"
+    );
+    let rels = package.part_text("word/_rels/footnotes.xml.rels");
+    assert!(
+        rels.contains("media/image"),
+        "footnote relationships must reference the embedded image, got:\n{rels}"
+    );
+    let names: Vec<&str> = package.part_names().collect();
+    assert!(
+        names.iter().any(|n| n.starts_with("word/media/image")),
+        "the footnote image bytes must be packaged as a media part, got: {names:?}"
+    );
+}
+
+/// The `<w:footnote w:id="...">...</w:footnote>` block for one footnote in
+/// footnotes.xml (ids 0 and 1 are the separator footnotes, so real footnotes
+/// start at 2).
+fn footnote_block<'a>(footnotes_xml: &'a str, id: u32) -> &'a str {
+    let open = format!(r#"<w:footnote w:id="{id}">"#);
+    let after_open = footnotes_xml
+        .split(&open)
+        .nth(1)
+        .unwrap_or_else(|| panic!("footnote {id} missing"));
+    let block = after_open
+        .split("</w:footnote>")
+        .next()
+        .expect("footnote closes");
+    block
+}
+
+#[test]
+fn issue_two_footnotes_with_images_embed_their_own_image() {
+    // Two footnotes, each with a different image at a different size: the
+    // first footnote's drawing must embed rId1 (red, 2cm) and the second
+    // footnote's rId2 (blue, 4cm). The image ordinal counts across footnotes,
+    // so a later footnote must not embed the first image again.
+    let package = fixture_package("issue_footnote_two_images");
+    let footnotes_xml = package.part_text("word/footnotes.xml");
+    let first = footnote_block(&footnotes_xml, 2);
+    assert!(
+        first.contains(r#"r:embed="rId1""#),
+        "first footnote must embed rId1, got:\n{first}"
+    );
+    assert!(
+        first.contains(r#"cx="720000""#),
+        "first footnote image must use its laid-out 2cm width, got:\n{first}"
+    );
+    let second = footnote_block(&footnotes_xml, 3);
+    assert!(
+        second.contains(r#"r:embed="rId2""#),
+        "second footnote must embed rId2, not rId1, got:\n{second}"
+    );
+    assert!(
+        second.contains(r#"cx="1440000""#),
+        "second footnote image must use its laid-out 4cm width, got:\n{second}"
+    );
+    let rels = package.part_text("word/_rels/footnotes.xml.rels");
+    assert!(
+        rels.contains(r#"Id="rId1""#) && rels.contains("media/image1.png"),
+        "rId1 must point at the first footnote image, got:\n{rels}"
+    );
+    assert!(
+        rels.contains(r#"Id="rId2""#) && rels.contains("media/image2.png"),
+        "rId2 must point at the second footnote image, got:\n{rels}"
+    );
+    let names: Vec<&str> = package.part_names().collect();
+    assert!(
+        names.iter().any(|n| *n == "word/media/image1.png"),
+        "the first footnote image bytes must be packaged, got: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| *n == "word/media/image2.png"),
+        "the second footnote image bytes must be packaged, got: {names:?}"
+    );
+}

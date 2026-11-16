@@ -185,8 +185,11 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
     let (body_spacing_before, body_spacing_after) =
         detect_body_paragraph_spacing(body_size_half_pt, &heading_sizes, paged);
 
-    // Detect CJK content presence from rendered text
-    let has_cjk = !ascii_font_counts.is_empty() && cjk_font_counts.values().sum::<usize>() > 0;
+    // Detect CJK content presence from rendered text. Only CJK glyphs count:
+    // a CJK-only document (no Latin text at all) still has CJK content — the
+    // old "Latin text must also render" conjunct made such documents lose
+    // both the East-Asian hint and the zh-CN fallback language.
+    let has_cjk = cjk_font_counts.values().sum::<usize>() > 0;
 
     DocumentStyle {
         body_font_ascii,

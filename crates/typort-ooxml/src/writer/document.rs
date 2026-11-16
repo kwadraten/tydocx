@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::io::{self, Write};
 
 use quick_xml::Writer;
@@ -29,11 +28,14 @@ fn header_footer_rel_id(is_header: bool, parts: &DocParts) -> String {
     format!("rId{}", pos + 1)
 }
 
+/// Write `word/document.xml`. `ctx` is created by the caller (`write_docx`)
+/// and shared with the footnote writer, so the running image/citation ids
+/// are document-wide instead of restarting per part.
 pub(super) fn generate_document_xml(
     writer: &mut Writer<&mut Vec<u8>>,
     doc: &Document,
     has_images: bool,
-    parts: &DocParts,
+    ctx: &WriteCtx,
 ) -> io::Result<()> {
     let mut elem = writer
         .create_element("w:document")
@@ -64,32 +66,18 @@ pub(super) fn generate_document_xml(
                 "http://schemas.openxmlformats.org/drawingml/2006/picture",
             ));
     }
-    // We need to track image index state across paragraphs for the writer.
-    // Use a Cell to allow mutation inside the closure.
-    let image_counter = Cell::new(0_usize);
-    let citation_id_counter = Cell::new(1_000_000_u32);
-    let ps = &doc.page_settings;
-    let ctx = WriteCtx {
-        doc_style: &doc.style,
-        parts,
-        content_width_twips: ps
-            .width_twips
-            .saturating_sub(ps.margin_left + ps.margin_right),
-        image_counter: &image_counter,
-        citation_id_counter: &citation_id_counter,
-    };
     elem.write_inner_content(|w| {
         w.create_element("w:body").write_inner_content(|body_w| {
             for element in &doc.body.elements {
                 match element {
                     BlockElement::Paragraph(para) => {
-                        write_paragraph(body_w, para, &ctx)?;
+                        write_paragraph(body_w, para, ctx)?;
                     }
                     BlockElement::Table(table) => {
-                        write_table(body_w, table, &ctx)?;
+                        write_table(body_w, table, ctx)?;
                     }
                     BlockElement::BibliographyBlock { paragraphs } => {
-                        write_bibliography_sdt(body_w, paragraphs, &ctx)?;
+                        write_bibliography_sdt(body_w, paragraphs, ctx)?;
                     }
                 }
             }
@@ -97,7 +85,7 @@ pub(super) fn generate_document_xml(
                 body_w,
                 &doc.page_settings,
                 &doc.style,
-                parts,
+                ctx.parts,
                 doc.page_numbering.as_ref(),
             )?;
             Ok(())

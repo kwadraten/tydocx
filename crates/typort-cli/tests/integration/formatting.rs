@@ -1008,3 +1008,40 @@ fn issue_code_font_detected_by_flag_not_name() {
         "code font must not fall back to Courier New:\n{styles_xml}"
     );
 }
+
+#[test]
+fn issue_import_nested_set_rule_reaches_document() {
+    // b.typ's `#set par(first-line-indent: 2em)` lives two imports deep
+    // (main -> a.typ -> b.typ, each resolved relative to its own file); the
+    // Normal style must carry the indent.
+    let styles_xml = fixture_styles_xml("issue_import_nested");
+    let normal_start = styles_xml
+        .find(r#"w:styleId="Normal""#)
+        .expect("Normal style present");
+    let normal = &styles_xml[normal_start
+        ..styles_xml[normal_start..]
+            .find("</w:style>")
+            .map_or(styles_xml.len(), |e| normal_start + e)];
+    assert!(
+        normal.contains("w:firstLine=") && !normal.contains(r#"w:firstLine="0""#),
+        "Normal style must declare a non-zero first-line indent from the nested import:\n{normal}"
+    );
+}
+
+#[test]
+fn issue_import_parent_dir_set_rule_reaches_document() {
+    // d.typ lives in a subdirectory and imports the shared rule file one
+    // level up (`../`); the Normal style must carry the indent.
+    let styles_xml = fixture_styles_xml("issue_import_parent_dir");
+    let normal_start = styles_xml
+        .find(r#"w:styleId="Normal""#)
+        .expect("Normal style present");
+    let normal = &styles_xml[normal_start
+        ..styles_xml[normal_start..]
+            .find("</w:style>")
+            .map_or(styles_xml.len(), |e| normal_start + e)];
+    assert!(
+        normal.contains("w:firstLine=") && !normal.contains(r#"w:firstLine="0""#),
+        "Normal style must declare a non-zero first-line indent from the parent-dir import:\n{normal}"
+    );
+}

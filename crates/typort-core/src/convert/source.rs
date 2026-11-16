@@ -86,22 +86,33 @@ pub(super) fn apply_body_font_split(fonts: &[String], doc: &mut Document, has_ge
 }
 
 /// Gather authoritative style overrides from the source AST: the main file plus
-/// every `#import`ed file. Only document-global `set` rules count — those at a
-/// file's top level or inside the closure named by the document's `#show:`
-/// template (a `set text(size:)` buried in a `#block` or a non-template helper
-/// closure is local and ignored). Imported files reuse the main file's template
-/// names so a template library that defines the closure honors its own globals.
+/// every file reachable from it through `#import`/`#include` chains. Paths
+/// resolve the way Typst resolves them — relative to the importing file's
+/// directory, or to the project root when they start with `/` — via
+/// [`collect_reachable_source_texts`], which also visits each file once
+/// (cycles are safe) and skips unreadable files silently. Only document-global
+/// `set` rules count — those at a file's top level or inside the closure named
+/// by the document's `#show:` template (a `set text(size:)` buried in a `#block`
+/// or a non-template helper closure is local and ignored). Imported files reuse
+/// the main file's template names so a template library that defines the closure
+/// honors its own globals.
 pub(super) fn gather_source_overrides(world: &TyportWorld) -> page::SourceStyleOverrides {
     let main_text = world.main_source().text();
     let template_names = page::extract_show_template_names_from_source(main_text);
-    let mut overrides = page::extract_source_style_overrides(main_text, &template_names);
+    let texts = page::collect_reachable_source_texts(world.root(), &world.main_dir(), main_text);
+    merge_reachable_overrides(&texts, &template_names)
+}
 
-    for import_path in page::extract_import_paths(main_text) {
-        let abs_path = world.root().join(import_path.trim_start_matches('/'));
-        if let Ok(content) = std::fs::read_to_string(&abs_path) {
-            let import_overrides = page::extract_source_style_overrides(&content, &template_names);
-            overrides.merge_from(&import_overrides);
-        }
+/// Merge `SourceStyleOverrides` from every reachable source text, main file
+/// first: the main file's values win, imported files only fill gaps.
+fn merge_reachable_overrides(
+    texts: &[String],
+    template_names: &[String],
+) -> page::SourceStyleOverrides {
+    let mut overrides = page::SourceStyleOverrides::default();
+    for text in texts {
+        let file_overrides = page::extract_source_style_overrides(text, template_names);
+        overrides.merge_from(&file_overrides);
     }
     overrides
 }
@@ -242,13 +253,19 @@ pub(super) fn apply_source_overrides(
 /// CJK-presence heuristic. CJK languages drive Word's East-Asian tag; all others
 /// drive the Latin tag (the `w:lang` w:val / w:eastAsia split). No-op when the
 /// source declares no language.
+///
+/// A declared CJK language also marks the document as CJK content: the
+/// East-Asian hint must be emitted even when the sampled pages render no CJK
+/// glyph (e.g. a CJK template whose body is Latin-only) — the declaration,
+/// not the glyphs, decides the document script.
 pub(super) fn apply_language_override(ovr: &page::SourceStyleOverrides, doc: &mut Document) {
     let Some(lang) = &ovr.text_lang else {
         return;
     };
     let tag = page::lang_region_to_bcp47(lang, ovr.text_region.as_deref());
-    if matches!(lang.to_ascii_lowercase().as_str(), "zh" | "ja" | "ko") {
+    if page::is_cjk_language(lang) {
         doc.style.lang_east_asia = tag;
+        doc.style.has_cjk_content = true;
     } else {
         doc.style.lang_latin = tag;
     }
@@ -318,5 +335,28 @@ pub(super) fn apply_hanging_indent_from_source(world: &TyportWorld, doc: &mut Do
                 relative_twips.saturating_add(rule.twips.unwrap_or(0)),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_reachable_overrides_main_wins_imports_fill_gaps() {
+        // The main file's size wins; the imported file's indent (absent from
+        // the main file) fills the gap.
+        let main = "#set text(size: 12pt)".to_string();
+        let imported = "#set text(size: 20pt)\n#set par(first-line-indent: 2em)".to_string();
+        let merged = merge_reachable_overrides(&[main, imported], &[]);
+        assert_eq!(merged.text_size_half_pt, Some(24));
+        assert_eq!(merged.first_line_indent_em, Some(2.0));
+    }
+
+    #[test]
+    fn merge_reachable_overrides_empty_stays_default() {
+        let merged = merge_reachable_overrides(&[], &[]);
+        assert_eq!(merged.text_size_half_pt, None);
+        assert_eq!(merged.first_line_indent_em, None);
     }
 }

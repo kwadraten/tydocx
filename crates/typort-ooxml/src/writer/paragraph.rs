@@ -3,16 +3,10 @@ use std::io::{self, Write};
 use quick_xml::Writer;
 
 use super::WriteCtx;
-use super::citation::{lang_to_lcid, write_citation_sdt};
 use super::document::write_section_break;
-use super::fields::{
-    write_bookmark_end, write_bookmark_start, write_field_ref, write_hyperlink, write_toc_field,
-};
-use super::footnotes::write_footnote_ref;
-use super::image::{image_rel_id, write_image_inline};
 use super::math::{strip_math_para, write_equation_number, write_math_inline};
 use super::package::{Indentation, two_em_hanging_twips, write_indentation};
-use super::run::{write_column_break, write_page_break, write_run, write_tab};
+use super::run::{write_inline, write_tab};
 use crate::document::{Alignment, HangingIndent, InlineElement, Paragraph};
 
 #[allow(
@@ -212,78 +206,22 @@ pub(super) fn write_paragraph<W: Write>(
             })?;
         }
         for inline in &para.inlines {
-            match inline {
-                InlineElement::Text(run) => write_run(w, run, ctx.doc_style)?,
-                InlineElement::FootnoteRef(id) => {
-                    write_footnote_ref(w, *id, &ctx.doc_style.footnote_format)?;
-                }
-                InlineElement::Math {
-                    omml_xml,
-                    equation_number,
-                } => {
-                    if let Some(num) = equation_number {
-                        // Word-native numbered display equation: a leading tab moves
-                        // to the center tab (centering the math), the math is emitted
-                        // as inline <m:oMath> (a block <m:oMathPara> does not coexist
-                        // with trailing runs on the same line), then a trailing tab
-                        // moves to the right tab and the number is written there.
-                        write_tab(w)?;
-                        write_math_inline(w, strip_math_para(omml_xml))?;
-                        write_equation_number(w, num)?;
-                    } else {
-                        write_math_inline(w, omml_xml)?;
-                    }
-                }
-                InlineElement::Image(img) => {
-                    let n = ctx.image_counter.get() + 1;
-                    ctx.image_counter.set(n);
-                    let rid = image_rel_id(n, ctx.parts);
-                    write_image_inline(w, img, n, &rid)?;
-                }
-                InlineElement::Bookmark { id, name } => {
-                    write_bookmark_start(w, *id, name)?;
-                }
-                InlineElement::BookmarkEnd { id } => {
-                    write_bookmark_end(w, *id)?;
-                }
-                InlineElement::FieldRef {
-                    bookmark_name,
-                    display_text,
-                } => {
-                    write_field_ref(w, bookmark_name, display_text)?;
-                }
-                InlineElement::Hyperlink { url, runs } => {
-                    write_hyperlink(w, url, runs, ctx.doc_style)?;
-                }
-                InlineElement::InternalLink { anchor, runs } => {
-                    w.create_element("w:hyperlink")
-                        .with_attribute(("w:anchor", anchor.as_str()))
-                        .write_inner_content(|hw| {
-                            for run in runs {
-                                write_run(hw, run, ctx.doc_style)?;
-                            }
-                            Ok(())
-                        })?;
-                }
-                InlineElement::PageBreak => {
-                    write_page_break(w)?;
-                }
-                InlineElement::ColumnBreak => {
-                    write_column_break(w)?;
-                }
-                InlineElement::FieldToc { max_depth } => {
-                    write_toc_field(w, *max_depth)?;
-                }
-                InlineElement::Tab => {
-                    write_tab(w)?;
-                }
-                InlineElement::Citation { keys, display_text } => {
-                    let sdt_id = ctx.citation_id_counter.get();
-                    ctx.citation_id_counter.set(sdt_id + 1);
-                    let locale_id = lang_to_lcid(&ctx.doc_style.lang_east_asia);
-                    write_citation_sdt(w, keys, display_text, sdt_id, locale_id)?;
-                }
+            if let InlineElement::Math {
+                omml_xml,
+                equation_number: Some(num),
+            } = inline
+            {
+                // Word-native numbered display equation: a leading tab moves
+                // to the center tab (centering the math), the math is emitted
+                // as inline <m:oMath> (a block <m:oMathPara> does not coexist
+                // with trailing runs on the same line), then a trailing tab
+                // moves to the right tab and the number is written there.
+                write_tab(w)?;
+                write_math_inline(w, strip_math_para(omml_xml))?;
+                write_equation_number(w, num)?;
+                continue;
             }
+            write_inline(w, inline, ctx)?;
         }
         Ok(())
     })?;

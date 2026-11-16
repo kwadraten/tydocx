@@ -2,7 +2,7 @@
 
 use crate::common::{
     fixture_doc_xml, fixture_document_with_world, fixture_package_from_document,
-    paragraph_containing,
+    fixture_styles_xml, paragraph_containing,
 };
 
 #[test]
@@ -270,5 +270,65 @@ fn deliberate_digit_run_font_override_is_kept() {
     assert!(
         para.contains("DejaVu Sans Mono"),
         "deliberate per-run font on a digit run must be preserved:\n{para}"
+    );
+}
+
+#[test]
+fn issue_declared_lang_cjk_latin_only() {
+    // Declared Chinese with Latin-only body text: the East-Asian hint and
+    // language come from the declaration, not from rendered glyphs.
+    let styles_xml = fixture_styles_xml("issue_declared_lang_cjk_latin_only");
+    assert!(
+        styles_xml.contains(r#"w:hint="eastAsia""#),
+        "declared CJK language must emit the East-Asian hint:\n{styles_xml}"
+    );
+    assert!(
+        styles_xml.contains(r#"w:eastAsia="zh-CN""#),
+        "declared zh must drive the East-Asian language tag:\n{styles_xml}"
+    );
+}
+
+#[test]
+fn issue_declared_lang_en_latin_only() {
+    // Declared English with Latin-only body text: no East-Asian hint — the
+    // declaration, not the glyphs, decides the document script.
+    let styles_xml = fixture_styles_xml("issue_declared_lang_en_latin_only");
+    assert!(
+        !styles_xml.contains(r#"w:hint="eastAsia""#),
+        "declared Latin language must not emit the East-Asian hint:\n{styles_xml}"
+    );
+}
+
+#[test]
+fn issue_declared_lang_ja() {
+    // Declared Japanese with Japanese body text: the East-Asian language
+    // must be ja-JP, not the glyph fallback zh-CN.
+    let styles_xml = fixture_styles_xml("issue_declared_lang_ja");
+    assert!(
+        styles_xml.contains(r#"w:hint="eastAsia""#),
+        "declared CJK language must emit the East-Asian hint:\n{styles_xml}"
+    );
+    assert!(
+        styles_xml.contains(r#"w:eastAsia="ja-JP""#),
+        "declared ja must drive the East-Asian language tag:\n{styles_xml}"
+    );
+    assert!(
+        !styles_xml.contains(r#"w:eastAsia="zh-CN""#),
+        "the glyph fallback zh-CN must not leak into a declared-ja document:\n{styles_xml}"
+    );
+}
+
+#[test]
+fn issue_undeclared_lang_cjk_only() {
+    // No declared language, Japanese-only body: the glyph fallback must
+    // still detect CJK content — hint present, fallback language zh-CN.
+    let styles_xml = fixture_styles_xml("issue_undeclared_lang_cjk_only");
+    assert!(
+        styles_xml.contains(r#"w:hint="eastAsia""#),
+        "CJK-only body must emit the East-Asian hint even without Latin text:\n{styles_xml}"
+    );
+    assert!(
+        styles_xml.contains(r#"w:eastAsia="zh-CN""#),
+        "undeclared CJK body must fall back to zh-CN:\n{styles_xml}"
     );
 }

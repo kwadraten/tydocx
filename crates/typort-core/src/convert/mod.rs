@@ -212,15 +212,11 @@ fn walk_body<'a>(
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
 ) -> &'a HtmlElement {
-    // First pass: extract footnote content from <section role="doc-endnotes">,
-    // add it to the document, and size the footnote text from the Paged render.
-    let body = find_body(html_doc.root()).unwrap_or_else(|| html_doc.root());
-    footnote::extract_add_and_size_footnotes(doc, &body.children, paged_doc);
-
     // From the PagedDocument: on-page image display sizes keyed by content
     // hash (content itself comes from each <img>'s src data-URL during the
     // walk), and drawing-canvas rasters keyed by their figure's Location.
-    // Both keyed — no positional queues to desync.
+    // Both keyed — no positional queues to desync. Computed before the
+    // footnote extraction below so footnote images get real display sizes.
     let (image_sizes, mut figure_rasters) = if let Some(paged) = paged_doc {
         (
             image::collect_image_sizes(paged),
@@ -229,6 +225,11 @@ fn walk_body<'a>(
     } else {
         (HashMap::new(), HashMap::new())
     };
+
+    // First pass: extract footnote content from <section role="doc-endnotes">,
+    // add it to the document, and size the footnote text from the Paged render.
+    let body = find_body(html_doc.root()).unwrap_or_else(|| html_doc.root());
+    footnote::extract_add_and_size_footnotes(doc, &body.children, paged_doc, &image_sizes);
 
     // Walk the HTML tree's Tag sequence. Explicit `#pagebreak()` breaks are
     // recovered from the source AST during post-processing; automatic page-flow
@@ -345,14 +346,7 @@ fn run_post_passes(
     // `#line()` in any reachable file so unrelated rules aren't invented).
     let main_src = world.main_source().text();
     if let Some(paged) = paged_doc {
-        let main_dir = world
-            .main_source()
-            .id()
-            .vpath()
-            .realize(world.root())
-            .ok()
-            .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-            .unwrap_or_else(|| world.root().to_path_buf());
+        let main_dir = world.main_dir();
         let sources = page::collect_reachable_source_texts(world.root(), &main_dir, main_src);
         recovery::insert_horizontal_rules_from_paged(paged, doc, &element_page_map, &sources);
     }
