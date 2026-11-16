@@ -9,16 +9,13 @@ use typort_ooxml::document::{Document, DocumentStyle, FootnoteFormat, InlineElem
 use typst::layout::{Frame, FrameItem};
 use typst_layout::PagedDocument;
 
+use super::body_size::{BODY_SIZE_SAMPLE_PAGES, DEFAULT_BODY_SIZE_HALF_PT};
 use super::language::is_cjk_char;
 use super::margin::{TextFragment, collect_text_fragments, find_body_zone};
 use super::units::{pt_to_half_pt, pt_to_twips};
 
 // Paged-style heuristic thresholds. Keep every tuning knob in this block.
 
-/// Pages sampled for the glyph-weighted document-style detector.
-const DOCUMENT_STYLE_SAMPLE_PAGES: usize = 3;
-/// Half-point fallback when no rendered body size is available.
-pub(in crate::convert) const DEFAULT_BODY_SIZE_HALF_PT: u32 = 21;
 /// Cap-height ratio used when rendered font metrics are unavailable.
 const DEFAULT_CAP_HEIGHT_RATIO: f64 = 0.66;
 /// Minimum text fragments needed to infer a first-line indent.
@@ -119,7 +116,7 @@ struct FontInfoHistograms {
 pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
     let mut histograms = FontInfoHistograms::default();
 
-    for page in paged.pages().iter().take(DOCUMENT_STYLE_SAMPLE_PAGES) {
+    for page in paged.pages().iter().take(BODY_SIZE_SAMPLE_PAGES) {
         collect_font_info_split(&page.frame, &mut histograms);
     }
 

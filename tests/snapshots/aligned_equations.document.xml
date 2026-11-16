@@ -15,10 +15,6 @@
         <w:pStyle w:val="Heading2"/>
       </w:pPr>
       <w:r>
-        <w:rPr>
-          <w:sz w:val="26"/>
-          <w:szCs w:val="26"/>
-        </w:rPr>
         <w:t xml:space="preserve">Simple alignment</w:t>
       </w:r>
     </w:p>
@@ -32,10 +28,6 @@
         <w:pStyle w:val="Heading2"/>
       </w:pPr>
       <w:r>
-        <w:rPr>
-          <w:sz w:val="26"/>
-          <w:szCs w:val="26"/>
-        </w:rPr>
         <w:t xml:space="preserve">Multi-line with expressions</w:t>
       </w:r>
     </w:p>
@@ -49,10 +41,6 @@
         <w:pStyle w:val="Heading2"/>
       </w:pPr>
       <w:r>
-        <w:rPr>
-          <w:sz w:val="26"/>
-          <w:szCs w:val="26"/>
-        </w:rPr>
         <w:t xml:space="preserve">Three lines</w:t>
       </w:r>
     </w:p>

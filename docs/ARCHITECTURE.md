@@ -164,7 +164,7 @@ they exercise that public API as integration tests.
 | `convert/page/units.rs`, `convert/page/style.rs` | Word-unit conversion and document-style detection from rendered frames. |
 | `convert/page/source_ast.rs`, `convert/page/hanging_indent.rs`, `convert/page/reachable.rs` | Authoritative source-AST `set`-rule parsing (including scoped hanging indents) and reachable local-source collection. |
 | `convert/page/sections.rs`, `convert/page/margin.rs` | Section changes, page settings, body/margin zones, headers, footers, and page numbering from Paged geometry. |
-| `convert/page/run_style.rs`, `convert/page/language.rs` | Per-run rendered-style overrides, redundant heading-property suppression, BCP-47 helpers, and localized CJK font names. |
+| `convert/page/run_style.rs`, `convert/page/language.rs` | Per-run rendered-style overrides, measured per-level heading sizes, redundant heading-property suppression, BCP-47 helpers, and localized CJK font names. |
 | `convert/recovery/mod.rs` | Orchestrates recovery of layout-only content HTML dropped and re-exports the recovery passes. |
 | `convert/recovery/lines.rs` | Extracts positioned rendered lines and run/x-cluster data from paged frames. |
 | `convert/recovery/deduplication.rs` | Builds the emitted-text corpus and decides which rendered lines are already represented. |

@@ -289,3 +289,61 @@ fn heading_run_props_not_redundant_with_style() {
         "italic span inside a heading must keep <w:i/>. Got:\n{styled}"
     );
 }
+
+/// The `<w:style ...>...</w:style>` block for `Heading{level}` in styles.xml.
+fn heading_style<'a>(styles_xml: &'a str, level: u8) -> &'a str {
+    let open = format!(r#"<w:style w:type="paragraph" w:styleId="Heading{level}">"#);
+    let after_open = styles_xml
+        .split(&open)
+        .nth(1)
+        .unwrap_or_else(|| panic!("Heading{level} style missing"));
+    after_open
+        .split("</w:style>")
+        .next()
+        .expect("Heading style closes")
+}
+
+#[test]
+fn issue_heading_size_equals_body() {
+    // An H2 explicitly set to 10pt, below the 11pt body size (Typst 0.15.1
+    // default): the Heading2 style must carry 20 half-points — the size
+    // Typst renders — not the body+7 fallback the size histogram used when
+    // no size larger than the body existed for that level. A heading smaller
+    // than the body is the case the histogram could never detect at all.
+    let styles_xml = fixture_styles_xml("issue_heading_size_equals_body");
+    let heading2 = heading_style(&styles_xml, 2);
+    assert!(
+        heading2.contains(r#"<w:sz w:val="20"/>"#),
+        "Heading2 style should define size 20 half-points (10pt). Got:\n{heading2}"
+    );
+}
+
+#[test]
+fn issue_headings_only_sizes() {
+    // Headings only, no body text, at Typst defaults (11pt body): H1 15.5pt,
+    // H2 13pt, and H3–H5 all 11pt — the body size itself. The Heading styles
+    // must carry the rendered sizes (31 / 26 / 22 / 22 / 22 half-points), not
+    // the body+offset fallbacks the size histogram used for the levels whose
+    // size does not exceed the body (27 / 25 / 23).
+    let styles_xml = fixture_styles_xml("issue_headings_only_sizes");
+    for (level, expected) in [(1, 31), (2, 26), (3, 22), (4, 22), (5, 22)] {
+        let style = heading_style(&styles_xml, level);
+        assert!(
+            style.contains(&format!(r#"<w:sz w:val="{expected}"/>"#)),
+            "Heading{level} style should define size {expected} half-points. Got:\n{style}"
+        );
+    }
+}
+
+#[test]
+fn issue_headings_only_h2_style_matches_rendered_size() {
+    // aligned_equations has headings and equations but no body text: the H2
+    // renders at 13pt, which is also the detected body size. The Heading2
+    // style must carry 26 half-points, not the body+7 fallback (33).
+    let styles_xml = fixture_styles_xml("aligned_equations");
+    let heading2 = heading_style(&styles_xml, 2);
+    assert!(
+        heading2.contains(r#"<w:sz w:val="26"/>"#),
+        "Heading2 style should define size 26 half-points (13pt). Got:\n{heading2}"
+    );
+}
