@@ -152,6 +152,40 @@ contextual 函数，从样式链读 `TargetElem::target`。
    - 加一个 `Target::Docx` 变体需要改上游枚举，是 breaking change，不在
      本分支的掌控内。
 
+### 修正（2026-11-16）：Html 下 pairs 里没有语义元素，步骤 2 改走 Paged
+
+TableElem 调查的结论，推翻上节“推荐选 Html”的前提：
+
+- `realize` 的 `verdict` 按 StyleChain 里的 target 查内置 show rule
+  （`styles.get(TargetElem::target)` →
+  `engine.library.rules.get(target, elem)`，typst-realize lib.rs）。
+  TABLE_RULE 只注册给 Html（typst-html rules.rs:68
+  `rules.register(Html, TABLE_RULE)`），其余三十来条 Html 规则亦然
+  （段落、标题、列表、引用、脚注、目录、数学、图片……）。
+- 所以 Target::Html 下，pairs 里的 TableElem 已被改写成 `<table>`
+  （单元格只剩 colspan/rowspan），表格问题原样保留，仍需 introspector
+  反查——即现在 M2/table_align 的做法。B 路原样写并不能解决表格问题；
+  “Html 分支产出流式内容相对容易降级”只在模板分支层面成立，在 pairs
+  层面 Html 意味着语义已被改写。
+- 步骤 2 改走 Target::Paged：Paged 下没有任何元素的内置规则，
+  TableElem 等保持语义，`synthesize` 照常跑（`elem.grid` 已解析，含
+  entries/headers/footer/gutter 展开）。`compile` 对 Paged 不要求
+  `Feature::Html`、不发 warning（typst lib.rs `compile_impl` 的
+  match）；`PagedDocument` 本身就是 `Target::Paged` 的 `Output`，
+  公共 API 走得通。
+- 代价（开工时逐项验证）：IR 必须原生处理全部三十来种语义元素
+  （列表 pattern、标题编号、脚注收集、目录、引用标记、参考文献条目
+  渲染、数学、图片……）；参考文献条目渲染从“读 HTML”变成自己做；
+  `html.elem` 原生内容无 Paged 规则，留在 pairs 里要走 C1 降级；模板
+  走打印分支（对 DOCX 反而是对的分支——Word 是分页文档，box/stroke/
+  绝对定位正是 C2 要表示的东西）。
+- 仍需 PagedDocument 作伴生输入（两设计皆然）：绝对几何（列宽、图
+  尺寸、边区）、页码（M8 缓存文本、目录页码）、running headers、逐页
+  脚注编号——这些值只在布局后存在，realize 本身给不出。
+- 入口决策：步骤 2 先做一个 Paged 下 realize 的探针（打一份文档的
+  pairs，看元素种类与 StyleChain 是否如预期），再定 IR 形态；不要
+  直接按原草图的 `Target::Html` 开工。
+
 ## 最小代码草图：拿到 (Content, StyleChain)
 
 下面是第三方 crate 内可行的最小形态。关键点：`Output::create` 内部有
@@ -171,7 +205,7 @@ pub struct DocxDocument {
 
 impl Output for DocxDocument {
     fn target() -> Target {
-        Target::Html // 流式语义；见上节代价
+        Target::Paged // 见上节修正：Html 下 realize 会改写语义元素
     }
 
     fn create(
@@ -344,8 +378,8 @@ flowchart LR
 - `typort-ooxml`（typed IR + writer）与 `typort-math`（OMML）不用动；
   要换的是 typort-core 的输入形态与三路事实源，正好是 PLAN 步骤 2
   的范围。
-- `Target::Html` 的 warning 与 `html.elem` 的降级处理是已知代价，
-  都在文档里记下了，不是未知风险。
+- target 改走 Paged（见上节修正）：不要求 `Feature::Html`，没有 Html
+  warning；代价是 IR 必须原生处理全部语义元素，参考文献条目渲染自己做。
 
 先做的前三步（实现代理的切口）：
 
