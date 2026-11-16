@@ -344,6 +344,10 @@ S5 与“警告”的关系：C1 不对“失去动态性”警告——C1 的�
 - `#grid` → `w:tbl`（无边框、`w:tblLayout fixed`），列宽取 track sizing
   （复用 `table_width.rs` 的 fr/rel/auto 换算逻辑），单元格按文档顺序填入，
   嵌套 grid → 嵌套表。
+- 边框（用户定，2026-11-16）：grid 默认无边框，转换出的表必须默认边框无颜色。
+  关键点：writer 恒发 `w:tblBorders`，`borders: None` 时回退到 0.5pt 全格线——
+  留空等于有边框。所以 grid 转换必须显式置 `borders = Some(TableBorders::default())`
+  （六边全 `w:val="nil"`），不能留 None。grid 带 `stroke` 时才按 stroke 映射单线边框。
 - 语义说明（诚实项）：grid 是布局，表也是布局，但 Word 会把表当作表结构；
   这是一次**表示层面的平移**，不是语义提升。缓解：无表头行、无边框、
   不写 `w:tblHeader`，并在文档里记为已知平移。替代方案（制表位拼回）是
