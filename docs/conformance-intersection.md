@@ -53,14 +53,14 @@ A 级（原生语义对象）最优先：标题、脚注、OMML、表格、编�
 
 | 编号 | Typst 功能 | 现状 | 证据 | Fixture |
 | --- | --- | --- | --- | --- |
-| M1 | enum 编号样式（`"a)"`、`"i."`、`"1.1"` 等） | 丢弃。只读 `<ol start>`，其余一律 decimal `"%1."` | 实测证实：`numbering.xml` 里无 `lowerLetter`/`lowerRoman`，只有 decimal/bullet/中文五级；代码：`convert/lists.rs`（只读 `start`）；`writer/numbering.rs`（abstractNum 1 只有 decimal） | `conf-enum-numbering.typ` |
-| M2 | 单元格背景（`table(fill:)` / `table.cell(fill:)`） | 缺失。`TableCell` 无 shading 字段；`w:shd` 只在 CodeBlock 样式里写出，单元格不写 | 实测证实：输出 `w:shd` 出现 0 次，表本身在；代码：`typort-ooxml/src/document.rs`（`TableCell` 字段） | `conf-cell-fill.typ` |
+| M1 | enum 编号样式（`"a)"`、`"i."`、`"1.1"` 等） | 已修复（batch 6，0feda31）：enum pattern 映射为 numFmt + lvlText override，每 ilvl 一个 `w:lvlOverride`（ilvl 0 的 startOverride 并进同一元素）；无 OOXML 等价物的计数系统回退 decimal | 实测证实：`numbering.xml` 里无 `lowerLetter`/`lowerRoman`，只有 decimal/bullet/中文五级；代码：`convert/lists.rs`（只读 `start`）；`writer/numbering.rs`（abstractNum 1 只有 decimal） | `conf-enum-numbering.typ` |
+| M2 | 单元格背景（`table(fill:)` / `table.cell(fill:)`） | 已修复（batch 6，0feda31）：`TableCell.shading` 写单元格 `w:shd`（solid 色；渐变/平铺无单元格级等价物，不写） | 实测证实：输出 `w:shd` 出现 0 次，表本身在；代码：`typort-ooxml/src/document.rs`（`TableCell` 字段） | `conf-cell-fill.typ` |
 | M3 | 浮动图形（`#place(..., float: true)`） | 缺失。writer 只有 `wp:inline`，无 `wp:anchor`；实测连 `wp:inline` 都没有，内容只靠 recovery 以纯文本存活 | 实测证实：输出无 `wp:anchor`、无 `wp:inline`，“Floated callout”文本在；代码：`writer/image.rs`（仅 `wp:inline`）；`convert/` 全仓无 `PlaceElem` 处理 | `conf-place-float.typ` |
 | M4 | 网格布局（`#grid`） | 缺失（降级为 B 级 tab 恢复）。不转表；文本以制表位拼回 | 实测证实：输出无 `w:tbl`、有 `w:tab`，6 个单元格文本全在；代码：`convert/` 全仓无 `GridElem` 处理 | `conf-grid.typ` |
 | M5 | 图形与简单形状（`rect`/`line`/`circle` 等） | 缺失。无 DrawingML shapes；实测输出无任何 media part，形状本身丢弃，只有 rect 里的文字以纯文本存活；只有放进 figure 的画布才栅格化为 PNG | 实测证实：输出无 `a:prstGeom`、无 media part，“Text inside a box”文本在；代码：`convert/` 全仓无 `RectElem`/`CircleElem`/`LineElem` 处理；`convert/image.rs`（`extract_figure_rasters`，只处理 figure 画布） | `conf-shapes.typ` |
 | M6 | 分节（栏数/边距变化） | 缺失。只检测页尺寸变化；栏数变化不产生 section；实测整篇只有一个 body 级 `sectPr`，带最后的 `<w:cols w:num="2"/>`——前半篇（columns: 1）也被渲染成两栏。`SectionBreakType::Continuous`/`EvenPage`/`OddPage` 在 IR 里存在但 convert 从不构造 | 实测证实：输出恰一个 `sectPr`，含 `w:cols num=2`；代码：`convert/page/sections.rs`（只比较宽高，`columns: None`） | `conf-section-columns.typ` |
 | M7 | 首页不同 / 奇偶页不同页眉页脚 | 缺失。IR 只有一对 header/footer；只读第一页边区；无 `w:titlePg`；实测唯一的 header 就是首页那个（“First-page header”），running header 丢了 | 实测证实：只一个 `word/header1.xml`，内容为 “First-page header”，`w:headerReference w:type="default"`，无 `titlePg`；代码：`typort-ooxml/src/document.rs`（`header`/`footer` 各一个 `Option`）；`convert/page/margin.rs`（只读 `pages()[0]`） | `conf-first-page-header.typ` |
-| M8 | 页码交叉引用（PAGEREF） | 缺失。`counter(page).at(label)` 无对应域；实测写出字面文本 “The introduction starts on page 1.”；fields 只有 REF/HYPERLINK/TOC/PAGE | 实测证实：输出无 PAGEREF、无 REF；代码：`writer/fields.rs`（无 PAGEREF） | `conf-pageref.typ` |
+| M8 | 页码交叉引用（PAGEREF） | 已修复（batch 6，0feda31）：`counter(page).at(<label>)` 发 PAGEREF 域，缓存文本为渲染页码；非 page counter 仍走纯文本 | 实测证实：输出无 PAGEREF、无 REF；代码：`writer/fields.rs`（无 PAGEREF） | `conf-pageref.typ` |
 | M9 | 上划线（`#overline`） | 缺失且静默错配。映射为 underline（Word 的 `w:rPr` 本无 overline） | 实测证实：overline 文本与 underline 文本的 run 属性完全相同（`<w:u w:val="single"/>`）；代码：`convert/inline_walk.rs::apply_inline_format`（`"underline" \| "overline" => run.underline = true`） | `conf-overline.typ` |
 
 ## 有损
@@ -103,15 +103,15 @@ A 级（原生语义对象）最优先：标题、脚注、OMML、表格、编�
 
 1. **L1 嵌套列表级定义**——在 abstractNum 1/2 里补 ilvl 1–8 的 `w:lvl` 定义。
    小改动，嵌套列表常见。
-2. **M1 enum 编号样式**——从 HTML/AST 读 `EnumElem` 的 numbering，按列表生成
+2. **M1 enum 编号样式**（已修复，batch 6，0feda31）——从 HTML/AST 读 `EnumElem` 的 numbering，按列表生成
    对应的 `numFmt`/`lvlText`（每列表一个 abstractNum 或 `lvlOverride`）。
-3. **M2 单元格底色**——`TableCell` 加 shading 字段，写 `w:shd`。学术表格常用。
+3. **M2 单元格底色**（已修复，batch 6，0feda31）——`TableCell` 加 shading 字段，写 `w:shd`。学术表格常用。
 4. **L5 高亮颜色**——把声明的 fill 透传，不再写死 yellow（#24）。
 5. **M9 上划线**——不要静默改写成 underline；改为保留文本 + 降级报告（E 级处理），
    直到有明确的 OOXML 表达。
 6. **L2 标题编号**——把标题编号接到 Word 编号（abstractNum 3 已存在，只差链接），
    或明确立为“字面文本”并记入文档。需先定设计。
-7. **M8 PAGEREF**——给 `counter(page).at(label)` 加 PAGEREF 域。
+7. **M8 PAGEREF**（已修复，batch 6，0feda31）——给 `counter(page).at(label)` 加 PAGEREF 域。
 8. **L3 页眉页脚格式**——边区提取时保留每片段的 run 样式（字体/字号/颜色/粗体），
    多行分段。
 9. **M6 分节（栏数/边距变化）**——`detect_section_breaks` 增加栏数与边距变化检测，
