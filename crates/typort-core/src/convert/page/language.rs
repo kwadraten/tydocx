@@ -151,6 +151,40 @@ pub fn localize_cjk_fonts(world: &dyn World, doc: &mut Document) {
     localize_cjk_font_names(doc, &name_map);
 }
 
+/// Canonicalize font family names against the font book: Typst stores
+/// `FontFamily` lowercased (`dejavu sans`), while Word shows the font's
+/// canonical typographic family (`DejaVu Sans`). The legacy path got the
+/// canonical name from Paged `font.info()`; the IR path reads the chain,
+/// so it canonicalizes here, after lowering. Families the book does not
+/// know stay as-is.
+pub fn canonicalize_font_names(world: &dyn World, doc: &mut Document) {
+    let mut name_map: HashMap<String, String> = HashMap::new();
+    for (family, _) in world.book().families() {
+        name_map.insert(family.to_lowercase(), family.to_string());
+    }
+    if name_map.is_empty() {
+        return;
+    }
+    if let Some(canonical) = name_map.get(&doc.style.body_font_ascii.to_lowercase()) {
+        doc.style.body_font_ascii.clone_from(canonical);
+    }
+    if let Some(canonical) = name_map.get(&doc.style.body_font_east_asia.to_lowercase()) {
+        doc.style.body_font_east_asia.clone_from(canonical);
+    }
+    doc.for_each_run_mut(&mut |run| {
+        if let Some(family) = &run.font_ascii
+            && let Some(canonical) = name_map.get(&family.to_lowercase())
+        {
+            run.font_ascii = Some(canonical.clone());
+        }
+        if let Some(family) = &run.font_east_asia
+            && let Some(canonical) = name_map.get(&family.to_lowercase())
+        {
+            run.font_east_asia = Some(canonical.clone());
+        }
+    });
+}
+
 /// The distinct East-Asian font family names currently in `doc`: the body default
 /// plus every per-run `font_east_asia` override (body, tables, bibliography,
 /// hyperlinks, footnotes).

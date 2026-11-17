@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use typort_ooxml::document::{Document, DocumentStyle, FootnoteFormat, InlineElement};
-use typst::layout::{Frame, FrameItem};
+use typst::layout::{Frame, FrameItem, Point};
 use typst_layout::PagedDocument;
 
 use super::body_size::{BODY_SIZE_SAMPLE_PAGES, DEFAULT_BODY_SIZE_HALF_PT};
@@ -713,7 +713,28 @@ fn collect_y_and_size(frame: &Frame, items: &mut Vec<(f64, u32)>) {
 
 /// Recursively collect font info split by script (ASCII vs CJK), sizes, and y-positions.
 fn collect_font_info_split(frame: &Frame, histograms: &mut FontInfoHistograms) {
-    super::frames::visit_frame_items(frame, false, &mut |position, item| {
+    collect_font_info_at(frame, Point::zero(), histograms);
+}
+
+/// Recursive font-histogram walk, skipping footnote entry groups:
+/// footnote text renders at 0.85em, and in a document whose footnote
+/// text outnumbers its body text the body-size mode lands on the
+/// footnote size (`footnote_in_table`, `formatted_footnote`: Normal came
+/// out 9.5pt for an 11pt body, and the legacy path then had to re-add
+/// the body size onto every run). A group is a footnote entry when it
+/// has a parent and directly contains a `Tag::Start("entry")` — the same
+/// predicate the realize patch uses; outline entries carry an `"entry"`
+/// tag too, but their groups have no parent.
+fn collect_font_info_at(frame: &Frame, offset: Point, histograms: &mut FontInfoHistograms) {
+    for (position, item) in frame.items() {
+        let absolute = Point::new(offset.x + position.x, offset.y + position.y);
+        if let FrameItem::Group(group) = item {
+            if super::frames::is_footnote_entry_group(group) {
+                continue;
+            }
+            collect_font_info_at(&group.frame, absolute, histograms);
+            continue;
+        }
         if let FrameItem::Text(text_item) = item {
             let family = text_item.font.info().family.clone();
             let size_half_pt = pt_to_half_pt(text_item.size.to_pt());
@@ -721,7 +742,7 @@ fn collect_font_info_split(frame: &Frame, histograms: &mut FontInfoHistograms) {
             *histograms.size_counts.entry(size_half_pt).or_insert(0) += glyph_count;
             histograms
                 .y_positions
-                .push((position.y.to_pt(), size_half_pt));
+                .push((absolute.y.to_pt(), size_half_pt));
             let cap_h = text_item.font.metrics().cap_height.get();
             histograms.body_cap_heights.push(cap_h);
 
@@ -747,7 +768,7 @@ fn collect_font_info_split(frame: &Frame, histograms: &mut FontInfoHistograms) {
                 *histograms.ascii_fonts.entry(family).or_insert(0) += glyph_count;
             }
         }
-    });
+    }
 }
 
 #[cfg(test)]

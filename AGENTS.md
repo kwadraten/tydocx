@@ -24,9 +24,10 @@ should convert to an editable `.docx`. For how it works, read
    hardcoded for a document we happened to test with. Ask "does this work for
    *any* Typst document?", not "does this work for my fixture?".
 
-3. **Semantic-first, geometry-as-fallback.** Prefer HTML semantics + the
+3. **Semantic-first, geometry-as-fallback.** Prefer realize pairs (element
+   identity + the `StyleChain` that applies to each element) + the
    introspector (which preserve "this is a heading / footnote / equation"). Fall
-   back to Paged geometry only for things HTML cannot express. Geometry inference
+   back to Paged geometry only for things the pairs cannot express. Geometry inference
    is the lossy path we exist to avoid — keep it contained.
 
 4. **Before declaring something impossible, check all three sources.** If Typst
@@ -42,13 +43,17 @@ should convert to an editable `.docx`. For how it works, read
 
 ## Architecture in one paragraph
 
-typort compiles the same source to **`HtmlDocument`** (semantics + document order
-+ introspector) *and* **`PagedDocument`** (fonts, geometry, images, layout-only
-content), and additionally **re-parses the source AST** for authoritative `set`
-rules. HTML is the skeleton; Paged paints and patches it; the AST overrides both
-when the author declared a value. This is **three** sources, not two — don't let
-anyone "simplify" it back to a dual-compilation description. Full detail in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+typort compiles the same source to **realize pairs** (`typst-realize`,
+`Target::Paged`: element identity + document order + the `StyleChain` that
+applies to each element) *and* a companion **`PagedDocument`** (footnote entry
+bodies, image display sizes, page-level facts the pairs cannot carry), and
+additionally **re-parses the source AST** for authoritative `set` rules. The
+realize pairs are the skeleton and the paint; Paged supplies only what the
+pairs cannot; the AST overrides both when the author declared a value. The
+legacy `HtmlDocument` tag-walker path is kept as an explicit fallback
+(`convert_legacy`), not the conversion path. This is **three** sources, not
+two — don't let anyone "simplify" it back to a dual-compilation description.
+Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Rust conventions
 

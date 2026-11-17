@@ -234,6 +234,7 @@ pub struct Run {
     pub monospace: bool,
     pub underline: bool,
     pub strikethrough: bool,
+    pub overline: bool,
     /// Highlight color name (e.g. "yellow", "green", "cyan").
     /// `Some(...)` activates highlighting; `None` means no highlight.
     pub highlight_color: Option<String>,
@@ -272,6 +273,7 @@ impl Run {
             monospace: false,
             underline: false,
             strikethrough: false,
+            overline: false,
             highlight_color: None,
             shading: None,
             smallcaps: false,
@@ -309,6 +311,7 @@ impl Run {
             monospace,
             underline,
             strikethrough,
+            overline,
             highlight_color,
             shading,
             smallcaps,
@@ -325,6 +328,7 @@ impl Run {
             monospace: *monospace,
             underline: *underline,
             strikethrough: *strikethrough,
+            overline: *overline,
             highlight_color: highlight_color.as_deref(),
             shading: shading.as_deref(),
             smallcaps: *smallcaps,
@@ -336,7 +340,7 @@ impl Run {
     }
 }
 
-/// The complete set of `Run` fields the writer serializes into `<w:rPr>`.
+/// The complete set of `Run` fields distinguishing run formatting.
 ///
 /// Single source of truth shared by `writer::run::write_run` (has-rPr gate via
 /// `is_plain`) and run coalescing (merge-eligibility via `PartialEq`).
@@ -355,6 +359,7 @@ pub struct RunFormat<'a> {
     monospace: bool,
     underline: bool,
     strikethrough: bool,
+    overline: bool,
     highlight_color: Option<&'a str>,
     shading: Option<&'a str>,
     smallcaps: bool,
@@ -1291,6 +1296,11 @@ mod tests {
             {
                 let mut r = Run::new("x");
                 r.strikethrough = true;
+                r
+            },
+            {
+                let mut r = Run::new("x");
+                r.overline = true;
                 r
             },
             {

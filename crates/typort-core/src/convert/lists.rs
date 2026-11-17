@@ -91,7 +91,7 @@ pub struct EnumNumbering {
 /// triangular bullet, en-dash, cycling by depth. The field default is
 /// materialized, so `as_option` is always `Some` — compare the value
 /// against this instead of testing presence.
-fn default_list_marker() -> ListMarker {
+pub(super) fn default_list_marker() -> ListMarker {
     ListMarker::Content(vec![
         TextElem::packed('\u{2022}'),
         TextElem::packed('\u{2023}'),

@@ -15,6 +15,20 @@ pub fn fixture_document(fixture: &str) -> typort_ooxml::Document {
     fixture_document_with_font_dirs(fixture, &[])
 }
 
+/// Convert `tests/fixtures/<fixture>.typ` through the LEGACY path
+/// (`convert_legacy`) and return the public document model.
+///
+/// Retargeted tests use this: assertions that pin legacy-only behavior
+/// (Paged recovery, bibliography entries, figure rasterization, section
+/// breaks, `#line` rules) run against the path that implements it, until
+/// the IR path covers the registered gap. See `docs/fallback-registry.md`.
+pub fn fixture_document_legacy(fixture: &str) -> typort_ooxml::Document {
+    let world = typort_core::TyportWorld::new(&fixture_path(fixture)).unwrap();
+    typort_core::convert::convert_legacy(&world, &typort_core::ConvertOptions::default())
+        .unwrap()
+        .document
+}
+
 /// Convert a fixture and return both its world and public document model.
 pub fn fixture_document_with_world(
     fixture: &str,
@@ -111,6 +125,12 @@ pub fn fixture_package(fixture: &str) -> FixturePackage {
     fixture_package_from_document(&fixture_document(fixture))
 }
 
+/// Convert `tests/fixtures/<fixture>.typ` through the LEGACY path and
+/// return all package parts (see `fixture_document_legacy`).
+pub fn fixture_package_legacy(fixture: &str) -> FixturePackage {
+    fixture_package_from_document(&fixture_document_legacy(fixture))
+}
+
 /// Convert a fixture with explicit options and return all package parts.
 pub fn fixture_package_with_options(
     fixture: &str,
@@ -159,6 +179,14 @@ pub fn fixture_dir(path: impl AsRef<Path>) -> PathBuf {
 /// Convert `tests/fixtures/<fixture>.typ` and return `word/document.xml`.
 pub fn fixture_doc_xml(fixture: &str) -> String {
     fixture_part(fixture, "word/document.xml")
+}
+
+/// Convert `tests/fixtures/<fixture>.typ` through the LEGACY path and
+/// return `word/document.xml` (see `fixture_document_legacy`).
+pub fn fixture_doc_xml_legacy(fixture: &str) -> String {
+    fixture_package_legacy(fixture)
+        .part_text("word/document.xml")
+        .to_owned()
 }
 
 /// Convert `tests/fixtures/<fixture>.typ` and return `word/styles.xml`.

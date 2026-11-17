@@ -2,7 +2,8 @@
 
 use crate::common;
 use crate::common::{
-    fixture_doc_xml, fixture_document, fixture_package, fixture_package_from_document,
+    fixture_doc_xml, fixture_doc_xml_legacy, fixture_document, fixture_document_legacy,
+    fixture_package, fixture_package_from_document,
 };
 
 #[test]
@@ -468,7 +469,9 @@ fn grid_content_recovered_in_output() {
 
 #[test]
 fn grid_multi_column_has_tab_stops() {
-    let doc_xml = fixture_doc_xml("grid_test");
+    // Retargeted to the legacy path (step 2): the tab assertions pin the superseded M4 representation; grids are tables on the IR path.
+    // See docs/fallback-registry.md.
+    let doc_xml = fixture_doc_xml_legacy("grid_test");
 
     // Multi-column grid lines should produce tab stops in the XML
     assert!(
@@ -479,9 +482,11 @@ fn grid_multi_column_has_tab_stops() {
 
 #[test]
 fn grid_document_model_has_tab_inlines() {
+    // Retargeted to the legacy path (step 2): the tab assertions pin the superseded M4 representation; grids are tables on the IR path.
+    // See docs/fallback-registry.md.
     use typort_ooxml::document::{BlockElement, InlineElement};
 
-    let doc = fixture_document("grid_test");
+    let doc = fixture_document_legacy("grid_test");
 
     // Find paragraphs with Tab inline elements (multi-column grid lines)
     let has_tab = doc.body.elements.iter().any(|e| {
@@ -627,7 +632,9 @@ fn issue_caption_not_duplicated_by_recovery() {
 
 #[test]
 fn issue_rotate_content_recovered() {
-    let xml = fixture_doc_xml("issue_rotate_content");
+    // Retargeted to the legacy path (step 2): #rotate() is only recoverable from Paged.
+    // See docs/fallback-registry.md.
+    let xml = fixture_doc_xml_legacy("issue_rotate_content");
     assert!(
         xml.contains("This text is normal."),
         "normal text before rotate should be present"
@@ -644,7 +651,9 @@ fn issue_rotate_content_recovered() {
 
 #[test]
 fn edge_bordered_blocks_text_preserved() {
-    let xml = fixture_doc_xml("edge_bordered_blocks");
+    // Retargeted to the legacy path (step 2): #rect() text is only recoverable from Paged (the #block assertions pass on the IR path).
+    // See docs/fallback-registry.md.
+    let xml = fixture_doc_xml_legacy("edge_bordered_blocks");
     assert!(
         xml.contains("full border"),
         "bordered block text should be present"

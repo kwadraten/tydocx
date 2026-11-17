@@ -21,6 +21,7 @@ mod inline_walk;
 mod lists;
 pub mod page;
 mod postprocess;
+pub mod realize;
 mod recovery;
 mod smallcaps;
 mod source;
@@ -29,6 +30,8 @@ mod table_align;
 mod table_width;
 mod tables;
 mod text_norm;
+
+pub use realize::{convert_ir, export_ir};
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -151,7 +154,23 @@ pub fn convert(
     world: &TyportWorld,
     options: &ConvertOptions,
 ) -> Result<ConvertOutcome, Vec<SourceDiagnostic>> {
-    // 1. Compile both targets.
+    // The realize path (step 2) is the conversion path. The legacy
+    // tag-walker `export` stays as the explicitly-injected fallback and
+    // comparison baseline (see docs/fallback-registry.md).
+    realize::convert_ir(world, options)
+}
+
+/// The legacy tag-walker path, as a full pipeline: compile both targets
+/// and run `export`. Kept as the explicitly-injected fallback and as the
+/// comparison baseline for the realize path's equivalence tests.
+///
+/// # Errors
+///
+/// Returns the Typst compile diagnostics when the source fails to compile.
+pub fn convert_legacy(
+    world: &TyportWorld,
+    options: &ConvertOptions,
+) -> Result<ConvertOutcome, Vec<SourceDiagnostic>> {
     let (html_doc, paged_doc) = compile_both_targets(world)?;
     Ok(export(&html_doc, paged_doc.as_ref(), world, options))
 }
@@ -376,7 +395,8 @@ fn run_post_passes(
     extract_document_metadata(html_doc, doc);
 
     // Extract bibliography sources for Word citation data store.
-    doc.citation_sources = bibliography::extract_bibliography_sources(html_doc, world);
+    doc.citation_sources =
+        bibliography::extract_bibliography_sources(&**html_doc.introspector(), world);
 
     // Suppress indent after headings and apply bibliography hanging indent.
     apply_paragraph_formatting(doc);
@@ -460,6 +480,10 @@ mod tests {
         TyportWorld::new(Path::new("../../tests/fixtures/hello.typ")).unwrap()
     }
 
+    /// Byte-equality oracle for the two conversion paths on `hello`: it
+    /// only holds because `hello` is in the `ir_path` IDENTICAL set. If
+    /// the paths ever diverge on `hello`, this is the canary — see
+    /// `crates/typort-cli/tests/integration/ir_path.rs`.
     #[test]
     fn export_matches_convert() {
         let world = hello_world();

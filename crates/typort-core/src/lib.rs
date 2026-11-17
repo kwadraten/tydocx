@@ -7,7 +7,7 @@ pub mod diag;
 pub mod world;
 
 pub use compat::{CompatMode, ConvertOptions, ConvertOutcome, Degradation, DegradationAction};
-pub use convert::{convert, export};
+pub use convert::{convert, convert_ir, convert_legacy, export, export_ir};
 pub use world::{TyportWorld, compile};
 
 #[cfg(test)]
