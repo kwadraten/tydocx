@@ -136,6 +136,14 @@ pub fn run_from_styles(
         }
     }
 
+    apply_opentype_props(&mut run, styles);
+
+    run
+}
+
+/// `text(ligatures:/number-type:/number-width:/features:/baseline:)` → the
+/// run's OOXML OpenType properties and baseline position.
+fn apply_opentype_props(run: &mut Run, styles: StyleChain<'_>) {
     if !styles.get(TextElem::ligatures) {
         run.ligatures = Some("none");
     } else if styles.get(TextElem::discretionary_ligatures) {
@@ -158,17 +166,18 @@ pub fn run_from_styles(
             run.smallcaps = true;
         }
     }
-    let baseline = styles.get(TextElem::baseline);
+    // `baseline` is a ghost property: `#set text(baseline:)` reaches the
+    // chain here, but `text(baseline:)` on a call is consumed during
+    // realization — `apply_baseline_shifts_from_source` recovers that form.
+    let baseline = styles.resolve(TextElem::baseline);
     #[allow(
         clippy::cast_possible_truncation,
         reason = "baseline shifts stay far below i32 range"
     )]
-    let baseline_half_pt = ((baseline.abs.to_pt() + baseline.em.get() * size_pt) * 2.0).round() as i32;
+    let baseline_half_pt = (baseline.to_pt() * 2.0).round() as i32;
     if baseline_half_pt != 0 {
         run.position_half_pt = Some(baseline_half_pt);
     }
-
-    run
 }
 
 pub fn contains_cjk(text: &str) -> bool {

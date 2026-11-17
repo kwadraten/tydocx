@@ -148,8 +148,6 @@ pub struct IrParagraph {
     pub spacing_before: Option<u32>,
     /// `w:spacing w:after` override (twips) — `block(above:|below:|spacing:)`.
     pub spacing_after: Option<u32>,
-    /// `w:keepNext` — `block(sticky: true)` keeps with the next paragraph.
-    pub keep_next: bool,
     pub bookmark: Option<String>,
 }
 

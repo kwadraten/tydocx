@@ -135,6 +135,27 @@ fn write_line_break<W: Write>(writer: &mut Writer<W>) -> io::Result<()> {
     Ok(())
 }
 
+/// OpenType character properties (`w:ligatures`, `w:numForm`,
+/// `w:numberSpacing`) — `set text(ligatures:/number-type:/number-width:)`.
+fn write_opentype_props<W: Write>(rpr: &mut Writer<W>, run: &Run) -> io::Result<()> {
+    if let Some(ligatures) = run.ligatures {
+        rpr.create_element("w:ligatures")
+            .with_attribute(("w:val", ligatures))
+            .write_empty()?;
+    }
+    if let Some(num_form) = run.num_form {
+        rpr.create_element("w:numForm")
+            .with_attribute(("w:val", num_form))
+            .write_empty()?;
+    }
+    if let Some(number_spacing) = run.number_spacing {
+        rpr.create_element("w:numberSpacing")
+            .with_attribute(("w:val", number_spacing))
+            .write_empty()?;
+    }
+    Ok(())
+}
+
 pub(super) fn write_run<W: Write>(
     writer: &mut Writer<W>,
     run: &Run,
@@ -232,21 +253,7 @@ pub(super) fn write_run<W: Write>(
                         .with_attribute(("w:val", "subscript"))
                         .write_empty()?;
                 }
-                if let Some(ligatures) = run.ligatures {
-                    rpr.create_element("w:ligatures")
-                        .with_attribute(("w:val", ligatures))
-                        .write_empty()?;
-                }
-                if let Some(num_form) = run.num_form {
-                    rpr.create_element("w:numForm")
-                        .with_attribute(("w:val", num_form))
-                        .write_empty()?;
-                }
-                if let Some(number_spacing) = run.number_spacing {
-                    rpr.create_element("w:numberSpacing")
-                        .with_attribute(("w:val", number_spacing))
-                        .write_empty()?;
-                }
+                write_opentype_props(rpr, run)?;
                 Ok(())
             })?;
         }

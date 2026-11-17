@@ -19,9 +19,9 @@ use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::grid::Celled;
 use typst_library::layout::grid::resolve::{Cell, CellGrid, Entry, Line};
 use typst_library::layout::{
-    Abs, Angle, BlockBody, BlockElem, ColbreakElem, ColumnsElem, GridElem, HAlignment,
-    HideElem, Length, Margin, MoveElem, PadElem, PageElem, PagebreakElem, Parity, PlaceElem,
-    Rel, RotateElem, ScaleElem, SkewElem, Spacing, VAlignment, VElem,
+    Abs, Angle, BlockBody, BlockElem, ColbreakElem, ColumnsElem, GridElem, HAlignment, HideElem,
+    Length, Margin, MoveElem, PadElem, PageElem, PagebreakElem, Parity, PlaceElem, Rel, RotateElem,
+    ScaleElem, SkewElem, Spacing, VAlignment, VElem,
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
@@ -348,6 +348,13 @@ impl Collector<'_> {
             if let Some(v) = content.to_packed::<VElem>() {
                 if let Some(twips) = spacing_twips(&v.amount, styles) {
                     pending_vspace = Some(pending_vspace.map_or(twips, |p| p.max(twips)));
+                } else {
+                    super::inline::report_spacing_gap(
+                        &v.amount,
+                        false,
+                        content.span(),
+                        &mut self.degradations,
+                    );
                 }
                 i += 1;
                 continue;
@@ -479,6 +486,7 @@ impl Collector<'_> {
             if let Some(body) = block_body_content(block, styles) {
                 let mut blocks = self.collect_content_blocks(body, styles, engine, locator)?;
                 apply_block_props(&mut blocks, block, styles);
+                report_block_aspects(block, styles, content.span(), &mut self.degradations);
                 return Ok(blocks);
             }
             return self.collect_layouter_block(content, styles, engine, locator);
@@ -627,37 +635,15 @@ impl Collector<'_> {
                     locator,
                 )?);
                 i += 1;
-            } else if child.to_packed::<ListItem>().is_some() {
+            } else if let Some((blocks, next)) =
+                self.collect_bare_items(&children, i, list_ctx, styles, engine, locator)?
+            {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
-                let (run, next) = take_item_run(&children, i, true);
-                out.push(self.collect_bare_list(&run, list_ctx, styles, engine, locator)?);
+                out.extend(blocks);
                 i = next;
-            } else if child.to_packed::<EnumItem>().is_some() {
+            } else if let Some(shape) = self.collect_shape(child, styles, engine, locator)? {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
-                let (run, next) = take_item_run(&children, i, false);
-                out.push(self.collect_bare_enum(&run, list_ctx, styles, engine, locator)?);
-                i = next;
-            } else if child.to_packed::<TermItem>().is_some() {
-                flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
-                let (run, next, wide) = take_term_item_run(&children, i);
-                out.extend(self.collect_bare_terms(&run, !wide, styles, engine, locator)?);
-                i = next;
-            } else if let Some((kind, shape_body)) = shape_parts(child) {
-                flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
-                let body = match shape_body {
-                    Some(content) => {
-                        self.collect_content_blocks(&content, styles, engine, locator)?
-                    }
-                    None => Vec::new(),
-                };
-                out.push(IrBlock::Shape {
-                    kind,
-                    span: {
-                        let span = child.span();
-                        span.id().map(|_| span)
-                    },
-                    body,
-                });
+                out.push(shape);
                 i += 1;
             } else if let Some(line) = child.to_packed::<LineElem>() {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
@@ -666,6 +652,13 @@ impl Collector<'_> {
             } else if let Some(v) = child.to_packed::<VElem>() {
                 if let Some(twips) = spacing_twips(&v.amount, styles) {
                     pending_vspace = Some(pending_vspace.map_or(twips, |p| p.max(twips)));
+                } else {
+                    super::inline::report_spacing_gap(
+                        &v.amount,
+                        false,
+                        child.span(),
+                        &mut self.degradations,
+                    );
                 }
                 i += 1;
             } else if let Some(pad) = child.to_packed::<PadElem>() {
@@ -714,6 +707,40 @@ impl Collector<'_> {
             para.spacing_before = Some(para.spacing_before.map_or(twips, |s| s.max(twips)));
         }
         Ok(out)
+    }
+
+    fn collect_bare_items(
+        &mut self,
+        children: &[&Content],
+        i: usize,
+        list_ctx: &ListCtx,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Option<(Vec<IrBlock>, usize)>> {
+        let child = children[i];
+        if child.to_packed::<ListItem>().is_some() {
+            let (run, next) = take_item_run(children, i, true);
+            return Ok(Some((
+                vec![self.collect_bare_list(&run, list_ctx, styles, engine, locator)?],
+                next,
+            )));
+        }
+        if child.to_packed::<EnumItem>().is_some() {
+            let (run, next) = take_item_run(children, i, false);
+            return Ok(Some((
+                vec![self.collect_bare_enum(&run, list_ctx, styles, engine, locator)?],
+                next,
+            )));
+        }
+        if child.to_packed::<TermItem>().is_some() {
+            let (run, next, wide) = take_term_item_run(children, i);
+            return Ok(Some((
+                self.collect_bare_terms(&run, !wide, styles, engine, locator)?,
+                next,
+            )));
+        }
+        Ok(None)
     }
 
     fn collect_bare_list(
@@ -836,6 +863,45 @@ impl Collector<'_> {
         }))
     }
 
+    fn collect_shape(
+        &mut self,
+        child: &Content,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Option<IrBlock>> {
+        let Some((kind, shape_body)) = shape_parts(child) else {
+            return Ok(None);
+        };
+        let body = match shape_body {
+            Some(content) => self.collect_content_blocks(&content, styles, engine, locator)?,
+            None => Vec::new(),
+        };
+        let span = child.span();
+        Ok(Some(IrBlock::Shape {
+            kind,
+            span: span.id().map(|_| span),
+            body,
+        }))
+    }
+
+    fn collect_outline_elem(
+        &mut self,
+        outline: &OutlineElem,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<IrBlock> {
+        let title = self.outline_title(outline, styles, engine, locator)?;
+        Ok(IrBlock::Outline {
+            title,
+            entries: Vec::new(),
+            depth: outline_depth(outline),
+            custom_target: outline_custom_target(outline, styles),
+            custom_indent: outline_custom_indent(outline),
+        })
+    }
+
     fn collect_content_element(
         &mut self,
         child: &Content,
@@ -882,14 +948,9 @@ impl Collector<'_> {
             return self.collect_quote(quote, styles, engine, locator);
         }
         if let Some(outline) = child.to_packed::<OutlineElem>() {
-            let title = self.outline_title(outline, styles, engine, locator)?;
-            return Ok(vec![IrBlock::Outline {
-                title,
-                entries: Vec::new(),
-                depth: outline_depth(outline),
-                custom_target: outline_custom_target(outline, styles),
-                custom_indent: outline_custom_indent(outline),
-            }]);
+            return Ok(vec![
+                self.collect_outline_elem(outline, styles, engine, locator)?,
+            ]);
         }
         if let Some(place) = child.to_packed::<PlaceElem>() {
             return Ok(vec![self.collect_place(place, styles, engine, locator)?]);
@@ -903,19 +964,8 @@ impl Collector<'_> {
                 ..IrParagraph::default()
             })]);
         }
-        if let Some((kind, shape_body)) = shape_parts(child) {
-            let body = match shape_body {
-                Some(content) => self.collect_content_blocks(&content, styles, engine, locator)?,
-                None => Vec::new(),
-            };
-            return Ok(vec![IrBlock::Shape {
-                kind,
-                span: {
-                    let span = child.span();
-                    span.id().map(|_| span)
-                },
-                body,
-            }]);
+        if let Some(shape) = self.collect_shape(child, styles, engine, locator)? {
+            return Ok(vec![shape]);
         }
         if let Some(line) = child.to_packed::<LineElem>() {
             return Ok(line_blocks(line, styles, child.span()));
@@ -924,6 +974,7 @@ impl Collector<'_> {
             if let Some(body) = block_body_content(block, styles) {
                 let mut blocks = self.collect_content_blocks(body, styles, engine, locator)?;
                 apply_block_props(&mut blocks, block, styles);
+                report_block_aspects(block, styles, child.span(), &mut self.degradations);
                 return Ok(blocks);
             }
             return self.collect_layouter_block(child, styles, engine, locator);
@@ -974,6 +1025,16 @@ impl Collector<'_> {
             strip_leading_text(&mut body, number);
             strip_leading_text(&mut body, " ");
         }
+        let outlined = heading.outlined.get(styles);
+        if !outlined {
+            self.degradations.push(Degradation {
+                span: Some(child.span()),
+                construct: "unoutlined-heading",
+                action: DegradationAction::Approximated,
+                message: "an `outlined: false` heading lowers to a plain paragraph to stay                           out of the table of contents; its Heading style is dropped"
+                    .to_string(),
+            });
+        }
         Ok(heading_block(
             level,
             numbering_text,
@@ -981,7 +1042,7 @@ impl Collector<'_> {
             body,
             child.label().map(|l| l.resolve().to_string()),
             alignment_from_styles(styles),
-            heading.outlined.get(styles),
+            outlined,
         ))
     }
 
@@ -1054,6 +1115,17 @@ impl Collector<'_> {
             let mut ctx = self.inline_ctx();
             body = collect_inlines(&heading.body, styles, engine, locator, &mut ctx)?;
         }
+        let outlined = heading.outlined.get(styles);
+        if !outlined {
+            self.degradations.push(Degradation {
+                span: Some(inner.span()),
+                construct: "unoutlined-heading",
+                action: DegradationAction::Approximated,
+                message: "an `outlined: false` heading lowers to a plain paragraph to stay \
+                          out of the table of contents; its Heading style is dropped"
+                    .to_string(),
+            });
+        }
         Ok(heading_block(
             level,
             numbering_text,
@@ -1061,7 +1133,7 @@ impl Collector<'_> {
             body,
             inner.label().map(|l| l.resolve().to_string()),
             alignment,
-            heading.outlined.get(styles),
+            outlined,
         ))
     }
 
@@ -2252,10 +2324,43 @@ fn apply_block_props(blocks: &mut [IrBlock], block: &BlockElem, styles: StyleCha
             }
         }
     }
-    if sticky
-        && let IrBlock::Paragraph(para) = &mut blocks[last]
-    {
+    if sticky && let IrBlock::Paragraph(para) = &mut blocks[last] {
         para.keep_next = true;
+    }
+}
+
+/// The block properties the paragraph C1 form drops: a `width`/`height`
+/// constraint (`block(width: 1fr)` right-push, fixed/percentage widths) and
+/// the fill/stroke/radius/clip decoration.
+fn report_block_aspects(
+    block: &Packed<BlockElem>,
+    styles: StyleChain<'_>,
+    span: Span,
+    degradations: &mut Vec<Degradation>,
+) {
+    if block.width.get(styles).is_custom() || !block.height.get(styles).is_auto() {
+        degradations.push(Degradation {
+            span: Some(span),
+            construct: "block-width",
+            action: DegradationAction::Skipped,
+            message: "a block width/height constraint is dropped; the content flows \
+                      full-width"
+                .to_string(),
+        });
+    }
+    let stroked = block
+        .stroke
+        .get_cloned(styles)
+        .iter()
+        .any(|side| side.as_ref().is_some_and(Option::is_some));
+    let rounded = block.radius.get_cloned(styles).iter().any(Option::is_some);
+    if block.fill.get_cloned(styles).is_some() || stroked || rounded || block.clip.get(styles) {
+        degradations.push(Degradation {
+            span: Some(span),
+            construct: "block-decoration",
+            action: DegradationAction::Skipped,
+            message: "a block fill/stroke/radius/clip decoration is dropped".to_string(),
+        });
     }
 }
 
@@ -2626,8 +2731,7 @@ fn spacing_rel_twips(spacing: Smart<Spacing>, em_pt: f64) -> Option<u32> {
 /// `#line()` with only a length (no `end`, no angle) is a horizontal rule;
 /// a geometric line keeps degrading as a shape.
 fn line_blocks(line: &Packed<LineElem>, styles: StyleChain<'_>, span: Span) -> Vec<IrBlock> {
-    let horizontal =
-        line.end.get(styles).is_none() && line.angle.get(styles) == Angle::zero();
+    let horizontal = line.end.get(styles).is_none() && line.angle.get(styles) == Angle::zero();
     if horizontal {
         return vec![IrBlock::Paragraph(IrParagraph {
             horizontal_rule: true,
@@ -2733,7 +2837,7 @@ fn literal_marker_texts(marker: &ListMarker) -> Option<Vec<String>> {
         return None;
     }
     let texts: Vec<String> = markers.iter().map(plain_text).collect();
-    if texts.iter().any(|t| t.is_empty()) {
+    if texts.iter().any(String::is_empty) {
         return None;
     }
     Some(texts)

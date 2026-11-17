@@ -6,9 +6,7 @@ use super::WriteCtx;
 use super::image::write_image_inline;
 use super::package::write_value_element;
 use super::run::{write_inline, write_text_run};
-use crate::document::{
-    Document, FootnoteEntryStyle, FootnoteFormat, ImageData, InlineElement,
-};
+use crate::document::{Document, FootnoteEntryStyle, FootnoteFormat, ImageData, InlineElement};
 
 /// Write `w:footnotePr` element with optional circled-number format and
 /// per-page restart. `restart_each_page` mirrors Typst: the footnote counter
@@ -111,7 +109,12 @@ pub(super) fn generate_footnotes_xml(
     elem.write_inner_content(|w| {
         // Separator footnotes (id 0 and 1 are reserved by OOXML spec)
         write_separator_footnote(w, "0", "separator", &ctx.doc_style.footnote_entry)?;
-        write_separator_footnote(w, "1", "continuationSeparator", &FootnoteEntryStyle::default())?;
+        write_separator_footnote(
+            w,
+            "1",
+            "continuationSeparator",
+            &FootnoteEntryStyle::default(),
+        )?;
 
         // Actual footnotes. The image ordinal counts across all footnotes:
         // `generate_footnote_rels` enumerates footnote images globally

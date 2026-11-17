@@ -310,6 +310,78 @@ covered by the C1 degradation named below (integration tests live in
   L2-style literal fallback) vs `w:numFmt`; no Word numFmt renders
   parentheses.
 
+## Universe-case C2 targets (Phase 2)
+
+Universe template-survey cases whose C1 form is a degradation plus literal
+text. Integration tests live in `crates/typort-cli/tests/integration/universe.rs`
+(`universe_*` fixtures).
+
+### `show heading:` rewrite rules (V-01)
+- **Current:** `show-heading-rule` (approximated); a rule that does not return
+  `it` loses the Heading style and outline entry, text is kept.
+- **C2 target:** realize the show-rule output and detect a re-emitted
+  `HeadingElem` in it (Typst's own `#show heading: it => it` keeps identity);
+  a full rewrite stays degraded.
+
+### `show outline.entry:` rewrite rules (V-04)
+- **Current:** `show-outline-entry-rule` (approximated); Word's TOC field
+  uses default entry formatting.
+- **C2 target:** per-entry `w:hyperlink`/styled TOC entries reproducing the
+  rewritten entry formatting.
+
+### `move`/`rotate`/`scale`/`skew` bodies (V-10)
+- **Current:** the layout elements never reach the realize pairs;
+  `transform_bodies_text` recovers their literal markup text from the source
+  AST and appends it as a trailing paragraph; `moved-content`/
+  `rotated-content`/`scaled-content`/`skewed-content` report the dropped
+  transform.
+- **C2 target:** in-place text recovery (pairs carry no position), plus
+  `w:position` run offsets for `move(dy:)` and — for `rotate` — a
+  `wp:anchor` text box with `rot` transform.
+
+### `box`/`block` sizing and decorations (V-21, V-26)
+- **Current:** `block-width`/`box-width`/`block-decoration`/
+  `box-decoration` (skipped); `box(baseline:)` reports `box-baseline`.
+- **C2 target:** `w:ind`/fixed-width tables for block widths; paragraph
+  shading `w:shd` and `w:pBdr` for fills/strokes; `w:position` for
+  `box(baseline:)` (the run property exists, no IR source sets it yet).
+
+### Flexible and relative spacing (V-22, V-23)
+- **Current:** `h-fr-space`/`h-ratio-space`/`h-negative-space` and the
+  `v-*` equivalents (skipped); fixed `h`/`v` keep their twips.
+- **C2 target:** `h(1fr)` → `w:jc="distribute"` or a right-aligned tab;
+  negative `v` → negative `w:spacing w:after`; ratio spaces → resolved
+  values once the containing width is known.
+
+### Text metrics and decorations (V-27, V-30, V-31)
+- **Current:** `highlight-geometry`, `underline-offset`,
+  `text-edge-metrics`, `box-baseline` (skipped). `text(baseline:)` is the
+  one fully implemented path here: it is a ghost property (consumed during
+  realization, absent from pairs and the StyleChain), so
+  `apply_baseline_shifts_from_source` recovers it from the source AST and
+  splits the coalesced run around the shifted body — the split run carries
+  `position_half_pt`, emitted as `w:position` by the run writer.
+  `box(baseline:)` is degrade-only.
+- **C2 target:** `w:u w:val="single"` already carries the underline — the
+  offset needs `w:position`-style run baseline or a custom underline;
+  highlight extents map to `w:shd` padding (limited OOXML support);
+  text edges need OpenType metric overrides Word does not expose —
+  likely stays C1.
+
+### `footnote.entry` spacing and separator (V-19)
+- **Current:** fully mapped, no degradation — `footnote.entry` clearance
+  → `w:spacing w:before` on the separator footnote, separator
+  `line(stroke:)` → `w:pBdr` bottom border, gap → `w:spacing w:after` on
+  footnote bodies, indent → `w:ind w:firstLine`. This direct mapping is
+  the intended C1 form; the plan's fallback branch is not needed.
+- **C2 target:** none outstanding.
+
+### Image `fit:` and `alt:` (V-28)
+- **Current:** `image-fit`, `image-alt` (skipped); the image is embedded
+  at its display size.
+- **C2 target:** `alt` → `wp:docPr descr`; non-cover fit → `srcRect`
+  cropping or `a:stretch` adjustments.
+
 ## Retargeted tests (step 2)
 
 These tests pin legacy-only behavior and run against `convert_legacy`

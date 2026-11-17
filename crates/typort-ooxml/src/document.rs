@@ -468,9 +468,6 @@ pub struct Paragraph {
     pub spacing_before: Option<u32>,
     /// Override the paragraph's `w:after` spacing (twips).
     pub spacing_after: Option<u32>,
-    /// Emit `<w:keepNext/>`: keep this paragraph on the same page as the next
-    /// (Typst `block(sticky: true)`).
-    pub keep_next: bool,
     /// Explicit `<w:ind w:left>` override (twips) for list-item paragraphs;
     /// `None` inherits the numbering level's indentation.
     pub list_left_twips: Option<u32>,

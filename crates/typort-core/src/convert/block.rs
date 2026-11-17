@@ -220,16 +220,20 @@ pub(super) fn handle_outline(
     // field lists headings with the default indent. The target's default
     // (headings) is materialized, so `as_option` is always `Some` — compare
     // the value against the default instead of testing presence.
+    let custom_target =
+        element_at_location::<OutlineElem>(ctx.html_doc, location).is_some_and(|outline| {
+            outline.target.get_ref(StyleChain::default())
+                != &LocatableSelector(HeadingElem::ELEM.select())
+        });
     if ctx.compat == CompatMode::C1
         && let Some(outline) = element_at_location::<OutlineElem>(ctx.html_doc, location)
     {
-        let default_target = LocatableSelector(HeadingElem::ELEM.select());
-        if outline.target.get_ref(StyleChain::default()) != &default_target {
+        if custom_target {
             ctx.degradations.push(Degradation::new(
                 tag_span(tag),
                 "outline-target",
                 DegradationAction::Skipped,
-                "outline target is not headings; the table of contents lists headings",
+                "outline target is not headings; entries are dropped and only the title is kept",
             ));
         }
         if let Some(typst::foundations::Smart::Custom(_)) = outline.indent.as_option().as_ref() {
@@ -241,9 +245,11 @@ pub(super) fn handle_outline(
             ));
         }
     }
-    let mut para = Paragraph::new();
-    para.add_toc(depth);
-    ctx.doc.add_paragraph(para);
+    if !custom_target {
+        let mut para = Paragraph::new();
+        para.add_toc(depth);
+        ctx.doc.add_paragraph(para);
+    }
     find_tag_end(children, i, location)
 }
 

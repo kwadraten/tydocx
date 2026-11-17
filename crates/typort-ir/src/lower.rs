@@ -157,33 +157,8 @@ fn lower_block_in(
 ) -> Vec<BlockElement> {
     match block {
         IrBlock::Paragraph(para) => vec![BlockElement::Paragraph(lower_paragraph(para, ctx))],
-        IrBlock::Heading {
-            level,
-            numbering_text,
-            func_numbering,
-            body,
-            label,
-            alignment,
-        } => {
-            if ctx.compat.is_c1() && *func_numbering && numbering_text.is_some() {
-                ctx.degrade(
-                    "heading-numbering",
-                    DegradationAction::Literalized,
-                    "heading numbering is a function; emitted as literal text, not a numbering \
-                     definition"
-                        .to_string(),
-                );
-            }
-            lower_heading(
-                *level,
-                numbering_text.as_ref(),
-                body,
-                label.as_ref(),
-                *alignment,
-                ctx,
-            )
-        }
-        IrBlock::Table(table) => vec![BlockElement::Table(lower_table(table, doc, ctx))],
+        IrBlock::Heading { .. } => lower_heading_block(block, ctx),
+        IrBlock::Table(table) => lower_table_block(table, doc, ctx),
         IrBlock::Grid(grid) => {
             if ctx.compat.is_c1() {
                 ctx.degrade(
@@ -215,12 +190,14 @@ fn lower_block_in(
                 );
             }
             lower_figure(
-                body,
-                caption,
-                *caption_alignment,
-                label.as_ref(),
-                *caption_first,
-                *gap_twips,
+                &FigureSpec {
+                    body,
+                    caption,
+                    caption_alignment: *caption_alignment,
+                    label: label.as_ref(),
+                    caption_first: *caption_first,
+                    gap_twips: *gap_twips,
+                },
                 doc,
                 ctx,
             )
@@ -282,13 +259,13 @@ fn lower_outline(
                     .to_string(),
             );
         }
-        // A heading TOC field would list headings the source did not ask for;
-        // keep only the outline's own title.
-        if custom_target {
-            let mut para = Paragraph::new();
-            para.inlines = merge_runs(lower_inlines(title, ctx));
-            return vec![BlockElement::Paragraph(para)];
-        }
+    }
+    // A heading TOC field would list headings the source did not ask for;
+    // keep only the outline's own title.
+    if custom_target {
+        let mut para = Paragraph::new();
+        para.inlines = merge_runs(lower_inlines(title, ctx));
+        return vec![BlockElement::Paragraph(para)];
     }
     let mut out = Vec::new();
     if !title.is_empty() {
@@ -444,40 +421,77 @@ fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockEleme
     }
 }
 
-fn lower_figure(
-    body: &[IrBlock],
-    caption: &[IrInline],
+fn lower_table_block(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+    vec![BlockElement::Table(lower_table(table, doc, ctx))]
+}
+
+struct FigureSpec<'a> {
+    body: &'a [IrBlock],
+    caption: &'a [IrInline],
     caption_alignment: Option<Alignment>,
-    label: Option<&String>,
+    label: Option<&'a String>,
     caption_first: bool,
     gap_twips: Option<u32>,
-    doc: &mut Document,
-    ctx: &mut LowerCtx,
-) -> Vec<BlockElement> {
+}
+
+fn lower_heading_block(block: &IrBlock, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+    let IrBlock::Heading {
+        level,
+        numbering_text,
+        func_numbering,
+        body,
+        label,
+        alignment,
+    } = block
+    else {
+        return Vec::new();
+    };
+    if ctx.compat.is_c1() && *func_numbering && numbering_text.is_some() {
+        ctx.degrade(
+            "heading-numbering",
+            DegradationAction::Literalized,
+            "heading numbering is a function; emitted as literal text, not a numbering definition"
+                .to_string(),
+        );
+    }
+    lower_heading(
+        *level,
+        numbering_text.as_ref(),
+        body,
+        label.as_ref(),
+        *alignment,
+        ctx,
+    )
+}
+
+fn lower_figure(fig: &FigureSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
     let mut caption_para: Option<Paragraph> = None;
-    if !caption.is_empty() || label.is_some() {
+    if !fig.caption.is_empty() || fig.label.is_some() {
         let mut para = Paragraph::new();
-        para.alignment = caption_alignment;
-        if let Some(gap) = gap_twips {
-            if caption_first {
+        para.alignment = fig.caption_alignment;
+        if let Some(gap) = fig.gap_twips {
+            if fig.caption_first {
                 para.spacing_after = Some(gap);
             } else {
                 para.spacing_before = Some(gap);
             }
         }
-        para.inlines.extend(lower_inlines(caption, ctx));
-        if let Some(name) = label {
+        para.inlines.extend(lower_inlines(fig.caption, ctx));
+        if let Some(name) = fig.label {
             let id = ctx.next_bookmark();
             para.add_bookmark_at_start(id, name.clone());
         }
         caption_para = Some(para);
     }
     let mut out = Vec::new();
-    if caption_first && let Some(para) = caption_para.take() {
+    if fig.caption_first
+        && let Some(para) = caption_para.take()
+    {
         out.push(BlockElement::Paragraph(para));
     }
-    if body.is_empty()
-        || body
+    if fig.body.is_empty()
+        || fig
+            .body
             .iter()
             .all(|block| matches!(block, IrBlock::Paragraph(para) if para.inlines.is_empty()))
     {
@@ -488,13 +502,13 @@ fn lower_figure(
                 .to_string(),
         );
     }
-    for inner in body {
+    for inner in fig.body {
         out.extend(lower_block(inner, doc, ctx));
     }
-    if !caption_first {
+    if !fig.caption_first {
         if let Some(para) = caption_para.take() {
             out.push(BlockElement::Paragraph(para));
-        } else if let Some(name) = label {
+        } else if let Some(name) = fig.label {
             let id = ctx.next_bookmark();
             for element in &mut out {
                 if let BlockElement::Paragraph(para) = element {
@@ -1793,6 +1807,9 @@ mod tests {
             start: 1,
             depth: 0,
             reversed: true,
+            indent_twips: None,
+            body_indent_twips: None,
+            spacing_twips: None,
         }));
         let (_, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
         assert!(degradations.iter().any(|d| d.construct == "enum-reversed"));

@@ -165,6 +165,99 @@ fn merge_reachable_overrides(
     overrides
 }
 
+/// `par.line(numbering:)` line numbering, page vertical alignment, and
+/// `columns(gutter:)` — the section-level page chrome declared in source.
+fn apply_page_chrome(ovr: &page::SourceStyleOverrides, doc: &mut Document, body_pt: f64) {
+    // `number-clearance` is the distance; Word's default (240 twips) applies
+    // when the source leaves it `auto`.
+    if ovr.line_numbering == Some(true) {
+        doc.page_settings.line_number_distance_twips =
+            Some(ovr.line_number_distance_twips.unwrap_or(240));
+        if let Some(em) = ovr.line_number_distance_em {
+            doc.page_settings.line_number_distance_twips = Some(page::pt_to_twips(em * body_pt));
+        }
+    } else if ovr.line_numbering == Some(false) {
+        doc.page_settings.line_number_distance_twips = None;
+    }
+
+    if let Some(align) = ovr.vertical_align {
+        doc.page_settings.vertical_align = Some(align);
+    }
+
+    if let Some(v) = ovr.column_gutter_twips {
+        doc.page_settings.column_spacing = Some(v);
+    }
+    if let Some(em) = ovr.column_gutter_em {
+        doc.page_settings.column_spacing = Some(page::pt_to_twips(em * body_pt));
+    }
+}
+
+/// Page margins and header/footer edge distances — em values resolve against
+/// the body size; absolute values were already converted in the AST.
+fn apply_page_edges(ovr: &page::SourceStyleOverrides, doc: &mut Document, body_pt: f64) {
+    if let Some(v) = ovr.margin_top {
+        doc.page_settings.margin_top = v;
+    }
+    if let Some(em) = ovr.margin_top_em {
+        doc.page_settings.margin_top = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.margin_bottom {
+        doc.page_settings.margin_bottom = v;
+    }
+    if let Some(em) = ovr.margin_bottom_em {
+        doc.page_settings.margin_bottom = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.margin_left {
+        doc.page_settings.margin_left = v;
+    }
+    if let Some(em) = ovr.margin_left_em {
+        doc.page_settings.margin_left = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.margin_right {
+        doc.page_settings.margin_right = v;
+    }
+    if let Some(em) = ovr.margin_right_em {
+        doc.page_settings.margin_right = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.header_twips {
+        doc.page_settings.header_twips = Some(v);
+    }
+    if let Some(em) = ovr.header_em {
+        doc.page_settings.header_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(v) = ovr.footer_twips {
+        doc.page_settings.footer_twips = Some(v);
+    }
+    if let Some(em) = ovr.footer_em {
+        doc.page_settings.footer_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+}
+
+/// `footnote.entry(clearance:/gap:/indent:/separator:)` → `w:footnotePr`.
+fn apply_footnote_entry(ovr: &page::SourceStyleOverrides, doc: &mut Document, body_pt: f64) {
+    if let Some(v) = ovr.footnote_clearance_twips {
+        doc.style.footnote_entry.clearance_twips = Some(v);
+    }
+    if let Some(em) = ovr.footnote_clearance_em {
+        doc.style.footnote_entry.clearance_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(v) = ovr.footnote_gap_twips {
+        doc.style.footnote_entry.gap_twips = Some(v);
+    }
+    if let Some(em) = ovr.footnote_gap_em {
+        doc.style.footnote_entry.gap_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(v) = ovr.footnote_indent_twips {
+        doc.style.footnote_entry.indent_twips = Some(v);
+    }
+    if let Some(em) = ovr.footnote_indent_em {
+        doc.style.footnote_entry.indent_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(eighths) = ovr.footnote_separator_stroke_eighths {
+        doc.style.footnote_entry.separator_stroke_eighths = Some(eighths);
+    }
+}
+
 pub(super) fn apply_source_overrides(
     ovr: &page::SourceStyleOverrides,
     doc: &mut Document,
@@ -198,94 +291,9 @@ pub(super) fn apply_source_overrides(
     // Resolve em-based values using actual body size
     let body_pt = f64::from(doc.style.body_size_half_pt) / 2.0;
 
-    // Page margins — em values resolve against the body size, like par
-    // leading below. Absolute values were already converted in the AST.
-    if let Some(v) = ovr.margin_top {
-        doc.page_settings.margin_top = v;
-    }
-    if let Some(em) = ovr.margin_top_em {
-        doc.page_settings.margin_top = page::pt_to_twips(em * body_pt);
-    }
-    if let Some(v) = ovr.margin_bottom {
-        doc.page_settings.margin_bottom = v;
-    }
-    if let Some(em) = ovr.margin_bottom_em {
-        doc.page_settings.margin_bottom = page::pt_to_twips(em * body_pt);
-    }
-    if let Some(v) = ovr.margin_left {
-        doc.page_settings.margin_left = v;
-    }
-    if let Some(em) = ovr.margin_left_em {
-        doc.page_settings.margin_left = page::pt_to_twips(em * body_pt);
-    }
-    if let Some(v) = ovr.margin_right {
-        doc.page_settings.margin_right = v;
-    }
-    if let Some(em) = ovr.margin_right_em {
-        doc.page_settings.margin_right = page::pt_to_twips(em * body_pt);
-    }
-
-    // Header/footer edge distances (`page(header-ascent:/footer-descent:)`).
-    if let Some(v) = ovr.header_twips {
-        doc.page_settings.header_twips = Some(v);
-    }
-    if let Some(em) = ovr.header_em {
-        doc.page_settings.header_twips = Some(page::pt_to_twips(em * body_pt));
-    }
-    if let Some(v) = ovr.footer_twips {
-        doc.page_settings.footer_twips = Some(v);
-    }
-    if let Some(em) = ovr.footer_em {
-        doc.page_settings.footer_twips = Some(page::pt_to_twips(em * body_pt));
-    }
-
-    // Line numbering (`par.line(numbering:)`): enabled → `w:lnNumType`;
-    // `number-clearance` is the distance, the Word default (240 twips) when
-    // the source leaves it `auto`.
-    if ovr.line_numbering == Some(true) {
-        doc.page_settings.line_number_distance_twips =
-            Some(ovr.line_number_distance_twips.unwrap_or(240));
-        if let Some(em) = ovr.line_number_distance_em {
-            doc.page_settings.line_number_distance_twips =
-                Some(page::pt_to_twips(em * body_pt));
-        }
-    } else if ovr.line_numbering == Some(false) {
-        doc.page_settings.line_number_distance_twips = None;
-    }
-
-    if let Some(align) = ovr.vertical_align {
-        doc.page_settings.vertical_align = Some(align);
-    }
-
-    if let Some(v) = ovr.column_gutter_twips {
-        doc.page_settings.column_spacing = Some(v);
-    }
-    if let Some(em) = ovr.column_gutter_em {
-        doc.page_settings.column_spacing = Some(page::pt_to_twips(em * body_pt));
-    }
-
-    // `footnote.entry` settings.
-    if let Some(v) = ovr.footnote_clearance_twips {
-        doc.style.footnote_entry.clearance_twips = Some(v);
-    }
-    if let Some(em) = ovr.footnote_clearance_em {
-        doc.style.footnote_entry.clearance_twips = Some(page::pt_to_twips(em * body_pt));
-    }
-    if let Some(v) = ovr.footnote_gap_twips {
-        doc.style.footnote_entry.gap_twips = Some(v);
-    }
-    if let Some(em) = ovr.footnote_gap_em {
-        doc.style.footnote_entry.gap_twips = Some(page::pt_to_twips(em * body_pt));
-    }
-    if let Some(v) = ovr.footnote_indent_twips {
-        doc.style.footnote_entry.indent_twips = Some(v);
-    }
-    if let Some(em) = ovr.footnote_indent_em {
-        doc.style.footnote_entry.indent_twips = Some(page::pt_to_twips(em * body_pt));
-    }
-    if let Some(eighths) = ovr.footnote_separator_stroke_eighths {
-        doc.style.footnote_entry.separator_stroke_eighths = Some(eighths);
-    }
+    apply_page_edges(ovr, doc, body_pt);
+    apply_page_chrome(ovr, doc, body_pt);
+    apply_footnote_entry(ovr, doc, body_pt);
 
     apply_first_line_indent(ovr, doc, body_pt);
     if let Some(all) = ovr.first_line_indent_all {

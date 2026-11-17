@@ -4,6 +4,10 @@ use typort_ooxml::document::VerticalAlign;
 /// All style overrides extracted from `#set` rules in the source AST.
 /// Each field is `None` if the source doesn't set it (use heuristic fallback).
 #[derive(Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a distinct source-declared fact; grouping them is artificial"
+)]
 pub struct SourceStyleOverrides {
     // #set page(margin: ...)
     pub margin_top: Option<u32>,
@@ -26,6 +30,17 @@ pub struct SourceStyleOverrides {
     pub numbering_changed: bool,
     pub margins_mirrored: bool,
     pub page_furniture: bool,
+    // A `#show heading:` / `#show heading.where(...):` rule can consume the
+    // HeadingElem and replace it with arbitrary content — losing the Heading
+    // style and the outline entry.
+    pub show_heading_rule: bool,
+    pub show_outline_entry_rule: bool,
+    // `#move`/`#rotate`/`#scale`/`#skew` calls leave no element trace in the
+    // realize pairs — the transform is applied during layout.
+    pub move_call: bool,
+    pub rotate_call: bool,
+    pub scale_call: bool,
+    pub skew_call: bool,
     // #set page(header-ascent: / footer-descent:) — `w:pgMar w:header/footer`.
     pub header_twips: Option<u32>,
     pub header_em: Option<f64>,
@@ -104,6 +119,12 @@ impl SourceStyleOverrides {
         self.numbering_changed |= other.numbering_changed;
         self.margins_mirrored |= other.margins_mirrored;
         self.page_furniture |= other.page_furniture;
+        self.show_heading_rule |= other.show_heading_rule;
+        self.show_outline_entry_rule |= other.show_outline_entry_rule;
+        self.move_call |= other.move_call;
+        self.rotate_call |= other.rotate_call;
+        self.scale_call |= other.scale_call;
+        self.skew_call |= other.skew_call;
         fill!(header_twips);
         fill!(header_em);
         fill!(footer_twips);
@@ -153,7 +174,129 @@ pub fn extract_source_style_overrides(
     let root = typst_syntax::parse(source);
     let mut ovr = SourceStyleOverrides::default();
     collect_global_set_rules(&root, template_names, true, &mut ovr);
+    scan_transform_calls(&root, &mut ovr);
     ovr
+}
+
+/// Records a call to `move`/`rotate`/`scale`/`skew` anywhere in the source —
+/// the layout elements are consumed before the realize pairs, so their
+/// presence can only be seen in the AST.
+fn scan_transform_calls(node: &typst_syntax::SyntaxNode, ovr: &mut SourceStyleOverrides) {
+    use typst_syntax::ast;
+    if let Some(args) = page_args(node) {
+        for arg in args {
+            if !is_furniture_named(arg) {
+                scan_transform_calls(arg, ovr);
+            }
+        }
+        return;
+    }
+    if node.kind() == typst_syntax::SyntaxKind::FuncCall
+        && let Some(call) = node.cast::<ast::FuncCall<'_>>()
+        && let ast::Expr::Ident(ident) = call.callee()
+    {
+        match ident.as_str() {
+            "move" => ovr.move_call = true,
+            "rotate" => ovr.rotate_call = true,
+            "scale" => ovr.scale_call = true,
+            "skew" => ovr.skew_call = true,
+            _ => {}
+        }
+    }
+    for child in node.children() {
+        scan_transform_calls(child, ovr);
+    }
+}
+
+/// The literal markup text of every `move`/`rotate`/`scale`/`skew` body in
+/// source order. Those elements are consumed during layout — the realize
+/// pairs never see them — so the bodies' text is recovered from the AST.
+#[must_use]
+pub fn transform_bodies_text(source: &str) -> Vec<String> {
+    let root = typst_syntax::parse(source);
+    let mut out = Vec::new();
+    collect_transform_text(&root, &mut out);
+    out
+}
+
+/// The arg nodes of a `#page(...)` call or `#set page(...)` rule — `Some`
+/// marks a node whose `header`/`footer`/`foreground`/`background` named args
+/// are page furniture and must be skipped during body-text recovery. A
+/// `SetRule` is not a `FuncCall` node, so both shapes are checked. The
+/// positional body arg of `#page(...)[body]` stays in scope.
+fn page_args(node: &typst_syntax::SyntaxNode) -> Option<Vec<&typst_syntax::SyntaxNode>> {
+    use typst_syntax::ast;
+    use typst_syntax::ast::AstNode as _;
+    let args = match node.kind() {
+        typst_syntax::SyntaxKind::FuncCall => node
+            .cast::<ast::FuncCall<'_>>()
+            .filter(
+                |call| matches!(call.callee(), ast::Expr::Ident(ident) if ident.as_str() == "page"),
+            )
+            .map(ast::FuncCall::args),
+        typst_syntax::SyntaxKind::SetRule => node
+            .cast::<ast::SetRule<'_>>()
+            .filter(
+                |rule| matches!(rule.target(), ast::Expr::Ident(ident) if ident.as_str() == "page"),
+            )
+            .map(ast::SetRule::args),
+        _ => None,
+    }?;
+    Some(args.items().map(ast::Arg::to_untyped).collect())
+}
+
+/// A `header:`/`footer:`/`foreground:`/`background:` named arg — furniture.
+fn is_furniture_named(node: &typst_syntax::SyntaxNode) -> bool {
+    node.cast::<typst_syntax::ast::Named<'_>>()
+        .is_some_and(|named| {
+            matches!(
+                named.name().get().as_str(),
+                "header" | "footer" | "foreground" | "background"
+            )
+        })
+}
+
+fn collect_transform_text(node: &typst_syntax::SyntaxNode, out: &mut Vec<String>) {
+    use typst_syntax::ast::{self, AstNode};
+    // `page` args carry header/footer/foreground/background content —
+    // furniture, not body text. Descend into the other args only.
+    if let Some(args) = page_args(node) {
+        for arg in args {
+            if !is_furniture_named(arg) {
+                collect_transform_text(arg, out);
+            }
+        }
+        return;
+    }
+    if node.kind() == typst_syntax::SyntaxKind::FuncCall
+        && let Some(call) = node.cast::<ast::FuncCall<'_>>()
+        && let ast::Expr::Ident(ident) = call.callee()
+        && matches!(ident.as_str(), "move" | "rotate" | "scale" | "skew")
+    {
+        for arg in call.args().items() {
+            if let ast::Arg::Pos(ast::Expr::ContentBlock(block)) = arg {
+                let text = markup_text(block.to_untyped());
+                if !text.is_empty() {
+                    out.push(text);
+                }
+            }
+        }
+    }
+    for child in node.children() {
+        collect_transform_text(child, out);
+    }
+}
+
+fn markup_text(node: &typst_syntax::SyntaxNode) -> String {
+    let mut text = String::new();
+    for child in node.children() {
+        match child.kind() {
+            typst_syntax::SyntaxKind::Text => text.push_str(child.leaf_text()),
+            typst_syntax::SyntaxKind::Space => text.push(' '),
+            _ => text.push_str(&markup_text(child)),
+        }
+    }
+    text
 }
 
 /// Whether the source resets the footnote counter inside a page header
@@ -330,8 +473,18 @@ fn extract_show_template_names(root: &typst_syntax::SyntaxNode) -> Vec<String> {
     names
 }
 
-/// A `#set par(hanging-indent: …)` rule recovered from the source, including its
-/// resolved literal/constant length and lexical scope.
+/// True when `node` (a show-rule selector expression) mentions `name` —
+/// e.g. `heading`, `heading.where(level: 1)`, or `heading.where(..).or(..)`.
+fn syntax_mentions_ident(node: &typst_syntax::SyntaxNode, name: &str) -> bool {
+    if let Some(ident) = node.cast::<typst_syntax::ast::Ident<'_>>()
+        && ident.as_str() == name
+    {
+        return true;
+    }
+    node.children()
+        .any(|child| syntax_mentions_ident(child, name))
+}
+
 fn collect_global_set_rules(
     node: &typst_syntax::SyntaxNode,
     template_names: &[String],
@@ -339,12 +492,33 @@ fn collect_global_set_rules(
     ovr: &mut SourceStyleOverrides,
 ) {
     use typst_syntax::SyntaxKind;
-    use typst_syntax::ast;
+    use typst_syntax::ast::{self, AstNode};
 
     match node.kind() {
         // A show rule's recipe applies to specific elements, not globally — and
-        // its own `set` rules are element-scoped. Don't descend.
-        SyntaxKind::ShowRule => return,
+        // its own `set` rules are element-scoped. Don't descend — but note a
+        // rule that selects `heading` and drops `it` from its recipe body:
+        // the heading is then replaced by arbitrary content and loses its
+        // identity. Recipes that use `it` keep the element.
+        SyntaxKind::ShowRule => {
+            if let Some(show) = node.cast::<ast::ShowRule<'_>>()
+                && let Some(selector) = show.selector()
+            {
+                let recipe_uses_it = match show.transform() {
+                    ast::Expr::Closure(closure) => {
+                        syntax_mentions_ident(closure.body().to_untyped(), "it")
+                    }
+                    _ => false,
+                };
+                if syntax_mentions_ident(selector.to_untyped(), "heading") && !recipe_uses_it {
+                    ovr.show_heading_rule = true;
+                }
+                if syntax_mentions_ident(selector.to_untyped(), "outline") {
+                    ovr.show_outline_entry_rule = true;
+                }
+            }
+            return;
+        }
         // A content block (`[...]` / `#block[...]`) introduces a local scope.
         SyntaxKind::ContentBlock => {
             for child in node.children() {
@@ -1293,5 +1467,31 @@ Body."#;
         let names = extract_show_template_names_from_source(tmpl);
         assert_eq!(names, vec!["tmpl".to_string()]);
         assert!(footnote_counter_reset_in_page_header(tmpl, &names));
+    }
+}
+
+#[cfg(test)]
+mod transform_text_tests {
+    use super::transform_bodies_text;
+
+    #[test]
+    fn set_page_furniture_is_not_body_text() {
+        let src = "#set page(foreground: place(center + horizon, rotate(45deg)[DRAFT]))
+
+Body.
+";
+        assert!(transform_bodies_text(src).is_empty());
+    }
+
+    #[test]
+    fn page_call_furniture_is_not_body_text() {
+        let src = "#page(header: [H], footer: [F])[#move(dy: 2pt)[Shifted]]";
+        assert_eq!(transform_bodies_text(src), vec!["Shifted"]);
+    }
+
+    #[test]
+    fn body_transforms_still_recover() {
+        let src = "#move(dy: 1pt)[Up] and #rotate(10deg)[Tilt]";
+        assert_eq!(transform_bodies_text(src), vec!["Up", "Tilt"]);
     }
 }
