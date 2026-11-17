@@ -9,7 +9,9 @@ use typort_ir::{
     CompatMode as IrCompatMode, Degradation as IrDegradation, DegradationAction as IrAction,
     GeometryInput, IrBlock, IrDocument, IrInline, IrParagraph, lower,
 };
-use typort_ooxml::document::{Document, FootnoteFormat};
+use typort_ooxml::document::{
+    BlockElement, Document, FootnoteFormat, InlineElement, Paragraph, Run,
+};
 use typst::World;
 use typst::diag::{SourceDiagnostic, SourceResult, StrResult};
 use typst::ecow::{EcoString, EcoVec};
@@ -32,6 +34,7 @@ use crate::compat::{CompatMode, ConvertOptions, ConvertOutcome, Degradation, Deg
 use crate::convert::bibliography::extract_bibliography_sources;
 use crate::world::TyportWorld;
 
+use super::baseline::apply_baseline_shifts_from_source;
 use super::coalesce::coalesce_runs;
 use super::page::{self, canonicalize_font_names, localize_cjk_fonts};
 use super::postprocess::apply_paragraph_formatting;
@@ -314,6 +317,97 @@ fn collect_heading_sizes(
     }
 }
 
+fn append_transform_bodies(world: &TyportWorld, doc: &mut Document) {
+    let texts = page::transform_bodies_text(world.main_source().text());
+    if texts.is_empty() {
+        return;
+    }
+    let mut para = Paragraph::new();
+    para.inlines
+        .push(InlineElement::Text(Run::new(texts.join(" "))));
+    doc.body.elements.push(BlockElement::Paragraph(para));
+}
+
+fn c1_source_degradations(world: &TyportWorld, degradations: &mut Vec<Degradation>) {
+    let main = world.main_source();
+    let template_names = page::extract_show_template_names_from_source(main.text());
+    if let Some(span) = page::detect_page_setting_change(main, &template_names) {
+        degradations.push(Degradation::new(
+            Some(span),
+            "section-break",
+            DegradationAction::Skipped,
+            "page columns or margins change mid-document; kept as a single section",
+        ));
+    }
+    let overrides = page::extract_source_style_overrides(main.text(), &template_names);
+    if overrides.margins_mirrored {
+        degradations.push(Degradation::new(
+            None,
+            "mirrored-margins",
+            DegradationAction::Skipped,
+            "inside/outside margins are not representable without w:mirrorMargins; \
+             both sides keep the Typst default",
+        ));
+    }
+    if overrides.numbering_changed {
+        degradations.push(Degradation::new(
+            None,
+            "page-numbering-change",
+            DegradationAction::Skipped,
+            "the page numbering format or counter restart changes mid-document; \
+             kept as a single numbering scheme",
+        ));
+    }
+    if overrides.page_furniture {
+        degradations.push(Degradation::new(
+            None,
+            "page-foreground",
+            DegradationAction::Approximated,
+            "page foreground/background is not representable as anchored content; \
+             its content is kept in the page header or dropped",
+        ));
+    }
+    if overrides.show_outline_entry_rule {
+        degradations.push(Degradation::new(
+            None,
+            "show-outline-entry-rule",
+            DegradationAction::Approximated,
+            "a `show outline.entry` rule rewrites outline entries; the table of \
+             contents keeps Word's default entry formatting",
+        ));
+    }
+    let transforms = [
+        (overrides.move_call, "moved-content", "a `move` offset"),
+        (
+            overrides.rotate_call,
+            "rotated-content",
+            "a `rotate` rotation",
+        ),
+        (overrides.scale_call, "scaled-content", "a `scale` factor"),
+        (overrides.skew_call, "skewed-content", "a `skew` shear"),
+    ];
+    for (present, construct, what) in transforms {
+        if present {
+            degradations.push(Degradation::new(
+                None,
+                construct,
+                DegradationAction::Skipped,
+                format!("{what} has no OOXML equivalent; the content is kept in place"),
+            ));
+        }
+    }
+    if overrides.show_heading_rule {
+        degradations.push(Degradation::new(
+            None,
+            "show-heading-rule",
+            DegradationAction::Approximated,
+            "a `show heading` rule rewrites heading content; a heading that is not \
+             returned by the rule loses its Heading style and outline entry, while \
+             its text is kept",
+        ));
+    }
+}
+
 pub fn export_ir(
     docx_doc: &DocxDocument,
     paged_doc: Option<&PagedDocument>,
@@ -374,47 +468,12 @@ pub fn export_ir(
     canonicalize_font_names(world, &mut doc);
     localize_cjk_fonts(world, &mut doc);
     apply_smallcaps_from_source(world, &mut doc);
+    apply_baseline_shifts_from_source(world, &mut doc);
     coalesce_runs(&mut doc);
 
+    append_transform_bodies(world, &mut doc);
     if options.compat == CompatMode::C1 {
-        let main = world.main_source();
-        let template_names = page::extract_show_template_names_from_source(main.text());
-        if let Some(span) = page::detect_page_setting_change(main, &template_names) {
-            degradations.push(Degradation::new(
-                Some(span),
-                "section-break",
-                DegradationAction::Skipped,
-                "page columns or margins change mid-document; kept as a single section",
-            ));
-        }
-        let overrides = page::extract_source_style_overrides(main.text(), &template_names);
-        if overrides.margins_mirrored {
-            degradations.push(Degradation::new(
-                None,
-                "mirrored-margins",
-                DegradationAction::Skipped,
-                "inside/outside margins are not representable without w:mirrorMargins; \
-                 both sides keep the Typst default",
-            ));
-        }
-        if overrides.numbering_changed {
-            degradations.push(Degradation::new(
-                None,
-                "page-numbering-change",
-                DegradationAction::Skipped,
-                "the page numbering format or counter restart changes mid-document; \
-                 kept as a single numbering scheme",
-            ));
-        }
-        if overrides.page_furniture {
-            degradations.push(Degradation::new(
-                None,
-                "page-foreground",
-                DegradationAction::Approximated,
-                "page foreground/background is not representable as anchored content; \
-                 its content is kept in the page header or dropped",
-            ));
-        }
+        c1_source_degradations(world, &mut degradations);
     }
 
     ConvertOutcome::new(doc, degradations)

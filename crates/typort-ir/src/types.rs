@@ -25,6 +25,12 @@ pub struct IrDocumentInfo {
     pub author: Option<String>,
     pub lang: Option<String>,
     pub region: Option<String>,
+    /// `document(description:)` → `dc:description`.
+    pub description: Option<String>,
+    /// `document(keywords:)` → comma-joined `cp:keywords`.
+    pub keywords: Vec<String>,
+    /// `document(date: datetime(...))` → ISO 8601 `dcterms:created`.
+    pub created: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +44,10 @@ pub struct IrFootnote {
 pub enum IrShapeKind {
     Rectangle,
     Curve,
+    /// `#line(...)` — a geometric line segment, not the `#line` rule
+    /// (`line()` here is the 2-point shape; `#divider`/`#line` the rule is a
+    /// paragraph border instead).
+    Line,
 }
 
 impl std::fmt::Display for IrShapeKind {
@@ -45,6 +55,7 @@ impl std::fmt::Display for IrShapeKind {
         f.write_str(match self {
             Self::Rectangle => "rectangle",
             Self::Curve => "curve",
+            Self::Line => "line",
         })
     }
 }
@@ -55,6 +66,9 @@ pub enum IrBlock {
     Heading {
         level: u8,
         numbering_text: Option<String>,
+        /// `set heading(numbering: <function>)` — a function numbering cannot
+        /// be resolved to a literal prefix; C1 degrades it.
+        func_numbering: bool,
         body: Vec<IrInline>,
         label: Option<String>,
         alignment: Option<Alignment>,
@@ -70,6 +84,8 @@ pub enum IrBlock {
         label: Option<String>,
         caption_first: bool,
         custom_placement: bool,
+        /// `figure(gap:)` override in twips — spacing between body and caption.
+        gap_twips: Option<u32>,
     },
     List(IrList),
     Enum(IrEnum),
@@ -130,6 +146,8 @@ pub struct IrParagraph {
     pub horizontal_rule: bool,
     pub tab_stops: Vec<u32>,
     pub spacing_before: Option<u32>,
+    /// `w:spacing w:after` override (twips) — `block(above:|below:|spacing:)`.
+    pub spacing_after: Option<u32>,
     pub bookmark: Option<String>,
 }
 
@@ -232,6 +250,15 @@ pub struct IrList {
     pub items: Vec<IrListItem>,
     pub depth: u8,
     pub custom_marker: bool,
+    /// `list(indent:)` override in twips.
+    pub indent_twips: Option<u32>,
+    /// `list(body-indent:)` override in twips.
+    pub body_indent_twips: Option<u32>,
+    /// `list(spacing:)` override in twips — gap between items.
+    pub spacing_twips: Option<u32>,
+    /// Per-level `list(marker:)` literal strings (e.g. `"–"`), when the marker
+    /// array holds only literal text; `None` = default marker resolution.
+    pub marker_texts: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -247,6 +274,12 @@ pub struct IrEnum {
     pub start: u32,
     pub depth: u8,
     pub reversed: bool,
+    /// `enum(indent:)` override in twips.
+    pub indent_twips: Option<u32>,
+    /// `enum(body-indent:)` override in twips.
+    pub body_indent_twips: Option<u32>,
+    /// `enum(spacing:)` override in twips.
+    pub spacing_twips: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

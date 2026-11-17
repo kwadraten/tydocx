@@ -30,7 +30,7 @@ pub(crate) use run_style::{effective_style, effective_weight, extract_non_black_
 pub use sections::{DetectedSection, apply_section_breaks, detect_section_breaks};
 pub use source_ast::{
     PageNumberingDecl, SourceStyleOverrides, extract_show_template_names_from_source,
-    extract_source_style_overrides, footnote_counter_reset_in_page_header,
+    extract_source_style_overrides, footnote_counter_reset_in_page_header, transform_bodies_text,
 };
 pub use style::extract_document_style;
 

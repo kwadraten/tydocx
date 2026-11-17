@@ -70,6 +70,11 @@ pub fn lower(
     doc.style = ir.style.clone();
     doc.metadata.title.clone_from(&ir.info.title);
     doc.metadata.author.clone_from(&ir.info.author);
+    doc.metadata.description.clone_from(&ir.info.description);
+    doc.metadata.created.clone_from(&ir.info.created);
+    if !ir.info.keywords.is_empty() {
+        doc.metadata.keywords = Some(ir.info.keywords.join(", "));
+    }
     doc.citation_sources.clone_from(&ir.citation_sources);
     doc.header.clone_from(&geometry.header);
     doc.footer.clone_from(&geometry.footer);
@@ -152,21 +157,8 @@ fn lower_block_in(
 ) -> Vec<BlockElement> {
     match block {
         IrBlock::Paragraph(para) => vec![BlockElement::Paragraph(lower_paragraph(para, ctx))],
-        IrBlock::Heading {
-            level,
-            numbering_text,
-            body,
-            label,
-            alignment,
-        } => lower_heading(
-            *level,
-            numbering_text.as_ref(),
-            body,
-            label.as_ref(),
-            *alignment,
-            ctx,
-        ),
-        IrBlock::Table(table) => vec![BlockElement::Table(lower_table(table, doc, ctx))],
+        IrBlock::Heading { .. } => lower_heading_block(block, ctx),
+        IrBlock::Table(table) => lower_table_block(table, doc, ctx),
         IrBlock::Grid(grid) => {
             if ctx.compat.is_c1() {
                 ctx.degrade(
@@ -188,6 +180,7 @@ fn lower_block_in(
             label,
             caption_first,
             custom_placement,
+            gap_twips,
         } => {
             if ctx.compat.is_c1() && *custom_placement {
                 ctx.degrade(
@@ -197,11 +190,14 @@ fn lower_block_in(
                 );
             }
             lower_figure(
-                body,
-                caption,
-                *caption_alignment,
-                label.as_ref(),
-                *caption_first,
+                &FigureSpec {
+                    body,
+                    caption,
+                    caption_alignment: *caption_alignment,
+                    label: label.as_ref(),
+                    caption_first: *caption_first,
+                    gap_twips: *gap_twips,
+                },
                 doc,
                 ctx,
             )
@@ -251,7 +247,8 @@ fn lower_outline(
             ctx.degrade(
                 "outline-target",
                 DegradationAction::Skipped,
-                "outline target is not headings; the table of contents lists headings".to_string(),
+                "outline target is not headings; entries are dropped and only the title is kept"
+                    .to_string(),
             );
         }
         if custom_indent {
@@ -262,6 +259,13 @@ fn lower_outline(
                     .to_string(),
             );
         }
+    }
+    // A heading TOC field would list headings the source did not ask for;
+    // keep only the outline's own title.
+    if custom_target {
+        let mut para = Paragraph::new();
+        para.inlines = merge_runs(lower_inlines(title, ctx));
+        return vec![BlockElement::Paragraph(para)];
     }
     let mut out = Vec::new();
     if !title.is_empty() {
@@ -417,32 +421,77 @@ fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockEleme
     }
 }
 
-fn lower_figure(
-    body: &[IrBlock],
-    caption: &[IrInline],
+fn lower_table_block(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+    vec![BlockElement::Table(lower_table(table, doc, ctx))]
+}
+
+struct FigureSpec<'a> {
+    body: &'a [IrBlock],
+    caption: &'a [IrInline],
     caption_alignment: Option<Alignment>,
-    label: Option<&String>,
+    label: Option<&'a String>,
     caption_first: bool,
-    doc: &mut Document,
-    ctx: &mut LowerCtx,
-) -> Vec<BlockElement> {
+    gap_twips: Option<u32>,
+}
+
+fn lower_heading_block(block: &IrBlock, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+    let IrBlock::Heading {
+        level,
+        numbering_text,
+        func_numbering,
+        body,
+        label,
+        alignment,
+    } = block
+    else {
+        return Vec::new();
+    };
+    if ctx.compat.is_c1() && *func_numbering && numbering_text.is_some() {
+        ctx.degrade(
+            "heading-numbering",
+            DegradationAction::Literalized,
+            "heading numbering is a function; emitted as literal text, not a numbering definition"
+                .to_string(),
+        );
+    }
+    lower_heading(
+        *level,
+        numbering_text.as_ref(),
+        body,
+        label.as_ref(),
+        *alignment,
+        ctx,
+    )
+}
+
+fn lower_figure(fig: &FigureSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
     let mut caption_para: Option<Paragraph> = None;
-    if !caption.is_empty() || label.is_some() {
+    if !fig.caption.is_empty() || fig.label.is_some() {
         let mut para = Paragraph::new();
-        para.alignment = caption_alignment;
-        para.inlines.extend(lower_inlines(caption, ctx));
-        if let Some(name) = label {
+        para.alignment = fig.caption_alignment;
+        if let Some(gap) = fig.gap_twips {
+            if fig.caption_first {
+                para.spacing_after = Some(gap);
+            } else {
+                para.spacing_before = Some(gap);
+            }
+        }
+        para.inlines.extend(lower_inlines(fig.caption, ctx));
+        if let Some(name) = fig.label {
             let id = ctx.next_bookmark();
             para.add_bookmark_at_start(id, name.clone());
         }
         caption_para = Some(para);
     }
     let mut out = Vec::new();
-    if caption_first && let Some(para) = caption_para.take() {
+    if fig.caption_first
+        && let Some(para) = caption_para.take()
+    {
         out.push(BlockElement::Paragraph(para));
     }
-    if body.is_empty()
-        || body
+    if fig.body.is_empty()
+        || fig
+            .body
             .iter()
             .all(|block| matches!(block, IrBlock::Paragraph(para) if para.inlines.is_empty()))
     {
@@ -453,13 +502,13 @@ fn lower_figure(
                 .to_string(),
         );
     }
-    for inner in body {
+    for inner in fig.body {
         out.extend(lower_block(inner, doc, ctx));
     }
-    if !caption_first {
+    if !fig.caption_first {
         if let Some(para) = caption_para.take() {
             out.push(BlockElement::Paragraph(para));
-        } else if let Some(name) = label {
+        } else if let Some(name) = fig.label {
             let id = ctx.next_bookmark();
             for element in &mut out {
                 if let BlockElement::Paragraph(para) = element {
@@ -486,6 +535,8 @@ fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     out.horizontal_rule = para.horizontal_rule;
     out.tab_stops.clone_from(&para.tab_stops);
     out.spacing_before = para.spacing_before;
+    out.spacing_after = para.spacing_after;
+    out.keep_next = para.keep_next;
     out.inlines = merge_runs(lower_inlines(&para.inlines, ctx));
     if let Some(name) = &para.bookmark {
         let id = ctx.next_bookmark();
@@ -822,7 +873,7 @@ fn lower_list(
     ctx: &mut LowerCtx,
     inherited: Option<ListAlloc>,
 ) -> Vec<BlockElement> {
-    if ctx.compat.is_c1() && list.custom_marker {
+    if ctx.compat.is_c1() && list.custom_marker && list.marker_texts.is_none() {
         ctx.degrade(
             "list-marker",
             DegradationAction::Literalized,
@@ -834,13 +885,16 @@ fn lower_list(
     } else {
         let mut defs: Vec<Option<IrLevelDef>> = Vec::new();
         collect_levels_from_list(list, 0, None, &mut defs);
-        let overrides = c1_numbering_overrides(level_overrides(defs), ctx);
+        let overrides = c1_numbering_overrides(level_overrides(defs), ctx, "list-marker");
         let id = doc.allocate_list_id_with_overrides(false, 1, overrides);
         (id, 0)
     };
+    let layout = list_layout(list.indent_twips, list.body_indent_twips);
     let mut out = Vec::new();
     for item in &list.items {
-        lower_list_item(&item.body, num_id, depth, doc, ctx, &mut out);
+        let segment_start = out.len();
+        lower_list_item(&item.body, num_id, depth, layout, doc, ctx, &mut out);
+        apply_item_spacing(&mut out[segment_start..], list.spacing_twips);
     }
     out
 }
@@ -869,13 +923,16 @@ fn lower_enum(
     } else {
         let mut defs: Vec<Option<IrLevelDef>> = Vec::new();
         collect_levels_from_enum(enumer, 0, None, &mut defs);
-        let overrides = c1_numbering_overrides(level_overrides(defs), ctx);
+        let overrides = c1_numbering_overrides(level_overrides(defs), ctx, "enum-numbering");
         let id = doc.allocate_list_id_with_overrides(true, enumer.start, overrides);
         (id, 0)
     };
+    let layout = list_layout(enumer.indent_twips, enumer.body_indent_twips);
     let mut out = Vec::new();
     for item in &enumer.items {
-        lower_list_item(&item.body, num_id, depth, doc, ctx, &mut out);
+        let segment_start = out.len();
+        lower_list_item(&item.body, num_id, depth, layout, doc, ctx, &mut out);
+        apply_item_spacing(&mut out[segment_start..], enumer.spacing_twips);
     }
     out
 }
@@ -905,10 +962,32 @@ fn lower_enum_literal(
     out
 }
 
+/// Typst `list(indent:, body-indent:)` → `(w:left, w:hanging)`: the body text
+/// sits at `indent + body_indent`; the marker hangs `body_indent` to its left.
+fn list_layout(indent_twips: Option<u32>, body_indent_twips: Option<u32>) -> Option<(u32, u32)> {
+    match (indent_twips, body_indent_twips) {
+        (Some(indent), Some(body)) => Some((indent.saturating_add(body), body)),
+        _ => None,
+    }
+}
+
+/// `list(spacing:)`/`enum(spacing:)` → `w:spacing w:after` on the item's last
+/// paragraph.
+fn apply_item_spacing(item_blocks: &mut [BlockElement], spacing_twips: Option<u32>) {
+    let Some(spacing) = spacing_twips else { return };
+    for element in item_blocks.iter_mut().rev() {
+        if let BlockElement::Paragraph(para) = element {
+            para.spacing_after = Some(spacing);
+            return;
+        }
+    }
+}
+
 fn lower_list_item(
     body: &[IrBlock],
     num_id: u32,
     depth: u32,
+    layout: Option<(u32, u32)>,
     doc: &mut Document,
     ctx: &mut LowerCtx,
     out: &mut Vec<BlockElement>,
@@ -923,6 +1002,10 @@ fn lower_list_item(
                     level: depth,
                     id: num_id,
                 });
+                if let Some((left, hanging)) = layout {
+                    para.list_left_twips = Some(left);
+                    para.list_hanging_twips = Some(hanging);
+                }
                 first_para = false;
             }
             out.push(element);
@@ -948,13 +1031,17 @@ fn level_overrides(defs: Vec<Option<IrLevelDef>>) -> Vec<LevelOverride> {
         .collect()
 }
 
-fn c1_numbering_overrides(overrides: Vec<LevelOverride>, ctx: &mut LowerCtx) -> Vec<LevelOverride> {
+fn c1_numbering_overrides(
+    overrides: Vec<LevelOverride>,
+    ctx: &mut LowerCtx,
+    construct: &'static str,
+) -> Vec<LevelOverride> {
     if ctx.compat.is_c1() && !overrides.is_empty() {
         let first = overrides.first().map_or("?", |o| o.lvl_text.as_str());
         ctx.degrade(
-            "enum-numbering",
+            construct,
             DegradationAction::Literalized,
-            format!("enum numbering pattern ({first}) fell back to decimal"),
+            format!("numbering pattern ({first}) fell back to the default"),
         );
         return Vec::new();
     }
@@ -991,6 +1078,18 @@ fn collect_levels_from_list(
     state: Option<&PatternState<'_>>,
     defs: &mut Vec<Option<IrLevelDef>>,
 ) {
+    if let Some(markers) = list.marker_texts.as_ref().filter(|m| !m.is_empty())
+        && let Some(marker) = markers.get(usize::try_from(level).unwrap_or(0) % markers.len())
+    {
+        record_marker_def(
+            level,
+            IrLevelDef {
+                num_fmt: "bullet".to_owned(),
+                lvl_text: marker.clone(),
+            },
+            defs,
+        );
+    }
     record_level_def(level, state, defs);
     for item in &list.items {
         collect_levels_in_blocks(&item.body, level + 1, state, defs);
@@ -1030,6 +1129,16 @@ fn collect_levels_in_blocks(
             _ => {}
         }
     }
+}
+
+/// A literal marker (`list(marker: …)`) at this level overrides any def an
+/// outer list already recorded — the nested declaration wins.
+fn record_marker_def(level: u32, def: IrLevelDef, defs: &mut Vec<Option<IrLevelDef>>) {
+    let idx = usize::try_from(level).unwrap_or(0);
+    if idx >= defs.len() {
+        defs.resize(idx + 1, None);
+    }
+    defs[idx] = Some(def);
 }
 
 fn record_level_def(
@@ -1177,6 +1286,7 @@ mod tests {
         ir.body.push(IrBlock::Heading {
             level: 1,
             numbering_text: Some("1.1".to_owned()),
+            func_numbering: false,
             body: vec![IrInline::Text(Run::new("Lists"))],
             label: Some("sec-lists".to_owned()),
             alignment: None,
@@ -1247,10 +1357,18 @@ mod tests {
                             body: vec![IrBlock::Paragraph(text_para("inner"))],
                         }],
                         custom_marker: false,
+                        indent_twips: None,
+                        body_indent_twips: None,
+                        spacing_twips: None,
+                        marker_texts: None,
                     }),
                 ],
             }],
             custom_marker: false,
+            indent_twips: None,
+            body_indent_twips: None,
+            spacing_twips: None,
+            marker_texts: None,
         }));
         let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         assert_eq!(doc.list_num_instances.len(), 1);
@@ -1287,6 +1405,9 @@ mod tests {
             start: 1,
             depth: 0,
             reversed: false,
+            indent_twips: None,
+            body_indent_twips: None,
+            spacing_twips: None,
         }));
         let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         assert_eq!(doc.list_num_instances.len(), 1);
@@ -1311,6 +1432,9 @@ mod tests {
             start: 1,
             depth: 1,
             reversed: false,
+            indent_twips: None,
+            body_indent_twips: None,
+            spacing_twips: None,
         });
         let mut ir = empty_doc();
         ir.body.push(IrBlock::Enum(IrEnum {
@@ -1335,6 +1459,9 @@ mod tests {
             start: 1,
             depth: 0,
             reversed: false,
+            indent_twips: None,
+            body_indent_twips: None,
+            spacing_twips: None,
         }));
         let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         let overrides = &doc.list_num_instances[0].level_overrides;
@@ -1363,6 +1490,9 @@ mod tests {
             start: 1,
             depth: 0,
             reversed: false,
+            indent_twips: None,
+            body_indent_twips: None,
+            spacing_twips: None,
         }));
         let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         assert_eq!(doc.list_num_instances.len(), 1);
@@ -1677,6 +1807,9 @@ mod tests {
             start: 1,
             depth: 0,
             reversed: true,
+            indent_twips: None,
+            body_indent_twips: None,
+            spacing_twips: None,
         }));
         let (_, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
         assert!(degradations.iter().any(|d| d.construct == "enum-reversed"));

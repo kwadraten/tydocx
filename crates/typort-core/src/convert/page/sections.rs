@@ -56,6 +56,10 @@ pub fn detect_section_breaks(paged: &PagedDocument) -> Vec<DetectedSection> {
                     margin_right: margin_twips,
                     columns: None,
                     column_spacing: None,
+                    header_twips: None,
+                    footer_twips: None,
+                    line_number_distance_twips: None,
+                    vertical_align: None,
                 },
             });
         }

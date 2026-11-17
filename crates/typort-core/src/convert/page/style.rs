@@ -202,6 +202,9 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
         first_line_indent_chars: None,
         first_line_indent_all: false,
         footnote_format: FootnoteFormat::default(),
+        // Geometry detection cannot see `footnote.entry` set rules; the
+        // source-AST override (apply_source_overrides) fills them.
+        footnote_entry: typort_ooxml::document::FootnoteEntryStyle::default(),
         // Geometry detection cannot see the source header rule; the
         // source-AST detection (apply_page_and_style) sets this.
         footnote_restart_each_page: false,

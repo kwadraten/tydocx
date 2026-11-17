@@ -9,7 +9,7 @@ use typst_library::engine::Engine;
 use typst_library::foundations::{Content, ContextElem, Packed, Smart, StyleChain};
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::{
-    Abs, AlignElem, BlockElem, BoxElem, HAlignment, HElem, PadElem, Spacing,
+    Abs, AlignElem, BlockElem, BoxElem, HAlignment, HElem, HideElem, PadElem, Spacing,
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
@@ -18,13 +18,14 @@ use typst_library::model::{
 };
 use typst_library::routines::Pair;
 use typst_library::text::{
-    Lang, LinebreakElem, Region, SmartQuoteElem, SmartQuoter, SmartQuotes, SpaceElem, TextElem,
+    BottomEdge, BottomEdgeMetric, DecoLine, Lang, LinebreakElem, Region, SmartQuoteElem,
+    SmartQuoter, SmartQuotes, SpaceElem, TextElem, TopEdge, TopEdgeMetric,
 };
 use typst_library::visualize::{ImageElem, ImageFit, ImageKind};
 use typst_syntax::Source;
 use typst_syntax::Span;
 
-use super::collect::{block_body_content, shape_parts};
+use super::collect::{block_body_content, shape_parts, transparent_container_body};
 use super::style::{StyleDefaults, lower_runs_match, run_from_styles};
 use super::with_fragment;
 use crate::convert::image::hash_bytes;
@@ -76,14 +77,12 @@ fn collect_fragment_inlines(
     while i < pairs.len() {
         let (content, styles) = pairs[i];
         if let Some(tagged) = content.to_packed::<TagElem>() {
-            match &tagged.tag {
+            i = match &tagged.tag {
                 Tag::Start(inner, _) => {
-                    i = handle_tag_start(pairs, i, inner, engine, locator, ctx, &mut out);
+                    handle_tag_start(pairs, i, inner, engine, locator, ctx, &mut out)
                 }
-                Tag::End(_, _, _) => {
-                    i += 1;
-                }
-            }
+                Tag::End(_, _, _) => i + 1,
+            };
             continue;
         }
         if let Some(par) = content.to_packed::<ParElem>() {
@@ -163,9 +162,45 @@ fn collect_fragment_inlines(
             i += 1;
             continue;
         }
+        if let Some(inlines) = collect_transparent_inlines(content, styles, engine, locator, ctx) {
+            out.extend(inlines);
+            i += 1;
+            continue;
+        }
         i += 1;
     }
     out
+}
+
+/// `move`/`rotate`/`scale`/`skew`/`columns` inside a fragment: chrome is
+/// dropped (degraded), body inlines are kept.
+fn collect_transparent_inlines(
+    content: &Content,
+    styles: StyleChain<'_>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    ctx: &mut InlineCtx<'_>,
+) -> Option<Vec<IrInline>> {
+    let (construct, body) = transparent_container_body(content)?;
+    ctx.degradations.push(Degradation {
+        span: Some(content.span()),
+        construct,
+        action: DegradationAction::Skipped,
+        message: "the container's transform or column layout has no OOXML equivalent; the \
+                  content is kept without it"
+            .to_string(),
+    });
+    if let Ok(inlines) = collect_inlines(body, styles, engine, locator, ctx) {
+        return Some(inlines);
+    }
+    ctx.degradations.push(Degradation {
+        span: Some(content.span()),
+        construct: "transformed-content",
+        action: DegradationAction::Skipped,
+        message: "content inside a transform could not be realized; its text was dropped"
+            .to_string(),
+    });
+    Some(Vec::new())
 }
 
 fn push_tracked_space(
@@ -180,7 +215,59 @@ fn push_tracked_space(
         run.tracking_twips = Some(twips);
         out.push(IrInline::Text(run));
         ctx.prev_char = Some(' ');
+    } else {
+        report_spacing_gap(&h.amount, true, span, ctx.degradations);
     }
+}
+
+/// `h`/`v` amounts that `spacing_twips` cannot map: `fr` flex space (no OOXML
+/// equivalent; a right tab is the C2 target for `h(1fr)`), a ratio part
+/// (`h(50%)`/`v(25%)`), and negative space.
+pub(crate) fn report_spacing_gap(
+    amount: &Spacing,
+    horizontal: bool,
+    span: Span,
+    degradations: &mut Vec<Degradation>,
+) {
+    // A detached span means the spacing element was synthesized by Typst's
+    // own realization (e.g. a heading's numbering run), not authored —
+    // reporting it would degrade for a construct the author never wrote.
+    if span.id().is_none() {
+        return;
+    }
+    let (construct, message) = match amount {
+        Spacing::Fr(_) => (
+            if horizontal {
+                "h-fr-space"
+            } else {
+                "v-fr-space"
+            },
+            "an fr flex space is dropped; it has no fixed-size OOXML equivalent",
+        ),
+        Spacing::Rel(rel) if rel.abs.abs < Abs::zero() => (
+            if horizontal {
+                "h-negative-space"
+            } else {
+                "v-negative-space"
+            },
+            "a negative space is dropped; OOXML has no negative inter-block spacing",
+        ),
+        Spacing::Rel(rel) if rel.rel != typst_library::layout::Ratio::zero() => (
+            if horizontal {
+                "h-ratio-space"
+            } else {
+                "v-ratio-space"
+            },
+            "a ratio space is dropped; its parent-relative extent cannot be resolved",
+        ),
+        Spacing::Rel(_) => return,
+    };
+    degradations.push(Degradation {
+        span: Some(span),
+        construct,
+        action: DegradationAction::Skipped,
+        message: message.to_string(),
+    });
 }
 
 fn collect_pad_inlines(
@@ -337,6 +424,7 @@ fn collect_box_inlines(
     let Some(Some(body)) = box_elem.body.as_option() else {
         return;
     };
+    report_box_aspects(box_elem, styles, ctx);
     let fill_hex = match box_elem.fill.as_option() {
         Some(Some(paint)) => paint_to_shd_hex(paint),
         _ => None,
@@ -362,6 +450,49 @@ fn collect_box_inlines(
     }
 }
 
+/// The box properties that the inline-text C1 form drops: width/height
+/// constraints (`box(width: 1fr)` right-push, fixed widths), a non-default
+/// baseline, and the stroke/radius/clip decoration (fill is mapped to run
+/// shading, so it is not reported).
+fn report_box_aspects(box_elem: &Packed<BoxElem>, styles: StyleChain<'_>, ctx: &mut InlineCtx<'_>) {
+    let span = Some(box_elem.span());
+    if !box_elem.width.get(styles).is_auto() || box_elem.height.get(styles).is_custom() {
+        ctx.degradations.push(Degradation {
+            span,
+            construct: "box-width",
+            action: DegradationAction::Skipped,
+            message: "a box width/height constraint is dropped; the content flows full-width"
+                .to_string(),
+        });
+    }
+    if box_elem.baseline.get(styles) != typst_library::layout::BaselinePos::default() {
+        ctx.degradations.push(Degradation {
+            span,
+            construct: "box-baseline",
+            action: DegradationAction::Skipped,
+            message: "a box baseline override is dropped".to_string(),
+        });
+    }
+    let stroked = box_elem
+        .stroke
+        .get_cloned(styles)
+        .iter()
+        .any(|side| side.as_ref().is_some_and(Option::is_some));
+    let rounded = box_elem
+        .radius
+        .get_cloned(styles)
+        .iter()
+        .any(Option::is_some);
+    if stroked || rounded || box_elem.clip.get(styles) {
+        ctx.degradations.push(Degradation {
+            span,
+            construct: "box-decoration",
+            action: DegradationAction::Skipped,
+            message: "a box stroke/radius/clip decoration is dropped".to_string(),
+        });
+    }
+}
+
 #[allow(clippy::too_many_lines, reason = "one dispatch per tag kind")]
 fn handle_tag_start(
     pairs: &[Pair<'_>],
@@ -376,6 +507,27 @@ fn handle_tag_start(
     let Some(location) = inner.location() else {
         return i + 1;
     };
+    // `#hide[…]` leaves no trace in the output at all.
+    if inner.to_packed::<HideElem>().is_some() {
+        ctx.degradations.push(Degradation {
+            span: Some(inner.span()),
+            construct: "hidden-content",
+            action: DegradationAction::Skipped,
+            message: "hidden content is dropped along with its reserved space".to_string(),
+        });
+        return skip_to_end(pairs, i + 1, location);
+    }
+    if let Some((construct, _)) = transparent_container_body(inner) {
+        ctx.degradations.push(Degradation {
+            span: Some(inner.span()),
+            construct,
+            action: DegradationAction::Skipped,
+            message: "the container's transform or column layout has no OOXML equivalent; the \
+                      content is kept without it"
+                .to_string(),
+        });
+        return i + 1;
+    }
     if inner.to_packed::<ContextElem>().is_some() {
         if let Some(label) = ctx
             .source
@@ -625,6 +777,75 @@ fn skip_to_end(pairs: &[Pair<'_>], start: usize, location: Location) -> usize {
     find_end(pairs, start, location) + 1
 }
 
+fn degrade_once(
+    degradations: &mut Vec<Degradation>,
+    span: Option<Span>,
+    construct: &'static str,
+    message: &'static str,
+) {
+    if !degradations.iter().any(|d| d.construct == construct) {
+        degradations.push(Degradation {
+            span,
+            construct,
+            action: DegradationAction::Skipped,
+            message: message.to_string(),
+        });
+    }
+}
+
+/// Text-level properties the run C1 form drops: non-default `top-edge` /
+/// `bottom-edge` metrics, a custom `underline(offset:)`, and `highlight`
+/// geometry (edges/extent/radius/stroke beyond the fill that maps to
+/// `w:highlight`/`w:shd`). Each construct is reported once.
+fn report_text_aspects(styles: StyleChain<'_>, span: Option<Span>, ctx: &mut InlineCtx<'_>) {
+    if styles.get(TextElem::top_edge) != TopEdge::Metric(TopEdgeMetric::CapHeight)
+        || styles.get(TextElem::bottom_edge) != BottomEdge::Metric(BottomEdgeMetric::Baseline)
+    {
+        degrade_once(
+            ctx.degradations,
+            span,
+            "text-edge-metrics",
+            "a text top-edge/bottom-edge metric is dropped; the default metrics are used",
+        );
+    }
+    for decoration in styles.get_cloned(TextElem::deco) {
+        match decoration.line {
+            DecoLine::Underline {
+                offset: Smart::Custom(_),
+                ..
+            } => degrade_once(
+                ctx.degradations,
+                span,
+                "underline-offset",
+                "an underline offset is dropped; the underline uses the default position",
+            ),
+            DecoLine::Highlight {
+                stroke,
+                top_edge,
+                bottom_edge,
+                radius,
+                ..
+            } => {
+                let non_default = decoration.extent > Abs::zero()
+                    || stroke.iter().any(Option::is_some)
+                    || top_edge != TopEdge::Metric(TopEdgeMetric::CapHeight)
+                    || bottom_edge != BottomEdge::Metric(BottomEdgeMetric::Baseline)
+                    || radius.iter().any(|r| !r.is_zero());
+                if non_default {
+                    degrade_once(
+                        ctx.degradations,
+                        span,
+                        "highlight-geometry",
+                        "a highlight edge/extent/radius/stroke detail is dropped; only the \
+                         fill is kept",
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn push_text(
     out: &mut Vec<IrInline>,
     text: &str,
@@ -635,6 +856,7 @@ fn push_text(
     if text.is_empty() {
         return;
     }
+    report_text_aspects(styles, span, ctx);
     let run = run_from_styles(text, styles, ctx.defaults, span);
     ctx.prev_char = run.text.chars().next_back();
     if let Some(IrInline::Text(prev)) = out.last_mut()

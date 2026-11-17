@@ -6,7 +6,7 @@ use super::WriteCtx;
 use super::image::write_image_inline;
 use super::package::write_value_element;
 use super::run::{write_inline, write_text_run};
-use crate::document::{Document, FootnoteFormat, ImageData, InlineElement};
+use crate::document::{Document, FootnoteEntryStyle, FootnoteFormat, ImageData, InlineElement};
 
 /// Write `w:footnotePr` element with optional circled-number format and
 /// per-page restart. `restart_each_page` mirrors Typst: the footnote counter
@@ -108,8 +108,13 @@ pub(super) fn generate_footnotes_xml(
     }
     elem.write_inner_content(|w| {
         // Separator footnotes (id 0 and 1 are reserved by OOXML spec)
-        write_separator_footnote(w, "0", "separator")?;
-        write_separator_footnote(w, "1", "continuationSeparator")?;
+        write_separator_footnote(w, "0", "separator", &ctx.doc_style.footnote_entry)?;
+        write_separator_footnote(
+            w,
+            "1",
+            "continuationSeparator",
+            &FootnoteEntryStyle::default(),
+        )?;
 
         // Actual footnotes. The image ordinal counts across all footnotes:
         // `generate_footnote_rels` enumerates footnote images globally
@@ -123,10 +128,23 @@ pub(super) fn generate_footnotes_xml(
                 .write_inner_content(|fn_w| {
                     fn_w.create_element("w:p").write_inner_content(|p_w| {
                         // Paragraph properties with footnote text style
+                        let entry = &ctx.doc_style.footnote_entry;
                         p_w.create_element("w:pPr").write_inner_content(|ppr| {
                             ppr.create_element("w:pStyle")
                                 .with_attribute(("w:val", "FootnoteText"))
                                 .write_empty()?;
+                            if let Some(gap) = entry.gap_twips {
+                                let gap = gap.to_string();
+                                ppr.create_element("w:spacing")
+                                    .with_attribute(("w:after", gap.as_str()))
+                                    .write_empty()?;
+                            }
+                            if let Some(indent) = entry.indent_twips {
+                                let indent = indent.to_string();
+                                ppr.create_element("w:ind")
+                                    .with_attribute(("w:firstLine", indent.as_str()))
+                                    .write_empty()?;
+                            }
                             Ok(())
                         })?;
                         // Word generates the marker from the footnote format;
@@ -198,6 +216,7 @@ fn write_separator_footnote<W: Write>(
     writer: &mut Writer<W>,
     id: &str,
     sep_type: &str,
+    entry: &FootnoteEntryStyle,
 ) -> io::Result<()> {
     writer
         .create_element("w:footnote")
@@ -205,10 +224,38 @@ fn write_separator_footnote<W: Write>(
         .with_attribute(("w:id", id))
         .write_inner_content(|w| {
             w.create_element("w:p").write_inner_content(|p_w| {
-                p_w.create_element("w:r").write_inner_content(|r_w| {
-                    r_w.create_element("w:separator").write_empty()?;
-                    Ok(())
-                })?;
+                let custom_stroke = entry.separator_stroke_eighths.is_some();
+                if custom_stroke || entry.clearance_twips.is_some() {
+                    p_w.create_element("w:pPr").write_inner_content(|ppr| {
+                        if let Some(clearance) = entry.clearance_twips {
+                            let clearance = clearance.to_string();
+                            ppr.create_element("w:spacing")
+                                .with_attribute(("w:before", clearance.as_str()))
+                                .write_empty()?;
+                        }
+                        // A declared `line(...)` separator replaces Word's default
+                        // rule with a paragraph border carrying the stroke width.
+                        if let Some(eighths) = entry.separator_stroke_eighths {
+                            let sz = eighths.to_string();
+                            ppr.create_element("w:pBdr").write_inner_content(|bdr| {
+                                bdr.create_element("w:bottom")
+                                    .with_attribute(("w:val", "single"))
+                                    .with_attribute(("w:sz", sz.as_str()))
+                                    .with_attribute(("w:space", "1"))
+                                    .with_attribute(("w:color", "auto"))
+                                    .write_empty()?;
+                                Ok(())
+                            })?;
+                        }
+                        Ok(())
+                    })?;
+                }
+                if !custom_stroke {
+                    p_w.create_element("w:r").write_inner_content(|r_w| {
+                        r_w.create_element("w:separator").write_empty()?;
+                        Ok(())
+                    })?;
+                }
                 Ok(())
             })?;
             Ok(())

@@ -348,6 +348,14 @@ pub(super) fn generate_core_properties(
                 w.create_element("dc:creator")
                     .write_text_content(BytesText::new(author))?;
             }
+            if let Some(keywords) = &doc.metadata.keywords {
+                w.create_element("cp:keywords")
+                    .write_text_content(BytesText::new(keywords))?;
+            }
+            if let Some(description) = &doc.metadata.description {
+                w.create_element("dc:description")
+                    .write_text_content(BytesText::new(description))?;
+            }
             w.create_element("dcterms:created")
                 .with_attribute(("xsi:type", "dcterms:W3CDTF"))
                 .write_text_content(BytesText::new(&doc.metadata.created_time()))?;
