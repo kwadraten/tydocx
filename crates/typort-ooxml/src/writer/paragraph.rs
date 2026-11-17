@@ -21,6 +21,7 @@ pub(super) fn write_paragraph<W: Write>(
     writer.create_element("w:p").write_inner_content(|w| {
         let has_style = para.style.is_some();
         let has_list = para.list_info.is_some();
+        let has_num = has_list || para.num_pr.is_some();
         let has_alignment = para.alignment.is_some();
         let has_left_indent = para.left_indent.is_some() || para.right_indent.is_some();
         let has_keep = para.keep_lines || para.keep_next;
@@ -46,6 +47,7 @@ pub(super) fn write_paragraph<W: Write>(
         let has_spacing = para.spacing_before.is_some() || para.spacing_after.is_some();
         if has_style
             || has_list
+            || has_num
             || has_alignment
             || suppress_indent
             || has_eq_number
@@ -87,7 +89,7 @@ pub(super) fn write_paragraph<W: Write>(
                 if para.keep_lines {
                     ppr.create_element("w:keepLines").write_empty()?;
                 }
-                if let Some(li) = &para.list_info {
+                if let Some(li) = para.list_info.as_ref().or(para.num_pr.as_ref()) {
                     let id_str = li.id.to_string();
                     let lvl_str = li.level.to_string();
                     ppr.create_element("w:numPr").write_inner_content(|num| {

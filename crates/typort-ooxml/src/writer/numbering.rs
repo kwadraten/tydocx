@@ -54,15 +54,28 @@ pub(super) fn generate_numbering_xml(
                     }
                     Ok(())
                 })?;
+            for instance in &doc.heading_num_instances {
+                let abs_id_str = instance.abstract_num_id.to_string();
+                w.create_element("w:abstractNum")
+                    .with_attribute(("w:abstractNumId", abs_id_str.as_str()))
+                    .write_inner_content(|abs| {
+                        for level in &instance.levels {
+                            let ilvl_str = level.ilvl.to_string();
+                            write_heading_level(
+                                abs,
+                                ilvl_str.as_str(),
+                                "1",
+                                level.num_fmt,
+                                level.lvl_text.as_str(),
+                            )?;
+                        }
+                        Ok(())
+                    })?;
+            }
             // Numbering instance 1 -> abstractNum 1 (ordered)
             write_numbering_instance(w, "1", "1", None, &[])?;
             // Numbering instance 2 -> abstractNum 2 (unordered)
             write_numbering_instance(w, "2", "2", None, &[])?;
-            // No abstractNum 3: the Chinese five-level heading numbering
-            // definition was emitted unconditionally but never referenced by
-            // any w:numPr — heading numbering is literal text, not linked
-            // Word numbering (see #29). It returns if heading numbering is
-            // ever linked to a numId.
             // Dynamic numbering instances for each top-level list
             for instance in &doc.list_num_instances {
                 let num_id_str = instance.num_id.to_string();
@@ -75,6 +88,11 @@ pub(super) fn generate_numbering_xml(
                     Some(start_str.as_str()),
                     &instance.level_overrides,
                 )?;
+            }
+            for instance in &doc.heading_num_instances {
+                let num_id_str = instance.num_id.to_string();
+                let abs_id_str = instance.abstract_num_id.to_string();
+                write_numbering_instance(w, num_id_str.as_str(), abs_id_str.as_str(), None, &[])?;
             }
             Ok(())
         })?;
@@ -140,6 +158,30 @@ fn write_numbering_instance<W: Write>(
                         )
                     })?;
             }
+            Ok(())
+        })?;
+    Ok(())
+}
+
+/// A heading numbering level: like [`write_numbering_level`] but with
+/// `w:suff="space"` — Typst separates the number from the body with a space
+/// (a weak `h(0.3em)`), not Word's default tab.
+fn write_heading_level<W: Write>(
+    writer: &mut Writer<W>,
+    ilvl: &str,
+    start: &str,
+    num_fmt: &str,
+    lvl_text: &str,
+) -> io::Result<()> {
+    writer
+        .create_element("w:lvl")
+        .with_attribute(("w:ilvl", ilvl))
+        .write_inner_content(|lvl| {
+            write_value_element(lvl, "w:start", start)?;
+            write_value_element(lvl, "w:numFmt", num_fmt)?;
+            write_value_element(lvl, "w:suff", "space")?;
+            write_value_element(lvl, "w:lvlText", lvl_text)?;
+            write_value_element(lvl, "w:lvlJc", "left")?;
             Ok(())
         })?;
     Ok(())

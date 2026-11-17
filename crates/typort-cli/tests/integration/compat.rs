@@ -101,9 +101,70 @@ fn c1_overline_drops_decoration() {
     );
     assert_eq!(
         c2.matches("<w:u ").count(),
-        2,
-        "C2 maps overline to underline as well"
+        1,
+        "C2 underlines only the real underline; the overline is a floating line"
     );
+    assert!(
+        c2.contains("<wp:anchor"),
+        "C2 should emit the overline as an anchored shape"
+    );
+}
+
+#[test]
+fn c2_c3_overline_draws_line_above_text() {
+    for mode in [CompatMode::C2, CompatMode::C3] {
+        let xml = fixture_package_with_options(
+            "conformance/conf-overline-line",
+            &ConvertOptions::new(mode),
+        )
+        .part_text("word/document.xml")
+        .to_owned();
+        assert!(
+            xml.contains("<wp:anchor"),
+            "{mode:?}: overline should emit an anchored shape: {xml}"
+        );
+        assert!(
+            xml.contains(r#"relativeFrom="line""#),
+            "{mode:?}: the shape is positioned relative to the text line: {xml}"
+        );
+        assert!(
+            xml.contains(r#"prstGeom prst="line""#),
+            "{mode:?}: the shape is a line: {xml}"
+        );
+        // The vertical offset is measured from Typst's own deco line and is
+        // small (near the top of the line box): a real above-text position,
+        // not an underline.
+        assert!(
+            xml.contains("overlined text"),
+            "{mode:?}: overlined text should survive: {xml}"
+        );
+        assert_eq!(
+            xml.matches("<w:u ").count(),
+            0,
+            "{mode:?}: nothing is underlined in this fixture: {xml}"
+        );
+        let constructs = constructs_for("conformance/conf-overline-line", mode);
+        assert!(
+            constructs.is_empty(),
+            "{mode:?}: a measured overline reports no degradations, got {constructs:?}"
+        );
+    }
+    let c1 = fixture_package_with_options(
+        "conformance/conf-overline-line",
+        &ConvertOptions::new(CompatMode::C1),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
+    assert!(
+        !c1.contains("<wp:anchor"),
+        "C1 should not emit the anchored overline shape"
+    );
+    assert!(
+        c1.contains("overlined text"),
+        "C1 keeps the overlined text: {c1}"
+    );
+    let constructs = c1_constructs("conformance/conf-overline-line");
+    assert_has(&constructs, "overline");
 }
 
 #[test]

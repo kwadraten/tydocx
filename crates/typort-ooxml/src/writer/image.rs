@@ -1,10 +1,11 @@
 use std::io::{self, Write};
 
 use quick_xml::Writer;
+use quick_xml::events::BytesText;
 
 use super::DocParts;
 use crate::document::{
-    BlockElement, CellContent, Document, ImageData, InlineElement, Paragraph, Table,
+    AnchoredLine, BlockElement, CellContent, Document, ImageData, InlineElement, Paragraph, Table,
 };
 
 /// Collect all images from the document model in order of appearance.
@@ -82,6 +83,132 @@ fn collect_images_from_table<'a>(table: &'a Table, images: &mut Vec<&'a ImageDat
 /// Image relationships follow all fixed parts in `document.xml.rels`.
 pub(super) fn image_rel_id(image_index: usize, parts: &DocParts) -> String {
     format!("rId{}", parts.relationships.len() + image_index)
+}
+
+/// Write a floating horizontal line as a `wp:anchor` + `wps:wsp` shape: an
+/// absolute page-x, line-relative y position, and a `line` preset geometry.
+/// This is the overline trick — the shape is anchored to a run on the text
+/// line it decorates, so it follows that line's vertical position.
+#[allow(
+    clippy::too_many_lines,
+    reason = "writes the full wp:anchor shape tree in schema order"
+)]
+pub(super) fn write_anchored_line<W: Write>(
+    writer: &mut Writer<W>,
+    line: &AnchoredLine,
+    n: usize,
+) -> io::Result<()> {
+    let x = line.x_emu.to_string();
+    let y = line.y_emu.to_string();
+    let cx = line.length_emu.to_string();
+    let thick = line.thickness_emu.to_string();
+    let id_str = n.to_string();
+    let name = format!("Line{n}");
+    writer.create_element("w:r").write_inner_content(|w| {
+        w.create_element("w:drawing").write_inner_content(|dw| {
+            dw.create_element("wp:anchor")
+                .with_attribute(("distT", "0"))
+                .with_attribute(("distB", "0"))
+                .with_attribute(("distL", "0"))
+                .with_attribute(("distR", "0"))
+                .with_attribute(("simplePos", "0"))
+                .with_attribute(("relativeHeight", "0"))
+                .with_attribute(("behindDoc", "0"))
+                .with_attribute(("locked", "0"))
+                .with_attribute(("layoutInCell", "1"))
+                .with_attribute(("allowOverlap", "1"))
+                .write_inner_content(|an| {
+                    an.create_element("wp:simplePos")
+                        .with_attribute(("x", "0"))
+                        .with_attribute(("y", "0"))
+                        .write_empty()?;
+                    an.create_element("wp:positionH")
+                        .with_attribute(("relativeFrom", "page"))
+                        .write_inner_content(|ph| {
+                            ph.create_element("wp:posOffset")
+                                .write_text_content(BytesText::new(&x))?;
+                            Ok(())
+                        })?;
+                    an.create_element("wp:positionV")
+                        .with_attribute(("relativeFrom", "line"))
+                        .write_inner_content(|pv| {
+                            pv.create_element("wp:posOffset")
+                                .write_text_content(BytesText::new(&y))?;
+                            Ok(())
+                        })?;
+                    an.create_element("wp:extent")
+                        .with_attribute(("cx", cx.as_str()))
+                        .with_attribute(("cy", "0"))
+                        .write_empty()?;
+                    an.create_element("wp:effectExtent")
+                        .with_attribute(("l", "0"))
+                        .with_attribute(("t", "0"))
+                        .with_attribute(("r", "0"))
+                        .with_attribute(("b", "0"))
+                        .write_empty()?;
+                    an.create_element("wp:wrapNone").write_empty()?;
+                    an.create_element("wp:docPr")
+                        .with_attribute(("id", id_str.as_str()))
+                        .with_attribute(("name", name.as_str()))
+                        .write_empty()?;
+                    an.create_element("wp:cNvGraphicFramePr").write_empty()?;
+                    an.create_element("a:graphic")
+                        .with_attribute(("xmlns:a", "http://schemas.openxmlformats.org/drawingml/2006/main"))
+                        .write_inner_content(|gr| {
+                            gr.create_element("a:graphicData")
+                                .with_attribute(("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"))
+                                .write_inner_content(|gd| {
+                                    gd.create_element("wps:wsp")
+                                        .with_attribute(("xmlns:wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"))
+                                        .write_inner_content(|wsp| {
+                                            wsp.create_element("wps:cNvSpPr").write_empty()?;
+                                            wsp.create_element("wps:spPr").write_inner_content(|sp| {
+                                                sp.create_element("a:xfrm").write_inner_content(|xf| {
+                                                    xf.create_element("a:off")
+                                                        .with_attribute(("x", "0"))
+                                                        .with_attribute(("y", "0"))
+                                                        .write_empty()?;
+                                                    xf.create_element("a:ext")
+                                                        .with_attribute(("cx", cx.as_str()))
+                                                        .with_attribute(("cy", "0"))
+                                                        .write_empty()?;
+                                                    Ok(())
+                                                })?;
+                                                sp.create_element("a:prstGeom")
+                                                    .with_attribute(("prst", "line"))
+                                                    .write_inner_content(|pg| {
+                                                        pg.create_element("a:avLst").write_empty()?;
+                                                        Ok(())
+                                                    })?;
+                                                sp.create_element("a:ln")
+                                                    .with_attribute(("w", thick.as_str()))
+                                                    .write_inner_content(|ln| {
+                                                        if let Some(color) = &line.color {
+                                                            ln.create_element("a:solidFill").write_inner_content(|sf| {
+                                                                sf.create_element("a:srgbClr")
+                                                                    .with_attribute(("val", color.as_str()))
+                                                                    .write_empty()?;
+                                                                Ok(())
+                                                            })?;
+                                                        }
+                                                        Ok(())
+                                                    })?;
+                                                Ok(())
+                                            })?;
+                                            wsp.create_element("wps:bodyPr").write_empty()?;
+                                            Ok(())
+                                        })?;
+                                    Ok(())
+                                })?;
+                            Ok(())
+                        })?;
+                    Ok(())
+                })?;
+            Ok(())
+        })?;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// Write a `wp:inline` drawing element for an embedded image.

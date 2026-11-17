@@ -1,5 +1,5 @@
-// Conformance L2: heading numbers are baked in as literal text runs, not
-// linked Word numbering — they do not update if headings move.
+// Conformance L2: simple heading numbering maps to Word numbering
+// (w:numPr); complex/unrepresentable numbering stays literal + degradation.
 #set heading(numbering: "1.1")
 
 = First

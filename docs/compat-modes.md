@@ -311,12 +311,12 @@ S5 与“警告”的关系：C1 不对“失去动态性”警告——C1 的�
 颜色/粗细/位置）。OOXML 编码：
 
 - 每个被 overline 的 run，在同一段落内加一个锚定线形状：
-  `w:drawing` → `wp:anchor`（`relativeFrom="paragraph"` 横向、
+  `w:drawing` → `wp:anchor`（`relativeFrom="page"` 横向、
   `relativeFrom="line"` 纵向，`behindDoc="0"`）→ `wps:wsp` →
   `a:prstGeom prst="line"` + `a:ln`（颜色/粗细取 `OverlineElem.stroke`）。
-- 线宽 = 该 run 的渲染宽度 + `extent`（两侧外延）；线纵向位置由
-  `OverlineElem.offset`（或字体表的 overline 位置）决定。宽度与位置取自
-  Paged 渲染（与图片显示尺寸同路：按内容哈希/span 匹配 run 的几何）。
+- 线宽与位置取自 Paged 渲染的 `OverlineElem` tag bracket（横向取页内绝对
+  x——deco 线段本就是绝对坐标；纵向取线段 y 与文本行顶之差）。span 匹配
+  不上的 run 按规则 4 回退 C1（警告 + 文本保留）。
 - `evade: true`（默认）时线在与字形碰撞处断开——形状层面无法逐字断开，
   实现时整条线照画并在文档里记为已知近似；`background: true/false`
   只影响层叠（线在字前/字后），锚定形状的 `behindDoc` 对应之。
@@ -433,9 +433,15 @@ documented gap。探针本身是一次小调查，不属实现。
 - `Numbering::Pattern` 且全部 counting symbol 可映射 → 接 numbering：
   标题段写 `w:numPr`（按级别取 numId），`w:lvl` 的 `numFmt`/`lvlText`
   由模式生成；多级模式（`"1.1"`、`full: true`）生成多级 abstractNum，
-  `lvlText` 用 `%1.%2` 形式。
-- `Numbering::Func`（任意函数）→ 回退字面文本（现状行为）。
-- 模式含不可映射 symbol → 回退字面文本。
+  `lvlText` 用 `%1.%2` 形式。可映射 symbol 是
+  Arabic/LowerLatin/UpperLatin/LowerRoman/UpperRoman
+  （decimal/lowerLetter/upperLetter/lowerRoman/upperRoman），其余回退。
+- `Numbering::Func`（任意函数）→ 回退字面文本 + `heading-numbering`
+  降级（Literalized）。
+- 模式含不可映射 symbol → 回退字面文本 + `heading-numbering` 降级。
+- 源码 `#counter(heading).update` 等改计数的情形：按文档顺序模拟 Word
+  计数器并与 Typst 实际渲染的编号比较，不一致时按实例记一次
+  `heading-numbering` 降级（Approximated）。
 
 Counting symbol → `w:numFmt` 映射（实现时按 ECMA-376 `ST_NumberFormat`
 逐项核对，带“（核）”的须核对后再写死）：

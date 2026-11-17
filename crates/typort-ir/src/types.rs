@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 pub use typort_ooxml::document::{
-    Alignment, CitationSource, DocumentStyle, FootnoteFormat, HangingIndent, PageNumberFormat,
-    PageSettings, ParagraphStyle, Run, TableBorders, TableCellMargins, VerticalAlign,
+    Alignment, AnchoredLine, CitationSource, DocumentStyle, FootnoteFormat, HangingIndent,
+    PageNumberFormat, PageSettings, ParagraphStyle, Run, TableBorders, TableCellMargins,
+    VerticalAlign,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,13 +66,18 @@ pub enum IrBlock {
     Paragraph(IrParagraph),
     Heading {
         level: u8,
+        /// The number Typst rendered for this heading, if any. Emitted as
+        /// literal text whenever the numbering is not mapped to a `w:numPr`.
         numbering_text: Option<String>,
-        /// `set heading(numbering: <function>)` — a function numbering cannot
-        /// be resolved to a literal prefix; C1 degrades it.
-        func_numbering: bool,
+        /// How the heading's numbering maps to Word numbering: `Mappable`
+        /// when the pattern is a set of Arabic/Latin/Roman pieces, or
+        /// `Unmappable` when Typst's numbering is a function or uses a numeral
+        /// system OOXML cannot express. `None` when no numbering is declared.
+        numbering: Option<IrHeadingNumbering>,
         body: Vec<IrInline>,
         label: Option<String>,
         alignment: Option<Alignment>,
+        span: Option<typst_syntax::Span>,
     },
     Table(IrTable),
     Grid(IrGrid),
@@ -190,6 +196,11 @@ pub enum IrInline {
         span: Option<typst_syntax::Span>,
         body: Vec<IrInline>,
     },
+    /// A measured overline: a floating line shape above this position in the
+    /// text, geometry taken from Typst's own rendered deco line. Inserted by
+    /// the paged-frame patch when the run's `overline` flag can be matched to
+    /// a rendered `OverlineElem` bracket.
+    Overline(AnchoredLine),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,6 +318,18 @@ pub struct IrLevelDef {
     pub lvl_text: String,
 }
 
+/// How a heading's Typst numbering maps onto Word numbering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrHeadingNumbering {
+    /// A static `NumberingPattern` whose pieces all map to an OOXML
+    /// `w:numFmt`. Emitted as `w:numPr` + a numbering instance.
+    Mappable(IrNumberingPattern),
+    /// A numbering function, or a pattern containing a numeral system OOXML
+    /// cannot express (Chinese, symbols, …). Emitted as literal text + a
+    /// `heading-numbering` degradation.
+    Unmappable,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrNumeralSystem {
     Arabic,
@@ -314,6 +337,70 @@ pub enum IrNumeralSystem {
     UpperLatin,
     LowerRoman,
     UpperRoman,
+}
+
+impl IrNumeralSystem {
+    /// OOXML `w:numFmt` value for this system.
+    #[must_use]
+    pub fn num_fmt(self) -> &'static str {
+        match self {
+            Self::Arabic => "decimal",
+            Self::LowerLatin => "lowerLetter",
+            Self::UpperLatin => "upperLetter",
+            Self::LowerRoman => "lowerRoman",
+            Self::UpperRoman => "upperRoman",
+        }
+    }
+
+    /// Render a counter value the way the Typst/OOXML numeral system does.
+    #[must_use]
+    pub fn render(self, number: u64) -> String {
+        match self {
+            Self::Arabic => number.to_string(),
+            Self::LowerLatin => to_latin(number, false),
+            Self::UpperLatin => to_latin(number, true),
+            Self::LowerRoman => to_roman(number, false),
+            Self::UpperRoman => to_roman(number, true),
+        }
+    }
+}
+
+fn to_latin(mut number: u64, upper: bool) -> String {
+    let mut out = String::new();
+    while number > 0 {
+        number -= 1;
+        let c = char::from_u32(u32::from(b'a') + u32::try_from(number % 26).unwrap_or(0))
+            .unwrap_or('a');
+        out.push(if upper { c.to_ascii_uppercase() } else { c });
+        number /= 26;
+    }
+    out.chars().rev().collect()
+}
+
+fn to_roman(mut number: u64, upper: bool) -> String {
+    const TABLE: &[(u64, &str)] = &[
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ];
+    let mut out = String::new();
+    for (value, numeral) in TABLE {
+        while number >= *value {
+            out.push_str(numeral);
+            number -= value;
+        }
+    }
+    if upper { out.to_ascii_uppercase() } else { out }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use codex::numeral_systems::NamedNumeralSystem;
 use typort_ir::{
     Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrDocument, IrDocumentInfo,
-    IrEnum, IrEnumItem, IrEquation, IrFigureKind, IrGrid, IrInline, IrList, IrListItem,
-    IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrRaw, IrSectionBreakType,
-    IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, PageSettings, TableBorders,
-    TableCellMargins,
+    IrEnum, IrEnumItem, IrEquation, IrFigureKind, IrGrid, IrHeadingNumbering, IrInline, IrList,
+    IrListItem, IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrRaw,
+    IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, PageSettings,
+    TableBorders, TableCellMargins,
 };
 use typort_ooxml::document::{Alignment, Run, VerticalAlign};
 use typst_library::diag::SourceResult;
@@ -1037,11 +1037,12 @@ impl Collector<'_> {
         }
         Ok(heading_block(
             level,
+            heading_numbering(styles),
             numbering_text,
-            heading_func_numbering(styles),
             body,
             child.label().map(|l| l.resolve().to_string()),
             alignment_from_styles(styles),
+            child.span().id().map(|_| child.span()),
             outlined,
         ))
     }
@@ -1128,11 +1129,12 @@ impl Collector<'_> {
         }
         Ok(heading_block(
             level,
+            heading_numbering(styles),
             numbering_text,
-            heading_func_numbering(styles),
             body,
             inner.label().map(|l| l.resolve().to_string()),
             alignment,
+            inner.span().id().map(|_| inner.span()),
             outlined,
         ))
     }
@@ -2699,11 +2701,16 @@ fn heading_numbers(heading: &HeadingElem) -> Option<String> {
     }
 }
 
-fn heading_func_numbering(styles: StyleChain<'_>) -> bool {
-    matches!(
-        styles.get_ref(HeadingElem::numbering),
-        Some(Numbering::Func(_))
-    )
+/// The heading's declared `set heading(numbering:)`: `Mappable` when the
+/// pattern's numeral systems all have an OOXML `w:numFmt`, `Unmappable` for a
+/// function numbering or an unrepresentable system. `None` = no numbering.
+fn heading_numbering(styles: StyleChain<'_>) -> Option<IrHeadingNumbering> {
+    let numbering = styles.get_cloned(HeadingElem::numbering)?;
+    Some(match &numbering {
+        Numbering::Func(_) => IrHeadingNumbering::Unmappable,
+        Numbering::Pattern(_) => pattern_from_numbering(&numbering, true)
+            .map_or(IrHeadingNumbering::Unmappable, IrHeadingNumbering::Mappable),
+    })
 }
 
 fn length_twips(length: Length, em_pt: f64) -> u32 {
@@ -2853,11 +2860,12 @@ fn figure_gap_twips(figure: &FigureElem, styles: StyleChain<'_>, em_pt: f64) -> 
 /// style that would re-enter the TOC.
 fn heading_block(
     level: u8,
+    numbering: Option<IrHeadingNumbering>,
     numbering_text: Option<String>,
-    func_numbering: bool,
     body: Vec<IrInline>,
     label: Option<String>,
     alignment: Option<Alignment>,
+    span: Option<Span>,
     outlined: bool,
 ) -> IrBlock {
     if !outlined {
@@ -2883,10 +2891,11 @@ fn heading_block(
     IrBlock::Heading {
         level,
         numbering_text,
-        func_numbering,
+        numbering,
         body,
         label,
         alignment,
+        span,
     }
 }
 

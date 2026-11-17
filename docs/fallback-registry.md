@@ -124,18 +124,6 @@ not a deletion list.
 
 ## Known gaps in the IR path itself
 
-### M9 overline
-- **What:** overline is a line shape above the text — `Run` carries it
-  as `Run::overline` (never serialized directly) and the lowering
-  translates it per compat mode: C1 drops it with an `overline`
-  degradation (text kept); C2/C3 rewrite it to underline, matching the
-  legacy walk.
-- **Delete when:** the lowering gains a real overline shape (a paragraph
-  border or a drawing above the run), per the M9 design decision
-  (overline = line shape above text). Until then the degradation is
-  recorded on the construct, not silently dropped.
-- **Owner:** batch 7 (M9 + L2).
-
 ### Bibliography entries
 - **What:** the IR path renders a bibliography as an empty
   `<w:bibliography/>` field: the fragment realization of a
@@ -425,6 +413,18 @@ per item), `golden_formatted_footnote` (stale snapshot expected a
 pre-cleanup redundant size override).
 
 ## Resolved — no longer a fallback
+
+### M9 overline (batch 7)
+- Typst renders `#overline` as real `Geometry::Line` shapes inside an
+  `OverlineElem` tag bracket in the paged frame. `realize/overline.rs`
+  measures each bracket (segment extents, stroke, and the offset from the
+  text line's top) and injects `IrInline::Overline(AnchoredLine)` before
+  the first covered run, matched by span containment with an order+text
+  fallback; the covered runs' `overline` flag is cleared. C2/C3 lower it
+  to a `wp:anchor` + `wps` `line` shape positioned `relativeFrom="line"`.
+  C1 is unchanged (degradation + text kept); an overline the paged match
+  cannot cover keeps the flag and degrades the same way. The underline
+  stopgap is gone.
 
 ### Heading-size measurement
 - The IR path measures per-level heading sizes from the collected
