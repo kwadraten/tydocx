@@ -1,8 +1,9 @@
 use typort_ooxml::document::Run;
-use typst_library::foundations::StyleChain;
+use typst_library::foundations::{Smart, StyleChain};
 use typst_library::layout::Abs;
 use typst_library::text::{
-    DecoLine, FontFamily, FontStyle, FontWeight, ScriptKind, TextElem, variant,
+    DecoLine, FontFamily, FontStyle, FontWeight, NumberType, NumberWidth, ScriptKind, TextElem,
+    variant,
 };
 use typst_syntax::Span;
 
@@ -133,6 +134,38 @@ pub fn run_from_styles(
             ScriptKind::Super => run.superscript = true,
             ScriptKind::Sub => run.subscript = true,
         }
+    }
+
+    if !styles.get(TextElem::ligatures) {
+        run.ligatures = Some("none");
+    } else if styles.get(TextElem::discretionary_ligatures) {
+        run.ligatures = Some("contextual");
+    } else if styles.get(TextElem::historical_ligatures) {
+        run.ligatures = Some("historical");
+    }
+    match styles.get(TextElem::number_type) {
+        Smart::Custom(NumberType::Lining) => run.num_form = Some("lining"),
+        Smart::Custom(NumberType::OldStyle) => run.num_form = Some("oldStyle"),
+        _ => {}
+    }
+    match styles.get(TextElem::number_width) {
+        Smart::Custom(NumberWidth::Proportional) => run.number_spacing = Some("proportional"),
+        Smart::Custom(NumberWidth::Tabular) => run.number_spacing = Some("tabular"),
+        _ => {}
+    }
+    for (tag, value) in &styles.get_cloned(TextElem::features).0 {
+        if *value != 0 && matches!(tag.to_str_lossy().as_ref(), "smcp" | "c2sc") {
+            run.smallcaps = true;
+        }
+    }
+    let baseline = styles.get(TextElem::baseline);
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "baseline shifts stay far below i32 range"
+    )]
+    let baseline_half_pt = ((baseline.abs.to_pt() + baseline.em.get() * size_pt) * 2.0).round() as i32;
+    if baseline_half_pt != 0 {
+        run.position_half_pt = Some(baseline_half_pt);
     }
 
     run

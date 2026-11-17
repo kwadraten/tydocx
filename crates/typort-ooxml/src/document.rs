@@ -262,6 +262,16 @@ pub struct Run {
     /// A forced line break (`\` in Typst): the writer emits `<w:r><w:br/></w:r>`
     /// and ignores `text`. Kept distinct so it never coalesces with text runs.
     pub line_break: bool,
+    /// OOXML `w:ligatures` value (e.g. `"none"`, `"contextual"`,
+    /// `"historical"`). `None` inherits the document default.
+    pub ligatures: Option<&'static str>,
+    /// OOXML `w:numForm` value (`"lining"` or `"oldStyle"`).
+    pub num_form: Option<&'static str>,
+    /// OOXML `w:numberSpacing` value (`"proportional"` or `"tabular"`).
+    pub number_spacing: Option<&'static str>,
+    /// Baseline shift in half-points (`w:position/@w:val`, signed; positive
+    /// raises the text).
+    pub position_half_pt: Option<i32>,
 }
 
 impl Run {
@@ -287,6 +297,10 @@ impl Run {
             tracking_twips: None,
             span: None,
             line_break: false,
+            ligatures: None,
+            num_form: None,
+            number_spacing: None,
+            position_half_pt: None,
         }
     }
 
@@ -324,6 +338,10 @@ impl Run {
             font_east_asia,
             size_half_pt,
             tracking_twips,
+            ligatures,
+            num_form,
+            number_spacing,
+            position_half_pt,
         } = self;
         RunFormat {
             bold: *bold,
@@ -342,6 +360,10 @@ impl Run {
             font_east_asia: font_east_asia.as_deref(),
             size_half_pt: *size_half_pt,
             tracking_twips: tracking_twips.filter(|t| *t > 0),
+            ligatures: *ligatures,
+            num_form: *num_form,
+            number_spacing: *number_spacing,
+            position_half_pt: *position_half_pt,
         }
     }
 }
@@ -374,6 +396,10 @@ pub struct RunFormat<'a> {
     font_east_asia: Option<&'a str>,
     size_half_pt: Option<u32>,
     tracking_twips: Option<u32>,
+    ligatures: Option<&'a str>,
+    num_form: Option<&'a str>,
+    number_spacing: Option<&'a str>,
+    position_half_pt: Option<i32>,
 }
 
 impl RunFormat<'_> {
@@ -440,6 +466,17 @@ pub struct Paragraph {
     /// Override the paragraph's `w:before` spacing (twips).
     /// Used to suppress heading above-spacing at the start of a page/document.
     pub spacing_before: Option<u32>,
+    /// Override the paragraph's `w:after` spacing (twips).
+    pub spacing_after: Option<u32>,
+    /// Emit `<w:keepNext/>`: keep this paragraph on the same page as the next
+    /// (Typst `block(sticky: true)`).
+    pub keep_next: bool,
+    /// Explicit `<w:ind w:left>` override (twips) for list-item paragraphs;
+    /// `None` inherits the numbering level's indentation.
+    pub list_left_twips: Option<u32>,
+    /// Explicit `<w:ind w:hanging>` override (twips) for list-item paragraphs;
+    /// `None` inherits the numbering level's hanging indent.
+    pub list_hanging_twips: Option<u32>,
     /// 1-based page number this paragraph was recovered from (from the paged
     /// frame it was scraped out of). `Some` only for content reinserted by the
     /// recovery pass; lets the element→page map use the real page instead of a
@@ -913,6 +950,15 @@ pub struct PageSettings {
     pub columns: Option<u32>,
     /// Spacing between columns in twips (default 720 = 0.5 inch).
     pub column_spacing: Option<u32>,
+    /// `<w:pgMar w:header>` distance (twips) — Typst `page(header-ascent:)`.
+    pub header_twips: Option<u32>,
+    /// `<w:pgMar w:footer>` distance (twips) — Typst `page(footer-descent:)`.
+    pub footer_twips: Option<u32>,
+    /// When set, emit `<w:lnNumType w:distance="…">` — Typst
+    /// `par.line(numbering:)` enabled, value = `number-clearance`.
+    pub line_number_distance_twips: Option<u32>,
+    /// `<w:vAlign>` for the section — Typst `set align(horizon|bottom|top)`.
+    pub vertical_align: Option<VerticalAlign>,
 }
 
 impl Default for PageSettings {
@@ -926,6 +972,10 @@ impl Default for PageSettings {
             margin_right: 1800,
             columns: None,
             column_spacing: None,
+            header_twips: None,
+            footer_twips: None,
+            line_number_distance_twips: None,
+            vertical_align: None,
         }
     }
 }
@@ -936,6 +986,10 @@ pub struct DocumentMetadata {
     pub author: Option<String>,
     /// ISO 8601 timestamp for creation time. If not set, a default is used.
     pub created: Option<String>,
+    /// Typst `document(description:)` → `dc:description`.
+    pub description: Option<String>,
+    /// Typst `document(keywords:)` → `cp:keywords` (comma-joined).
+    pub keywords: Option<String>,
 }
 
 impl DocumentMetadata {
@@ -958,6 +1012,23 @@ pub enum FootnoteFormat {
     #[default]
     Decimal,
     CircledNumber,
+}
+
+/// Footnote area layout overrides from Typst `set footnote.entry(...)`.
+/// Each `None` inherits the Word default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FootnoteEntryStyle {
+    /// First-line indent (twips) applied to each footnote's first paragraph.
+    /// Typst `footnote.entry(indent:)`.
+    pub indent_twips: Option<u32>,
+    /// Spacing above the separator line (twips). Typst `footnote.entry(clearance:)`.
+    pub clearance_twips: Option<u32>,
+    /// Gap between consecutive footnotes (twips) — `w:spacing w:after` on
+    /// footnote paragraphs. Typst `footnote.entry(gap:)`.
+    pub gap_twips: Option<u32>,
+    /// Separator rule thickness in eighths of a point (`w:sz`), declared via a
+    /// `line(...)` separator's `stroke` thickness.
+    pub separator_stroke_eighths: Option<u32>,
 }
 
 /// Page number format for footer page numbering.
@@ -1040,6 +1111,8 @@ pub struct DocumentStyle {
     pub body_cap_height_ratio: f64,
     /// `#set text(hyphenate: false)` → `w:suppressAutoHyphens` in settings.
     pub suppress_auto_hyphens: bool,
+    /// `set footnote.entry(...)` overrides (indent, clearance, gap, separator).
+    pub footnote_entry: FootnoteEntryStyle,
 }
 
 impl Default for DocumentStyle {
@@ -1075,6 +1148,7 @@ impl Default for DocumentStyle {
             hyperlink_color: "0563C1".to_string(),
             body_cap_height_ratio: 0.66,
             suppress_auto_hyphens: false,
+            footnote_entry: FootnoteEntryStyle::default(),
         }
     }
 }

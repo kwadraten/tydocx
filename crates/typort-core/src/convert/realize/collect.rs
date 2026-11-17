@@ -8,19 +8,20 @@ use typort_ir::{
     IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, PageSettings, TableBorders,
     TableCellMargins,
 };
-use typort_ooxml::document::{Alignment, VerticalAlign};
+use typort_ooxml::document::{Alignment, Run, VerticalAlign};
 use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
 use typst_library::foundations::{
-    Content, Element, LocatableSelector, NativeElement, Packed, SequenceElem, Smart, StyleChain,
-    StyledElem, Value,
+    Content, Datetime, Element, LocatableSelector, NativeElement, Packed, SequenceElem, Smart,
+    StyleChain, StyledElem, Value,
 };
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::grid::Celled;
 use typst_library::layout::grid::resolve::{Cell, CellGrid, Entry, Line};
 use typst_library::layout::{
-    Abs, BlockBody, BlockElem, ColbreakElem, GridElem, HAlignment, Length, Margin, PadElem,
-    PageElem, PagebreakElem, Parity, PlaceElem, Rel, VAlignment, VElem,
+    Abs, Angle, BlockBody, BlockElem, ColbreakElem, ColumnsElem, GridElem, HAlignment,
+    HideElem, Length, Margin, MoveElem, PadElem, PageElem, PagebreakElem, Parity, PlaceElem,
+    Rel, RotateElem, ScaleElem, SkewElem, Spacing, VAlignment, VElem,
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
@@ -199,6 +200,33 @@ pub fn document_info(
         author,
         lang: Some(lang.as_str().to_string()),
         region: region.map(|r| r.as_str().to_string()),
+        description: info.description.as_ref().map(ToString::to_string),
+        keywords: info.keywords.iter().map(ToString::to_string).collect(),
+        created: match &info.date {
+            Smart::Custom(Some(date)) => datetime_iso(date),
+            _ => None,
+        },
+    }
+}
+
+fn datetime_iso(date: &Datetime) -> Option<String> {
+    match date {
+        Datetime::Date(d) => Some(format!(
+            "{:04}-{:02}-{:02}T00:00:00Z",
+            d.year(),
+            u8::from(d.month()),
+            d.day()
+        )),
+        Datetime::Datetime(dt) => Some(format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            dt.year(),
+            u8::from(dt.month()),
+            dt.day(),
+            dt.hour(),
+            dt.minute(),
+            dt.second()
+        )),
+        Datetime::Time(_) => None,
     }
 }
 
@@ -212,6 +240,7 @@ struct FigureMeta {
     kind: IrFigureKind,
     label: Option<String>,
     custom_placement: bool,
+    gap_twips: Option<u32>,
 }
 
 impl Collector<'_> {
@@ -259,6 +288,10 @@ impl Collector<'_> {
             self.bib_entries = Some(entries);
         }
         Ok(())
+    }
+
+    fn em_pt(&self) -> f64 {
+        f64::from(self.defaults.size_half_pt) / 2.0
     }
 
     fn inline_ctx(&mut self) -> InlineCtx<'_> {
@@ -372,6 +405,16 @@ impl Collector<'_> {
         if let Some(equation) = inner.to_packed::<EquationElem>() {
             return Ok(self.collect_equation(equation, inner, styles));
         }
+        if inner.to_packed::<HideElem>().is_some() {
+            self.degradations.push(Degradation {
+                span: Some(inner.span()),
+                construct: "hidden-content",
+                action: DegradationAction::Skipped,
+                message: "`hide()` reserves space with no content; the placeholder is dropped"
+                    .to_string(),
+            });
+            return Ok(Vec::new());
+        }
         if inner.to_packed::<BibliographyElem>().is_some() {
             let entries = self.bib_entries.clone().unwrap_or_default();
             return Ok(vec![IrBlock::Bibliography { entries }]);
@@ -445,6 +488,27 @@ impl Collector<'_> {
             apply_pad_insets(&mut blocks, pad, styles);
             return Ok(blocks);
         }
+        if let Some((construct, transparent)) = transparent_container_body(content) {
+            self.degradations.push(Degradation {
+                span: Some(content.span()),
+                construct,
+                action: DegradationAction::Skipped,
+                message: "the container's transform or column layout has no OOXML equivalent; \
+                          the content is kept without it"
+                    .to_string(),
+            });
+            return self.collect_content_blocks(transparent, styles, engine, locator);
+        }
+        if content.to_packed::<HideElem>().is_some() {
+            self.degradations.push(Degradation {
+                span: Some(content.span()),
+                construct: "hidden-content",
+                action: DegradationAction::Skipped,
+                message: "`hide()` reserves space with no content; the placeholder is dropped"
+                    .to_string(),
+            });
+            return Ok(Vec::new());
+        }
         if content.to_packed::<VElem>().is_some() {
             return Ok(Vec::new());
         }
@@ -482,8 +546,8 @@ impl Collector<'_> {
                 body,
             }]);
         }
-        if content.to_packed::<LineElem>().is_some() {
-            return Ok(Vec::new());
+        if let Some(line) = content.to_packed::<LineElem>() {
+            return Ok(line_blocks(line, styles, content.span()));
         }
         Ok(Vec::new())
     }
@@ -595,8 +659,9 @@ impl Collector<'_> {
                     body,
                 });
                 i += 1;
-            } else if child.to_packed::<LineElem>().is_some() {
+            } else if let Some(line) = child.to_packed::<LineElem>() {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
+                out.extend(line_blocks(line, styles, child.span()));
                 i += 1;
             } else if let Some(v) = child.to_packed::<VElem>() {
                 if let Some(twips) = spacing_twips(&v.amount, styles) {
@@ -609,6 +674,19 @@ impl Collector<'_> {
                 apply_pad_insets(&mut blocks, pad, styles);
                 out.extend(blocks);
                 i += 1;
+            } else if let Some(tagged) = child.to_packed::<TagElem>()
+                && let Tag::Start(inner, _) = &tagged.tag
+                && inner.to_packed::<HideElem>().is_some()
+            {
+                flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
+                self.degradations.push(Degradation {
+                    span: Some(inner.span()),
+                    construct: "hidden-content",
+                    action: DegradationAction::Skipped,
+                    message: "`hide()` reserves space with no content; the placeholder is dropped"
+                        .to_string(),
+                });
+                i = skip_tag_children(&children, i + 1, inner.location());
             } else if is_block_element(child) {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
                 out.extend(self.collect_content_element(child, styles, engine, locator)?);
@@ -668,11 +746,23 @@ impl Collector<'_> {
                 body,
             });
         }
+        let marker = styles.get_cloned(ListElem::marker);
+        let custom_marker = marker != crate::convert::lists::default_list_marker();
+        let em_pt = self.em_pt();
+        let (indent_twips, body_indent_twips) = list_layout_twips(
+            styles.get(ListElem::indent),
+            styles.get(ListElem::body_indent),
+            default_list_indents(),
+            em_pt,
+        );
         Ok(IrBlock::List(IrList {
             items,
             depth,
-            custom_marker: styles.get_cloned(ListElem::marker)
-                != crate::convert::lists::default_list_marker(),
+            custom_marker,
+            indent_twips,
+            body_indent_twips,
+            spacing_twips: list_spacing_twips(styles.get(ListElem::spacing), em_pt),
+            marker_texts: literal_marker_texts(&marker),
         }))
     }
 
@@ -727,12 +817,22 @@ impl Collector<'_> {
             )?;
             items.push(IrEnumItem { number_text, body });
         }
+        let em_pt = self.em_pt();
+        let (indent_twips, body_indent_twips) = list_layout_twips(
+            styles.get(EnumElem::indent),
+            styles.get(EnumElem::body_indent),
+            default_enum_indents(),
+            em_pt,
+        );
         Ok(IrBlock::Enum(IrEnum {
             items,
             numbering: pattern,
             start,
             depth,
             reversed: styles.get(EnumElem::reversed),
+            indent_twips,
+            body_indent_twips,
+            spacing_twips: list_spacing_twips(styles.get(EnumElem::spacing), em_pt),
         }))
     }
 
@@ -817,8 +917,8 @@ impl Collector<'_> {
                 body,
             }]);
         }
-        if child.to_packed::<LineElem>().is_some() {
-            return Ok(Vec::new());
+        if let Some(line) = child.to_packed::<LineElem>() {
+            return Ok(line_blocks(line, styles, child.span()));
         }
         if let Some(block) = child.to_packed::<BlockElem>() {
             if let Some(body) = block_body_content(block, styles) {
@@ -827,6 +927,27 @@ impl Collector<'_> {
                 return Ok(blocks);
             }
             return self.collect_layouter_block(child, styles, engine, locator);
+        }
+        if let Some((construct, transparent)) = transparent_container_body(child) {
+            self.degradations.push(Degradation {
+                span: Some(child.span()),
+                construct,
+                action: DegradationAction::Skipped,
+                message: "the container's transform or column layout has no OOXML equivalent; \
+                          the content is kept without it"
+                    .to_string(),
+            });
+            return self.collect_content_blocks(transparent, styles, engine, locator);
+        }
+        if child.to_packed::<HideElem>().is_some() {
+            self.degradations.push(Degradation {
+                span: Some(child.span()),
+                construct: "hidden-content",
+                action: DegradationAction::Skipped,
+                message: "`hide()` reserves space with no content; the placeholder is dropped"
+                    .to_string(),
+            });
+            return Ok(Vec::new());
         }
         if let Some(par) = child.to_packed::<ParElem>() {
             let mut ctx = self.inline_ctx();
@@ -853,13 +974,15 @@ impl Collector<'_> {
             strip_leading_text(&mut body, number);
             strip_leading_text(&mut body, " ");
         }
-        Ok(IrBlock::Heading {
+        Ok(heading_block(
             level,
             numbering_text,
+            heading_func_numbering(styles),
             body,
-            label: child.label().map(|l| l.resolve().to_string()),
-            alignment: alignment_from_styles(styles),
-        })
+            child.label().map(|l| l.resolve().to_string()),
+            alignment_from_styles(styles),
+            heading.outlined.get(styles),
+        ))
     }
 
     fn collect_equation_elem(
@@ -931,13 +1054,15 @@ impl Collector<'_> {
             let mut ctx = self.inline_ctx();
             body = collect_inlines(&heading.body, styles, engine, locator, &mut ctx)?;
         }
-        Ok(IrBlock::Heading {
+        Ok(heading_block(
             level,
             numbering_text,
+            heading_func_numbering(styles),
             body,
-            label: inner.label().map(|l| l.resolve().to_string()),
+            inner.label().map(|l| l.resolve().to_string()),
             alignment,
-        })
+            heading.outlined.get(styles),
+        ))
     }
 
     fn collect_figure(
@@ -953,6 +1078,7 @@ impl Collector<'_> {
             kind: figure_kind(figure, styles),
             label: inner.label().map(|l| l.resolve().to_string()),
             custom_placement: figure_custom_placement(figure),
+            gap_twips: figure_gap_twips(figure, styles, self.em_pt()),
         };
         for (content, pair_styles) in group {
             let rendered = if let Some(block) = content.to_packed::<BlockElem>() {
@@ -989,6 +1115,7 @@ impl Collector<'_> {
             kind: figure_kind(figure, styles),
             label: inner.label().map(|l| l.resolve().to_string()),
             custom_placement: figure_custom_placement(figure),
+            gap_twips: figure_gap_twips(figure, styles, self.em_pt()),
         };
         with_fragment(engine, locator, inner, styles, |engine, locator, pairs| {
             self.collect_figure_pairs(pairs, &meta, engine, locator)
@@ -1082,6 +1209,7 @@ impl Collector<'_> {
             label: meta.label.clone(),
             caption_first,
             custom_placement: meta.custom_placement,
+            gap_twips: meta.gap_twips,
         })
     }
 
@@ -1111,11 +1239,23 @@ impl Collector<'_> {
                 body,
             });
         }
+        let marker = list.marker.get_cloned(styles);
+        let custom_marker = marker != crate::convert::lists::default_list_marker();
+        let em_pt = self.em_pt();
+        let (indent_twips, body_indent_twips) = list_layout_twips(
+            list.indent.get(styles),
+            list.body_indent.get(styles),
+            default_list_indents(),
+            em_pt,
+        );
         Ok(IrBlock::List(IrList {
             items,
             depth,
-            custom_marker: list.marker.get_cloned(styles)
-                != crate::convert::lists::default_list_marker(),
+            custom_marker,
+            indent_twips,
+            body_indent_twips,
+            spacing_twips: list_spacing_twips(list.spacing.get(styles), em_pt),
+            marker_texts: literal_marker_texts(&marker),
         }))
     }
 
@@ -1279,12 +1419,22 @@ impl Collector<'_> {
             )?;
             items.push(IrEnumItem { number_text, body });
         }
+        let em_pt = self.em_pt();
+        let (indent_twips, body_indent_twips) = list_layout_twips(
+            enumer.indent.get(styles),
+            enumer.body_indent.get(styles),
+            default_enum_indents(),
+            em_pt,
+        );
         Ok(IrBlock::Enum(IrEnum {
             items,
             numbering: pattern,
             start,
             depth,
             reversed: matches!(enumer.reversed.as_option(), Some(true)),
+            indent_twips,
+            body_indent_twips,
+            spacing_twips: list_spacing_twips(enumer.spacing.get(styles), em_pt),
         }))
     }
 
@@ -2056,7 +2206,9 @@ fn apply_pad_insets(blocks: &mut [IrBlock], pad: &PadElem, styles: StyleChain<'_
 }
 
 /// `#block(inset:)` narrows the text column on both sides; `breakable: false`
-/// keeps the block's paragraphs on one page.
+/// keeps the block's paragraphs on one page; `sticky: true` attaches the block
+/// to what follows; `above`/`below` (and the `spacing` shorthand folded into
+/// them at parse time) set the block's outer spacing.
 fn apply_block_props(blocks: &mut [IrBlock], block: &BlockElem, styles: StyleChain<'_>) {
     let inset = block.inset.get_cloned(styles);
     let left = inset.left.map_or(0, |rel| rel_side_twips(&rel, styles));
@@ -2064,17 +2216,46 @@ fn apply_block_props(blocks: &mut [IrBlock], block: &BlockElem, styles: StyleCha
     if left != 0 || right != 0 {
         apply_side_indents(blocks, left, right);
     }
-    if !block.breakable.get(styles) {
-        let last = blocks
-            .iter()
-            .rposition(|b| matches!(b, IrBlock::Paragraph(_)))
-            .unwrap_or(0);
+    let em_pt = styles.resolve(TextElem::size).to_pt();
+    let above = spacing_rel_twips(block.above.get(styles), em_pt);
+    let below = spacing_rel_twips(block.below.get(styles), em_pt);
+    let sticky = block.sticky.get(styles);
+    let breakable = block.breakable.get(styles);
+    if above.is_none() && below.is_none() && !sticky && breakable {
+        return;
+    }
+    let mut paragraph_indices = Vec::new();
+    for (i, inner) in blocks.iter().enumerate() {
+        if matches!(inner, IrBlock::Paragraph(_)) {
+            paragraph_indices.push(i);
+        }
+    }
+    let Some(&first) = paragraph_indices.first() else {
+        return;
+    };
+    let last = *paragraph_indices.last().unwrap_or(&first);
+    if let IrBlock::Paragraph(para) = &mut blocks[first]
+        && para.spacing_before.is_none()
+    {
+        para.spacing_before = above;
+    }
+    if let IrBlock::Paragraph(para) = &mut blocks[last]
+        && para.spacing_after.is_none()
+    {
+        para.spacing_after = below;
+    }
+    if !breakable {
         for (idx, inner) in blocks.iter_mut().enumerate() {
             if let IrBlock::Paragraph(para) = inner {
                 para.keep_lines = true;
                 para.keep_next = idx != last;
             }
         }
+    }
+    if sticky
+        && let IrBlock::Paragraph(para) = &mut blocks[last]
+    {
+        para.keep_next = true;
     }
 }
 
@@ -2227,6 +2408,7 @@ fn is_block_element(content: &Content) -> bool {
         || content.to_packed::<ColbreakElem>().is_some()
         || content.to_packed::<BlockElem>().is_some()
         || content.to_packed::<ParElem>().is_some()
+        || content.to_packed::<ColumnsElem>().is_some()
         || shape_parts(content).is_some()
         || content.to_packed::<LineElem>().is_some()
 }
@@ -2409,6 +2591,198 @@ fn heading_numbers(heading: &HeadingElem) -> Option<String> {
     match heading.numbers.as_ref() {
         Some(numbers) if !numbers.is_empty() => Some(numbers.to_string()),
         _ => None,
+    }
+}
+
+fn heading_func_numbering(styles: StyleChain<'_>) -> bool {
+    matches!(
+        styles.get_ref(HeadingElem::numbering),
+        Some(Numbering::Func(_))
+    )
+}
+
+fn length_twips(length: Length, em_pt: f64) -> u32 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "declared lengths are small and clamped at zero"
+    )]
+    {
+        ((length.abs.to_pt() + length.em.get() * em_pt) * 20.0)
+            .round()
+            .max(0.0) as u32
+    }
+}
+
+fn spacing_rel_twips(spacing: Smart<Spacing>, em_pt: f64) -> Option<u32> {
+    match spacing {
+        Smart::Custom(Spacing::Rel(rel)) if rel.rel == typst_library::layout::Ratio::zero() => {
+            Some(length_twips(rel.abs, em_pt))
+        }
+        _ => None,
+    }
+}
+
+/// `#line()` with only a length (no `end`, no angle) is a horizontal rule;
+/// a geometric line keeps degrading as a shape.
+fn line_blocks(line: &Packed<LineElem>, styles: StyleChain<'_>, span: Span) -> Vec<IrBlock> {
+    let horizontal =
+        line.end.get(styles).is_none() && line.angle.get(styles) == Angle::zero();
+    if horizontal {
+        return vec![IrBlock::Paragraph(IrParagraph {
+            horizontal_rule: true,
+            ..IrParagraph::default()
+        })];
+    }
+    vec![IrBlock::Shape {
+        kind: IrShapeKind::Line,
+        span: Some(span),
+        body: Vec::new(),
+    }]
+}
+
+/// Container elements whose own chrome is dropped but whose body still
+/// converts (`#move`/`#rotate`/`#scale`/`#skew`/`#columns`). The first tuple
+/// element is the degradation construct to report.
+pub(super) fn transparent_container_body(content: &Content) -> Option<(&'static str, &Content)> {
+    if let Some(elem) = content.to_packed::<MoveElem>() {
+        return Some(("moved-content", &elem.body));
+    }
+    if let Some(elem) = content.to_packed::<RotateElem>() {
+        return Some(("rotated-content", &elem.body));
+    }
+    if let Some(elem) = content.to_packed::<ScaleElem>() {
+        return Some(("scaled-content", &elem.body));
+    }
+    if let Some(elem) = content.to_packed::<SkewElem>() {
+        return Some(("skewed-content", &elem.body));
+    }
+    if let Some(elem) = content.to_packed::<ColumnsElem>() {
+        return Some(("column-block", &elem.body));
+    }
+    None
+}
+
+/// Skip past a `Tag::End` matching `location` in a children list (used to drop
+/// `#hide[..]` bodies inside block content).
+fn skip_tag_children(children: &[&Content], start: usize, location: Option<Location>) -> usize {
+    let Some(location) = location else {
+        return start;
+    };
+    let mut i = start;
+    while i < children.len() {
+        if let Some(tagged) = children[i].to_packed::<TagElem>()
+            && let Tag::End(loc, _, _) = tagged.tag
+            && loc == location
+        {
+            return i + 1;
+        }
+        i += 1;
+    }
+    i
+}
+
+fn default_list_indents() -> (Length, Length) {
+    let defaults = StyleChain::default();
+    (
+        defaults.get(ListElem::indent),
+        defaults.get(ListElem::body_indent),
+    )
+}
+
+fn default_enum_indents() -> (Length, Length) {
+    let defaults = StyleChain::default();
+    (
+        defaults.get(EnumElem::indent),
+        defaults.get(EnumElem::body_indent),
+    )
+}
+
+/// `list(indent:|body-indent:)` → resolved twips pair when either differs
+/// from the element default. The pair travels together so the lowerer can
+/// compute `w:left`/`w:hanging` without re-resolving.
+fn list_layout_twips(
+    indent: Length,
+    body_indent: Length,
+    defaults: (Length, Length),
+    em_pt: f64,
+) -> (Option<u32>, Option<u32>) {
+    if indent == defaults.0 && body_indent == defaults.1 {
+        return (None, None);
+    }
+    (
+        Some(length_twips(indent, em_pt)),
+        Some(length_twips(body_indent, em_pt)),
+    )
+}
+
+fn list_spacing_twips(spacing: Smart<Length>, em_pt: f64) -> Option<u32> {
+    match spacing {
+        Smart::Custom(length) => Some(length_twips(length, em_pt)),
+        Smart::Auto => None,
+    }
+}
+
+/// `list(marker: ([a], [b], …))` literal markers for the numbering override;
+/// `None` when the marker is the default or a function.
+fn literal_marker_texts(marker: &ListMarker) -> Option<Vec<String>> {
+    let ListMarker::Content(markers) = marker else {
+        return None;
+    };
+    if *marker == crate::convert::lists::default_list_marker() {
+        return None;
+    }
+    let texts: Vec<String> = markers.iter().map(plain_text).collect();
+    if texts.iter().any(|t| t.is_empty()) {
+        return None;
+    }
+    Some(texts)
+}
+
+fn figure_gap_twips(figure: &FigureElem, styles: StyleChain<'_>, em_pt: f64) -> Option<u32> {
+    let gap = figure.gap.get(styles);
+    (gap != StyleChain::default().get(FigureElem::gap)).then(|| length_twips(gap, em_pt))
+}
+
+/// `outlined: false` headings leave the document outline, so they lower to a
+/// plain paragraph (numbering prefix and label kept) instead of a Heading
+/// style that would re-enter the TOC.
+fn heading_block(
+    level: u8,
+    numbering_text: Option<String>,
+    func_numbering: bool,
+    body: Vec<IrInline>,
+    label: Option<String>,
+    alignment: Option<Alignment>,
+    outlined: bool,
+) -> IrBlock {
+    if !outlined {
+        let mut para = IrParagraph {
+            alignment,
+            bookmark: label,
+            ..IrParagraph::default()
+        };
+        if let Some(number) = numbering_text {
+            let mut prefix = body
+                .iter()
+                .find_map(|inline| match inline {
+                    IrInline::Text(run) => Some(run.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| Run::new(""));
+            prefix.text = format!("{number} ");
+            para.inlines.push(IrInline::Text(prefix));
+        }
+        para.inlines.extend(body);
+        return IrBlock::Paragraph(para);
+    }
+    IrBlock::Heading {
+        level,
+        numbering_text,
+        func_numbering,
+        body,
+        label,
+        alignment,
     }
 }
 

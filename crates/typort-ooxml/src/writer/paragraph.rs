@@ -43,7 +43,7 @@ pub(super) fn write_paragraph<W: Write>(
         let has_hanging = para.hanging_indent.is_some();
         let has_hrule = para.horizontal_rule;
         let has_tab_stops = !para.tab_stops.is_empty();
-        let has_spacing = para.spacing_before.is_some();
+        let has_spacing = para.spacing_before.is_some() || para.spacing_after.is_some();
         if has_style
             || has_list
             || has_alignment
@@ -173,9 +173,12 @@ pub(super) fn write_paragraph<W: Write>(
                         },
                     )?;
                 } else if has_list {
-                    // List indent: left = 2em, hanging = 1em, computed from body font size
-                    let list_left = two_em_hanging_twips(ctx.doc_style.body_size_half_pt);
-                    let list_hanging = list_left / 2;
+                    // List indent: left = 2em, hanging = 1em, computed from body
+                    // font size; Typst `list(indent:, body-indent:)` overrides.
+                    let list_left = para
+                        .list_left_twips
+                        .unwrap_or_else(|| two_em_hanging_twips(ctx.doc_style.body_size_half_pt));
+                    let list_hanging = para.list_hanging_twips.unwrap_or(list_left / 2);
                     let list_left_str = list_left.to_string();
                     let list_hanging_str = list_hanging.to_string();
                     write_indentation(
@@ -199,8 +202,19 @@ pub(super) fn write_paragraph<W: Write>(
                 // Emit spacing override
                 if let Some(before) = para.spacing_before {
                     let before_str = before.to_string();
+                    let after_str = para.spacing_after.map(|v| v.to_string());
+                    let el = ppr
+                        .create_element("w:spacing")
+                        .with_attribute(("w:before", before_str.as_str()));
+                    if let Some(after) = after_str.as_deref() {
+                        el.with_attribute(("w:after", after)).write_empty()?;
+                    } else {
+                        el.write_empty()?;
+                    }
+                } else if let Some(after) = para.spacing_after {
+                    let after_str = after.to_string();
                     ppr.create_element("w:spacing")
-                        .with_attribute(("w:before", before_str.as_str()))
+                        .with_attribute(("w:after", after_str.as_str()))
                         .write_empty()?;
                 }
                 // Emit alignment

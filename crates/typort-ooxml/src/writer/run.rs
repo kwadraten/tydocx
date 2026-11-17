@@ -197,6 +197,12 @@ pub(super) fn write_run<W: Write>(
                     let size_str = size.to_string();
                     write_size_pair(rpr, size_str.as_str())?;
                 }
+                if let Some(position) = run.position_half_pt {
+                    let val = position.to_string();
+                    rpr.create_element("w:position")
+                        .with_attribute(("w:val", val.as_str()))
+                        .write_empty()?;
+                }
                 if run.strikethrough {
                     rpr.create_element("w:strike").write_empty()?;
                 }
@@ -224,6 +230,21 @@ pub(super) fn write_run<W: Write>(
                 if run.subscript {
                     rpr.create_element("w:vertAlign")
                         .with_attribute(("w:val", "subscript"))
+                        .write_empty()?;
+                }
+                if let Some(ligatures) = run.ligatures {
+                    rpr.create_element("w:ligatures")
+                        .with_attribute(("w:val", ligatures))
+                        .write_empty()?;
+                }
+                if let Some(num_form) = run.num_form {
+                    rpr.create_element("w:numForm")
+                        .with_attribute(("w:val", num_form))
+                        .write_empty()?;
+                }
+                if let Some(number_spacing) = run.number_spacing {
+                    rpr.create_element("w:numberSpacing")
+                        .with_attribute(("w:val", number_spacing))
                         .write_empty()?;
                 }
                 Ok(())

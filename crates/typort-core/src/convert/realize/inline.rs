@@ -9,7 +9,7 @@ use typst_library::engine::Engine;
 use typst_library::foundations::{Content, ContextElem, Packed, Smart, StyleChain};
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::{
-    Abs, AlignElem, BlockElem, BoxElem, HAlignment, HElem, PadElem, Spacing,
+    Abs, AlignElem, BlockElem, BoxElem, HAlignment, HElem, HideElem, PadElem, Spacing,
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
@@ -24,7 +24,7 @@ use typst_library::visualize::{ImageElem, ImageFit, ImageKind};
 use typst_syntax::Source;
 use typst_syntax::Span;
 
-use super::collect::{block_body_content, shape_parts};
+use super::collect::{block_body_content, shape_parts, transparent_container_body};
 use super::style::{StyleDefaults, lower_runs_match, run_from_styles};
 use super::with_fragment;
 use crate::convert::image::hash_bytes;
@@ -160,6 +160,29 @@ fn collect_fragment_inlines(
                 ctx,
                 &mut out,
             );
+            i += 1;
+            continue;
+        }
+        if let Some((construct, body)) = transparent_container_body(content) {
+            ctx.degradations.push(Degradation {
+                span: Some(content.span()),
+                construct,
+                action: DegradationAction::Skipped,
+                message: "the container's transform or column layout has no OOXML equivalent; \
+                          the content is kept without it"
+                    .to_string(),
+            });
+            match collect_inlines(body, styles, engine, locator, ctx) {
+                Ok(inlines) => out.extend(inlines),
+                Err(_) => ctx.degradations.push(Degradation {
+                    span: Some(content.span()),
+                    construct: "transformed-content",
+                    action: DegradationAction::Skipped,
+                    message: "content inside a transform could not be realized; its text was \
+                              dropped"
+                        .to_string(),
+                }),
+            }
             i += 1;
             continue;
         }
@@ -376,6 +399,10 @@ fn handle_tag_start(
     let Some(location) = inner.location() else {
         return i + 1;
     };
+    // `#hide[…]` leaves no trace in the output at all.
+    if inner.to_packed::<HideElem>().is_some() {
+        return skip_to_end(pairs, i + 1, location);
+    }
     if inner.to_packed::<ContextElem>().is_some() {
         if let Some(label) = ctx
             .source

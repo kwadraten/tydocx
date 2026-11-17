@@ -1,4 +1,5 @@
 use super::units::{numeric_to_half_pt, numeric_to_twips};
+use typort_ooxml::document::VerticalAlign;
 
 /// All style overrides extracted from `#set` rules in the source AST.
 /// Each field is `None` if the source doesn't set it (use heuristic fallback).
@@ -25,6 +26,30 @@ pub struct SourceStyleOverrides {
     pub numbering_changed: bool,
     pub margins_mirrored: bool,
     pub page_furniture: bool,
+    // #set page(header-ascent: / footer-descent:) — `w:pgMar w:header/footer`.
+    pub header_twips: Option<u32>,
+    pub header_em: Option<f64>,
+    pub footer_twips: Option<u32>,
+    pub footer_em: Option<f64>,
+    // #set par.line(numbering:) enables OOXML line numbering;
+    // `number-clearance` is the `w:lnNumType w:distance`.
+    pub line_numbering: Option<bool>,
+    pub line_number_distance_twips: Option<u32>,
+    pub line_number_distance_em: Option<f64>,
+    // Document-global `#set align(… + horizon|bottom|top …)` — the page's
+    // vertical placement, `w:sectPr/w:vAlign`.
+    pub vertical_align: Option<VerticalAlign>,
+    // #set columns(gutter:) — `w:cols w:space`.
+    pub column_gutter_twips: Option<u32>,
+    pub column_gutter_em: Option<f64>,
+    // #set footnote.entry(clearance:/gap:/indent:/separator: line(stroke:))
+    pub footnote_clearance_twips: Option<u32>,
+    pub footnote_clearance_em: Option<f64>,
+    pub footnote_gap_twips: Option<u32>,
+    pub footnote_gap_em: Option<f64>,
+    pub footnote_indent_twips: Option<u32>,
+    pub footnote_indent_em: Option<f64>,
+    pub footnote_separator_stroke_eighths: Option<u32>,
     // #set text(font: ..., size: ...)
     pub text_font: Option<Vec<String>>,
     pub text_size_half_pt: Option<u32>,
@@ -79,6 +104,23 @@ impl SourceStyleOverrides {
         self.numbering_changed |= other.numbering_changed;
         self.margins_mirrored |= other.margins_mirrored;
         self.page_furniture |= other.page_furniture;
+        fill!(header_twips);
+        fill!(header_em);
+        fill!(footer_twips);
+        fill!(footer_em);
+        fill!(line_numbering);
+        fill!(line_number_distance_twips);
+        fill!(line_number_distance_em);
+        fill!(vertical_align);
+        fill!(column_gutter_twips);
+        fill!(column_gutter_em);
+        fill!(footnote_clearance_twips);
+        fill!(footnote_clearance_em);
+        fill!(footnote_gap_twips);
+        fill!(footnote_gap_em);
+        fill!(footnote_indent_twips);
+        fill!(footnote_indent_em);
+        fill!(footnote_separator_stroke_eighths);
         fill!(text_font);
         fill!(text_size_half_pt);
         fill!(text_lang);
@@ -329,12 +371,29 @@ fn collect_global_set_rules(
     if in_global_scope {
         if node.kind() == SyntaxKind::SetRule
             && let Some(set) = node.cast::<ast::SetRule<'_>>()
-            && let ast::Expr::Ident(ident) = set.target()
         {
-            match ident.as_str() {
-                "page" => parse_page_args(set.args(), ovr),
-                "text" => parse_text_args(set.args(), ovr),
-                "par" => parse_par_args(set.args(), ovr),
+            match set.target() {
+                ast::Expr::Ident(ident) => match ident.as_str() {
+                    "page" => parse_page_args(set.args(), ovr),
+                    "text" => parse_text_args(set.args(), ovr),
+                    "par" => parse_par_args(set.args(), ovr),
+                    "columns" => parse_columns_args(set.args(), ovr),
+                    "align" => parse_align_args(set.args(), ovr),
+                    _ => {}
+                },
+                // `#set par.line(...)` / `#set footnote.entry(...)` — the
+                // target is a field access on the parent element.
+                ast::Expr::FieldAccess(access) => {
+                    match (access.target(), access.field().get().as_str()) {
+                        (ast::Expr::Ident(i), "line") if i.as_str() == "par" => {
+                            parse_par_line_args(set.args(), ovr);
+                        }
+                        (ast::Expr::Ident(i), "entry") if i.as_str() == "footnote" => {
+                            parse_footnote_entry_args(set.args(), ovr);
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
@@ -577,6 +636,167 @@ fn parse_page_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverr
                 if !matches!(named.expr(), typst_syntax::ast::Expr::None(_)) =>
             {
                 ovr.page_furniture = true;
+            }
+            "header-ascent" => {
+                if let typst_syntax::ast::Expr::Numeric(n) = named.expr() {
+                    let (twips, em) = length_amount(n);
+                    if twips.is_some() || em.is_some() {
+                        ovr.header_twips = twips;
+                        ovr.header_em = em;
+                    }
+                }
+            }
+            "footer-descent" => {
+                if let typst_syntax::ast::Expr::Numeric(n) = named.expr() {
+                    let (twips, em) = length_amount(n);
+                    if twips.is_some() || em.is_some() {
+                        ovr.footer_twips = twips;
+                        ovr.footer_em = em;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A declared length as absolute twips or deferred em (zero is kept — a zero
+/// header ascent is a real value, unlike margins where zero means "unset").
+fn length_amount(n: typst_syntax::ast::Numeric<'_>) -> (Option<u32>, Option<f64>) {
+    let (value, unit) = n.get();
+    if unit == typst_syntax::ast::Unit::Em {
+        (None, Some(value))
+    } else {
+        (Some(numeric_to_twips(n)), None)
+    }
+}
+
+fn parse_par_line_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverrides) {
+    for arg in args.items() {
+        let typst_syntax::ast::Arg::Named(named) = arg else {
+            continue;
+        };
+        match named.name().as_str() {
+            // A non-`none` numbering enables line numbering; `none` disables.
+            "numbering" => {
+                ovr.line_numbering =
+                    Some(!matches!(named.expr(), typst_syntax::ast::Expr::None(_)));
+            }
+            "number-clearance" => {
+                if let typst_syntax::ast::Expr::Numeric(n) = named.expr() {
+                    let (twips, em) = length_amount(n);
+                    ovr.line_number_distance_twips = twips;
+                    ovr.line_number_distance_em = em;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `#set columns(gutter: 12pt)` — also `#set columns(N, gutter: …)`; the
+/// count itself is ignored here (it is a `#columns(N)` call property, not a
+/// section column count).
+fn parse_columns_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverrides) {
+    for arg in args.items() {
+        if let typst_syntax::ast::Arg::Named(named) = arg
+            && named.name().as_str() == "gutter"
+            && let typst_syntax::ast::Expr::Numeric(n) = named.expr()
+        {
+            let (twips, em) = length_amount(n);
+            ovr.column_gutter_twips = twips;
+            ovr.column_gutter_em = em;
+        }
+    }
+}
+
+/// Document-global `#set align(…)` — only the vertical component maps to a
+/// section `w:vAlign`; `horizon` centers, `bottom`/`top` pin the content.
+fn parse_align_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverrides) {
+    for arg in args.items() {
+        let typst_syntax::ast::Arg::Pos(expr) = arg else {
+            continue;
+        };
+        if let Some(align) = vertical_align_of(expr) {
+            ovr.vertical_align = Some(align);
+        }
+    }
+}
+
+/// Find `horizon`/`bottom`/`top` in an alignment expression (`center +
+/// horizon` parses as a binary `+` of two idents).
+fn vertical_align_of(expr: typst_syntax::ast::Expr<'_>) -> Option<VerticalAlign> {
+    use typst_syntax::ast::Expr;
+    match expr {
+        Expr::Ident(ident) => match ident.get().as_str() {
+            "horizon" => Some(VerticalAlign::Center),
+            "bottom" => Some(VerticalAlign::Bottom),
+            "top" => Some(VerticalAlign::Top),
+            _ => None,
+        },
+        Expr::Binary(binary) => {
+            let lhs = vertical_align_of(binary.lhs());
+            let rhs = vertical_align_of(binary.rhs());
+            lhs.or(rhs)
+        }
+        _ => None,
+    }
+}
+
+/// `#set footnote.entry(indent:/gap:/clearance:)` and a literal
+/// `line(stroke: N)` separator (thickness → `w:pBdr w:sz` eighths).
+fn parse_footnote_entry_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverrides) {
+    use typst_syntax::ast::Expr;
+    for arg in args.items() {
+        let typst_syntax::ast::Arg::Named(named) = arg else {
+            continue;
+        };
+        match named.name().as_str() {
+            "clearance" => {
+                if let Expr::Numeric(n) = named.expr() {
+                    let (twips, em) = length_amount(n);
+                    ovr.footnote_clearance_twips = twips;
+                    ovr.footnote_clearance_em = em;
+                }
+            }
+            "gap" => {
+                if let Expr::Numeric(n) = named.expr() {
+                    let (twips, em) = length_amount(n);
+                    ovr.footnote_gap_twips = twips;
+                    ovr.footnote_gap_em = em;
+                }
+            }
+            "indent" => {
+                if let Expr::Numeric(n) = named.expr() {
+                    let (twips, em) = length_amount(n);
+                    ovr.footnote_indent_twips = twips;
+                    ovr.footnote_indent_em = em;
+                }
+            }
+            "separator" => {
+                if let Expr::FuncCall(call) = named.expr()
+                    && matches!(call.callee(), Expr::Ident(i) if i.as_str() == "line")
+                {
+                    for sep_arg in call.args().items() {
+                        if let typst_syntax::ast::Arg::Named(sep_named) = sep_arg
+                            && sep_named.name().as_str() == "stroke"
+                            && let Expr::Numeric(n) = sep_named.expr()
+                        {
+                            let (value, unit) = n.get();
+                            if unit == typst_syntax::ast::Unit::Pt && value > 0.0 {
+                                #[allow(
+                                    clippy::cast_possible_truncation,
+                                    clippy::cast_sign_loss,
+                                    reason = "positive point size to eighths"
+                                )]
+                                {
+                                    ovr.footnote_separator_stroke_eighths =
+                                        Some((value * 8.0).round() as u32);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }

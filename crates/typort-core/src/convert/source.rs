@@ -225,6 +225,68 @@ pub(super) fn apply_source_overrides(
         doc.page_settings.margin_right = page::pt_to_twips(em * body_pt);
     }
 
+    // Header/footer edge distances (`page(header-ascent:/footer-descent:)`).
+    if let Some(v) = ovr.header_twips {
+        doc.page_settings.header_twips = Some(v);
+    }
+    if let Some(em) = ovr.header_em {
+        doc.page_settings.header_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(v) = ovr.footer_twips {
+        doc.page_settings.footer_twips = Some(v);
+    }
+    if let Some(em) = ovr.footer_em {
+        doc.page_settings.footer_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+
+    // Line numbering (`par.line(numbering:)`): enabled → `w:lnNumType`;
+    // `number-clearance` is the distance, the Word default (240 twips) when
+    // the source leaves it `auto`.
+    if ovr.line_numbering == Some(true) {
+        doc.page_settings.line_number_distance_twips =
+            Some(ovr.line_number_distance_twips.unwrap_or(240));
+        if let Some(em) = ovr.line_number_distance_em {
+            doc.page_settings.line_number_distance_twips =
+                Some(page::pt_to_twips(em * body_pt));
+        }
+    } else if ovr.line_numbering == Some(false) {
+        doc.page_settings.line_number_distance_twips = None;
+    }
+
+    if let Some(align) = ovr.vertical_align {
+        doc.page_settings.vertical_align = Some(align);
+    }
+
+    if let Some(v) = ovr.column_gutter_twips {
+        doc.page_settings.column_spacing = Some(v);
+    }
+    if let Some(em) = ovr.column_gutter_em {
+        doc.page_settings.column_spacing = Some(page::pt_to_twips(em * body_pt));
+    }
+
+    // `footnote.entry` settings.
+    if let Some(v) = ovr.footnote_clearance_twips {
+        doc.style.footnote_entry.clearance_twips = Some(v);
+    }
+    if let Some(em) = ovr.footnote_clearance_em {
+        doc.style.footnote_entry.clearance_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(v) = ovr.footnote_gap_twips {
+        doc.style.footnote_entry.gap_twips = Some(v);
+    }
+    if let Some(em) = ovr.footnote_gap_em {
+        doc.style.footnote_entry.gap_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(v) = ovr.footnote_indent_twips {
+        doc.style.footnote_entry.indent_twips = Some(v);
+    }
+    if let Some(em) = ovr.footnote_indent_em {
+        doc.style.footnote_entry.indent_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(eighths) = ovr.footnote_separator_stroke_eighths {
+        doc.style.footnote_entry.separator_stroke_eighths = Some(eighths);
+    }
+
     apply_first_line_indent(ovr, doc, body_pt);
     if let Some(all) = ovr.first_line_indent_all {
         doc.style.first_line_indent_all = all;

@@ -141,12 +141,30 @@ fn write_section_page_settings<W: Write>(
         .with_attribute(("w:w", settings.width_twips.to_string().as_str()))
         .with_attribute(("w:h", settings.height_twips.to_string().as_str()))
         .write_empty()?;
-    w.create_element("w:pgMar")
+    let pg_mar = w
+        .create_element("w:pgMar")
         .with_attribute(("w:top", settings.margin_top.to_string().as_str()))
         .with_attribute(("w:right", settings.margin_right.to_string().as_str()))
         .with_attribute(("w:bottom", settings.margin_bottom.to_string().as_str()))
-        .with_attribute(("w:left", settings.margin_left.to_string().as_str()))
-        .write_empty()?;
+        .with_attribute(("w:left", settings.margin_left.to_string().as_str()));
+    let pg_mar = match settings.header_twips {
+        Some(v) => pg_mar.with_attribute(("w:header", v.to_string().as_str())),
+        None => pg_mar,
+    };
+    let pg_mar = match settings.footer_twips {
+        Some(v) => pg_mar.with_attribute(("w:footer", v.to_string().as_str())),
+        None => pg_mar,
+    };
+    pg_mar.write_empty()?;
+    if let Some(distance) = settings.line_number_distance_twips {
+        let distance = distance.to_string();
+        w.create_element("w:lnNumType")
+            .with_attribute(("w:countBy", "1"))
+            .with_attribute(("w:start", "0"))
+            .with_attribute(("w:distance", distance.as_str()))
+            .with_attribute(("w:restart", "continuous"))
+            .write_empty()?;
+    }
     // Columns
     if let Some(cols) = settings.columns.filter(|&c| c > 1) {
         let num = cols.to_string();
@@ -154,6 +172,11 @@ fn write_section_page_settings<W: Write>(
         w.create_element("w:cols")
             .with_attribute(("w:num", num.as_str()))
             .with_attribute(("w:space", space.as_str()))
+            .write_empty()?;
+    }
+    if let Some(v_align) = settings.vertical_align {
+        w.create_element("w:vAlign")
+            .with_attribute(("w:val", v_align.ooxml_value()))
             .write_empty()?;
     }
     // No w:docGrid: Pandoc-aligned. A docGrid linePitch re-imposes a geometric
