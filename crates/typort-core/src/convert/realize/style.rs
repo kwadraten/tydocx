@@ -1,14 +1,3 @@
-//! `StyleChain` -> `Run` helpers for the realize collector.
-//!
-//! The collector reads per-run formatting from the `StyleChain` of each
-//! realized pair (the Paged show rules already merged strong/emphasis,
-//! super/subscript, smallcaps and decorations into `TextElem` attributes),
-//! so this module never walks the HTML tag stream. Per-run overrides are
-//! recorded only when they differ from the document defaults (read from the
-//! realized pairs in `collect_document`, falling back to the root
-//! `StyleChain`), so body text stays implicit — exactly as the legacy
-//! path's Paged-derived overrides behave.
-
 use typort_ooxml::document::Run;
 use typst_library::foundations::StyleChain;
 use typst_library::text::{
@@ -19,21 +8,13 @@ use typst_syntax::Span;
 use crate::convert::highlight::{HighlightStyle, highlight_style};
 use crate::convert::page::extract_non_black_color;
 
-/// Document-wide style defaults, read from the realized pairs in
-/// `collect_document` (falling back to the root `StyleChain`). Per-run
-/// overrides are recorded only when they differ from these.
 #[derive(Debug, Clone)]
 pub struct StyleDefaults {
-    /// Body text size in half-points.
     pub size_half_pt: u32,
-    /// Body font family (lowercased, as `FontFamily` stores it).
     pub body_font: String,
-    /// Body CJK font family: the last family of the body font list (the
-    /// CJK fallback, conventionally last — see `run_from_styles`).
     pub font_east_asia: String,
 }
 
-/// Read the document defaults from the root `StyleChain`.
 pub fn defaults_from_root(styles: StyleChain<'_>) -> StyleDefaults {
     let size_pt = styles.resolve(TextElem::size).to_pt();
     #[allow(
@@ -49,11 +30,6 @@ pub fn defaults_from_root(styles: StyleChain<'_>) -> StyleDefaults {
         || "Times New Roman".to_string(),
         |family| (*family).to_string(),
     );
-    // The East Asia font is the last DECLARED family, not the last family
-    // of `families()`: that iterator appends Typst's emoji fallback tail
-    // ("twitter color emoji", ..., "segoe ui emoji"), so its last entry
-    // is always an emoji face and carries no CJK signal. With no declared
-    // family the body font is the sensible East Asia default.
     let declared: Vec<&str> = styles
         .get_ref(TextElem::font)
         .into_iter()
@@ -69,22 +45,6 @@ pub fn defaults_from_root(styles: StyleChain<'_>) -> StyleDefaults {
     }
 }
 
-/// Build a run for `text` under `styles`.
-///
-/// `span` is the pair content's source span, carried so source-AST
-/// post-passes (hanging indent, small caps) can locate the run in the
-/// source; synthesized text passes `None`.
-/// `Case` is applied to the text itself (as Typst does when shaping);
-/// strong/emphasis, super/subscript, smallcaps and decorations are read
-/// from the folded `TextElem` properties. The font family comes from the
-/// `StyleChain` font list: the first family for Latin runs, the last family
-/// for runs containing CJK characters (the list is ordered by preference and
-/// the CJK fallback is conventionally last). This is a heuristic — the
-/// authoritative per-run font is the Paged `TextItem` font, which the
-/// legacy path uses; see `docs/fallback-registry.md`.
-///
-/// Overline has no run property of its own: it rides `Run::overline` to
-/// the lowering, which translates it per compat mode.
 pub fn run_from_styles(
     text: &str,
     styles: StyleChain<'_>,
@@ -165,7 +125,6 @@ pub fn run_from_styles(
     run
 }
 
-/// Whether `text` contains any CJK, hiragana, katakana or hangul character.
 pub fn contains_cjk(text: &str) -> bool {
     text.chars().any(|c| {
         matches!(c,
@@ -177,10 +136,6 @@ pub fn contains_cjk(text: &str) -> bool {
     })
 }
 
-/// Whether two runs may be merged into one: their formatting keys match
-/// (`Run::format_key`, the writer's own merge-eligibility key — every
-/// field the writer serializes into `<w:rPr>`, excluding text, span and
-/// line breaks).
 pub fn lower_runs_match(prev: &Run, next: &Run) -> bool {
     prev.format_key() == next.format_key()
 }
@@ -189,7 +144,7 @@ pub fn lower_runs_match(prev: &Run, next: &Run) -> bool {
 mod tests {
     use super::*;
     use typst_library::foundations::{StyleChain, Styles};
-    use typst_library::text::{Case, TextElem};
+    use typst_library::text::{Case, FontList, TextElem};
     use typst_library::visualize::Paint;
 
     fn root_styles() -> Styles {
@@ -211,6 +166,33 @@ mod tests {
         assert_eq!(defaults.size_half_pt, 22);
         assert_eq!(defaults.body_font, "libertinus serif");
         assert_eq!(defaults.font_east_asia, "libertinus serif");
+    }
+
+    #[test]
+    fn defaults_from_root_east_asia_is_last_declared_family() {
+        let mut styles = root_styles();
+        styles.set(
+            TextElem::font,
+            FontList(vec![
+                FontFamily::new("Libertinus Serif"),
+                FontFamily::new("Noto Serif CJK SC"),
+            ]),
+        );
+        let defaults = defaults_from_root(StyleChain::new(&styles));
+        assert_eq!(defaults.body_font, "libertinus serif");
+        assert_eq!(defaults.font_east_asia, "noto serif cjk sc");
+    }
+
+    #[test]
+    fn run_from_styles_cjk_run_gets_no_spurious_east_asia_override() {
+        let defaults = StyleDefaults {
+            size_half_pt: 22,
+            body_font: "libertinus serif".to_owned(),
+            font_east_asia: "segoe ui emoji".to_owned(),
+        };
+        let styles = root_styles();
+        let run = run_from_styles("中文", StyleChain::new(&styles), &defaults, None);
+        assert_eq!(run.font_east_asia, None);
     }
 
     #[test]

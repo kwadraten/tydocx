@@ -1,23 +1,3 @@
-//! Pure lowering: `IrDocument` -> `typort_ooxml::Document`.
-//!
-//! The lowering is a pure function of its inputs (the IR, the geometry
-//! boundary, and the compat mode). It never fails: constructs without a
-//! faithful OOXML encoding become `Degradation`s, never errors.
-//!
-//! Parity notes (against the legacy HTML-walk path, which this replaces):
-//! - Lists share one numbering instance per top-level list; nested lists
-//!   reuse the parent's instance at a deeper level, exactly as the legacy
-//!   `ListWalker` does (first writer wins per level; levels equal to the
-//!   shared abstract definition need no override).
-//! - In-text citations lower to literal markers + internal hyperlinks
-//!   (the L6 verdict), never to CITATION fields.
-//! - Raw blocks keep their syntax colours (the legacy path dropped them);
-//!   this is a deliberate, documented divergence (see the equivalence
-//!   report in `docs/fallback-registry.md`).
-//! - An enum whose numbering is a closure (no static pattern) lowers its
-//!   items to literal number text instead of the legacy path's shared
-//!   decimal fallback.
-
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -36,23 +16,13 @@ use crate::types::{
     ParagraphStyle, Run,
 };
 
-/// Shared lowering state: footnote id resolution, bookmark ids, the
-/// list instance in force, and degradations. (Bundled in a struct rather
-/// than threaded as positional parameters, per the repo's rule.)
 #[derive(Debug, Default)]
 pub struct LowerCtx {
-    /// Compat mode of this conversion.
     pub compat: CompatMode,
-    /// Body size in half-points (quote indentation is `body_size * 10` twips).
     pub body_size_half_pt: u32,
-    /// Per-level heading sizes in half-points (the `Heading{n}` paragraph
-    /// styles' sizes, used to suppress redundant per-run heading sizes).
     pub heading_sizes: [u32; 5],
-    /// Footnote ordinal -> OOXML footnote id.
     pub footnote_ids: HashMap<u32, u32>,
-    /// Next bookmark id to allocate.
     pub next_bookmark_id: u32,
-    /// Degradations collected during lowering.
     pub degradations: Vec<Degradation>,
 }
 
@@ -83,18 +53,12 @@ impl LowerCtx {
     }
 }
 
-/// A numbering instance in force for nested lists: nested lists reuse
-/// their parent's `num_id` at a deeper level. `depth` is the owning
-/// list's level within the instance.
 #[derive(Debug, Clone, Copy)]
 struct ListAlloc {
     num_id: u32,
     depth: u32,
 }
 
-/// Lower an IR document to an OOXML document.
-///
-/// Returns the document and the degradations recorded during lowering.
 #[must_use]
 pub fn lower(
     ir: &IrDocument,
@@ -121,7 +85,6 @@ pub fn lower(
         degradations: Vec::new(),
     };
 
-    // Footnotes first: body markers resolve to ids by ordinal.
     for footnote in &ir.footnotes {
         if compat.is_c1() && !footnote_marker_representable(&footnote.rendered) {
             ctx.degrade(
@@ -148,8 +111,6 @@ pub fn lower(
     (doc, degradations)
 }
 
-/// Lower one footnote body: its paragraphs' inlines, concatenated into a
-/// single inline list (the OOXML footnote model has no paragraphs).
 fn lower_footnote_body(footnote: &IrFootnote, ctx: &mut LowerCtx) -> Vec<InlineElement> {
     let mut content = Vec::new();
     for para in &footnote.body {
@@ -158,13 +119,10 @@ fn lower_footnote_body(footnote: &IrFootnote, ctx: &mut LowerCtx) -> Vec<InlineE
     content
 }
 
-/// Lower one block, with no list instance in force.
 fn lower_block(block: &IrBlock, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
     lower_block_in(block, doc, ctx, None)
 }
 
-/// Lower one block, reusing a parent list's numbering instance for a
-/// directly nested list.
 fn lower_block_in(
     block: &IrBlock,
     doc: &mut Document,
@@ -260,8 +218,6 @@ fn lower_block_in(
     }
 }
 
-/// Lower an outline block: a TOC field paragraph. C1 reports a custom
-/// target/indent as dropped; the TOC still lists headings.
 fn lower_outline(
     depth: u8,
     custom_target: bool,
@@ -305,12 +261,6 @@ fn lower_heading(
         para.push_run(Run::new(format!("{number} ")));
     }
     para.inlines.extend(lower_inlines(body, ctx));
-    // Drop per-run bold/size that merely restate the `Heading{n}`
-    // paragraph style's own values (it always supplies `<w:b/>` and the
-    // per-level size), so the runs stay implicit — mirroring the legacy
-    // `suppress_redundant_heading_run_props`. Only values that EQUAL the
-    // style are removed; a differing size, plus colour / italic / font /
-    // script overrides, survive.
     let idx = usize::from(level).saturating_sub(1).min(4);
     let style_size = ctx.heading_sizes[idx];
     for inline in &mut para.inlines {
@@ -325,10 +275,6 @@ fn lower_heading(
     vec![BlockElement::Paragraph(para)]
 }
 
-/// Strip a single heading run's overrides that merely duplicate the style.
-///
-/// `bold` is cleared (the `Heading{n}` style always supplies `<w:b/>`).
-/// `size_half_pt` is cleared only when it equals `style_size`.
 fn strip_redundant_heading_run(run: &mut Run, style_size: u32) {
     run.bold = false;
     if run.size_half_pt == Some(style_size) {
@@ -423,7 +369,6 @@ fn lower_place(
 
 fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockElement> {
     if weak {
-        // A weak break is a flow boundary, not a hard break: no output.
         Vec::new()
     } else if let Some(target) = to {
         let break_type = match target {
@@ -443,8 +388,6 @@ fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockEleme
     }
 }
 
-/// Lower a figure: body blocks plus a caption paragraph. The caption goes
-/// first only when the author placed it on top.
 fn lower_figure(
     body: &[IrBlock],
     caption: &[IrInline],
@@ -469,11 +412,6 @@ fn lower_figure(
     if caption_first && let Some(para) = caption_para.take() {
         out.push(BlockElement::Paragraph(para));
     }
-    // A figure whose body carries no content in the IR (a drawn/vector
-    // body: shapes and placed content have no IR form yet, so the body
-    // lowers to nothing but empty paragraphs): say so instead of
-    // emitting a bare empty paragraph. Rasterizing such bodies from the
-    // companion Paged frame is a follow-up (see the fallback registry).
     if body.is_empty()
         || body
             .iter()
@@ -493,8 +431,6 @@ fn lower_figure(
         if let Some(para) = caption_para.take() {
             out.push(BlockElement::Paragraph(para));
         } else if let Some(name) = label {
-            // A labelled figure without a caption: anchor the bookmark on
-            // its first paragraph, if it has one.
             let id = ctx.next_bookmark();
             for element in &mut out {
                 if let BlockElement::Paragraph(para) = element {
@@ -507,7 +443,6 @@ fn lower_figure(
     out
 }
 
-/// Lower one paragraph, merging adjacent same-format runs.
 fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     let mut out = Paragraph::new();
     out.style.clone_from(&para.style);
@@ -527,7 +462,6 @@ fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     out
 }
 
-/// Lower inlines to OOXML inline elements.
 fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement> {
     let mut out = Vec::new();
     for inline in inlines {
@@ -571,8 +505,6 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                 rendered,
                 target,
             } => {
-                // L6 verdict: literal markers + internal hyperlinks, never
-                // CITATION fields (C3 decides those later, D2 deferred).
                 if let Some(anchor) = target {
                     out.push(InlineElement::InternalLink {
                         anchor: anchor.clone(),
@@ -586,8 +518,6 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                 if let Some(id) = ctx.footnote_ids.get(ordinal) {
                     out.push(InlineElement::FootnoteRef(*id));
                 } else {
-                    // A marker with no matching entry (should not happen):
-                    // keep the rendered text rather than dropping it.
                     out.push(InlineElement::Text(Run::new(rendered)));
                 }
             }
@@ -626,9 +556,6 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
     out
 }
 
-/// Lower an image inline: C1 reports the dropped aspects (vector→PNG
-/// rasterization, non-cover fit, alt text); the raster itself embeds
-/// in every mode.
 fn lower_image(image: &IrImage, ctx: &mut LowerCtx) -> InlineElement {
     if ctx.compat.is_c1() {
         if image.vector {
@@ -658,8 +585,6 @@ fn lower_image(image: &IrImage, ctx: &mut LowerCtx) -> InlineElement {
     }
     let format = match image.mime.as_deref() {
         Some("image/jpeg") => ImageFormat::Jpeg,
-        // The collector rasterizes SVGs to PNG before lowering,
-        // so anything else here is PNG bytes.
         _ => ImageFormat::Png,
     };
     InlineElement::Image(ImageData {
@@ -670,9 +595,6 @@ fn lower_image(image: &IrImage, ctx: &mut LowerCtx) -> InlineElement {
     })
 }
 
-/// Lower one run: `overline` has no OOXML run property — C1 drops it
-/// (degradation, text kept); C2/C3 follow the legacy walk and render it
-/// as underline.
 fn lower_run(run: &Run, ctx: &mut LowerCtx) -> Run {
     let mut run = run.clone();
     if run.overline {
@@ -691,9 +613,6 @@ fn lower_run(run: &Run, ctx: &mut LowerCtx) -> Run {
     run
 }
 
-/// Render inlines to plain runs (for hyperlink bodies): text runs pass
-/// through, references and citations become their display text, and
-/// constructs with no run form are skipped.
 fn inline_to_runs(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<Run> {
     let mut runs = Vec::new();
     for inline in inlines {
@@ -727,7 +646,6 @@ fn inline_to_runs(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<Run> {
     runs
 }
 
-/// Lower a table: rows, column widths, borders.
 fn lower_table(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Table {
     if ctx.compat.is_c1() {
         let filled = table
@@ -764,8 +682,6 @@ fn lower_table(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Table
     }
 }
 
-/// Lower a grid in C1: the layout is dropped and each cell's body
-/// survives as flow blocks, in row order — the legacy C1 behaviour.
 fn lower_grid_flat(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
     let mut out = Vec::new();
     for row in &grid.rows {
@@ -778,8 +694,6 @@ fn lower_grid_flat(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec
     out
 }
 
-/// Lower a grid: same shape as a table; a borderless grid passes
-/// `Some(TableBorders::default())` so the writer emits no visible grid.
 fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Table {
     let rows = grid
         .rows
@@ -844,11 +758,6 @@ fn lower_cell(
             }
         }
     }
-    // A cell with no content at all still needs one paragraph: Word
-    // requires at least one `w:p` per cell, and the shared post-pass
-    // suppresses the body first-line indent on cell paragraphs — so the
-    // empty paragraph is a real one (not the writer's bare fallback),
-    // exactly as the legacy path emits for merged-continuation cells.
     if paragraphs.is_empty() && content.is_empty() {
         let para = Paragraph::new();
         paragraphs.push(para.clone());
@@ -873,11 +782,6 @@ fn lower_cell(
     }
 }
 
-/// Lower an unordered list: one numbering instance for the whole tree,
-/// nested lists reusing the parent's instance at a deeper level, exactly
-/// as the legacy `ListWalker` does. Unordered lists contribute no level
-/// definitions (the shared bullet abstract applies); enums nested under
-/// them contribute theirs (collected at the top-level allocation).
 fn lower_list(
     list: &IrList,
     doc: &mut Document,
@@ -907,24 +811,12 @@ fn lower_list(
     out
 }
 
-/// Lower an ordered (enum) list, mirroring the legacy `ListWalker`:
-/// one numbering instance per top-level list, per-level definitions
-/// collected first-writer-wins over the whole subtree, levels equal to
-/// the shared abstract definition needing no override.
 fn lower_enum(
     enumer: &IrEnum,
     doc: &mut Document,
     ctx: &mut LowerCtx,
     inherited: Option<ListAlloc>,
 ) -> Vec<BlockElement> {
-    // An enum with no static pattern and no parent instance: when every
-    // item carries its rendered number (an unmappable-but-static pattern
-    // such as Greek, computed by the collector via `pattern.apply`), the
-    // items become literal number text. When some item has no rendered
-    // number (a closure numbering the collector cannot evaluate), fall
-    // through to the plain Word-numbered path — the legacy decimal
-    // fallback. (Nested under a parent instance it inherits the instance
-    // and renders per the pattern in force, as the legacy walk does.)
     if enumer.numbering.pieces.is_empty()
         && inherited.is_none()
         && enumer.items.iter().all(|item| item.number_text.is_some())
@@ -954,9 +846,6 @@ fn lower_enum(
     out
 }
 
-/// Lower an enum whose items all carry rendered number text as literal
-/// text: each item's number becomes a leading run; nested enums keep
-/// their own numbering.
 fn lower_enum_literal(
     enumer: &IrEnum,
     doc: &mut Document,
@@ -982,10 +871,6 @@ fn lower_enum_literal(
     out
 }
 
-/// Lower one list/enum item's body: the first paragraph carries the
-/// numbering info; nested lists reuse the parent's instance. An item
-/// with no direct paragraph (only a nested list) produces no paragraph
-/// of its own, matching the legacy walk.
 fn lower_list_item(
     body: &[IrBlock],
     num_id: u32,
@@ -1011,8 +896,6 @@ fn lower_list_item(
     }
 }
 
-/// Turn collected per-level definitions into `LevelOverride`s, dropping
-/// levels equal to the shared abstract definition.
 fn level_overrides(defs: Vec<Option<IrLevelDef>>) -> Vec<LevelOverride> {
     defs.into_iter()
         .enumerate()
@@ -1031,9 +914,6 @@ fn level_overrides(defs: Vec<Option<IrLevelDef>>) -> Vec<LevelOverride> {
         .collect()
 }
 
-/// In C1 a custom numbering pattern falls back to the shared decimal
-/// definition (the overrides are dropped with a degradation); other
-/// modes keep them.
 fn c1_numbering_overrides(overrides: Vec<LevelOverride>, ctx: &mut LowerCtx) -> Vec<LevelOverride> {
     if ctx.compat.is_c1() && !overrides.is_empty() {
         let first = overrides.first().map_or("?", |o| o.lvl_text.as_str());
@@ -1047,14 +927,10 @@ fn c1_numbering_overrides(overrides: Vec<LevelOverride>, ctx: &mut LowerCtx) -> 
     overrides
 }
 
-/// A Word footnote can carry a decimal or a circled-number marker; any
-/// other rendered marker text (a pattern suffix, a closure's output)
-/// cannot be re-derived and is dropped under C1.
 fn footnote_marker_representable(marker: &str) -> bool {
     marker.parse::<u32>().is_ok() || parse_circled_number(marker).is_some()
 }
 
-/// Decode a single circled digit (①…⑳, ㉑…㉟, ㊱…㊿) to its value.
 fn parse_circled_number(s: &str) -> Option<u32> {
     let mut chars = s.chars();
     let ch = chars.next()?;
@@ -1070,18 +946,11 @@ fn parse_circled_number(s: &str) -> Option<u32> {
     Some(value)
 }
 
-/// The numbering pattern in force at one nesting depth, with the depth at
-/// which it was introduced: a nested enum with a different pattern resets
-/// the piece indexing at its own depth, while an inherited pattern keeps
-/// indexing from the outermost enum.
 struct PatternState<'a> {
     pattern: &'a IrNumberingPattern,
     origin: u32,
 }
 
-/// Collect one level definition per nesting depth an unordered-list
-/// subtree reaches, first writer wins per level. A list contributes no
-/// definition itself; enums nested under it contribute theirs.
 fn collect_levels_from_list(
     list: &IrList,
     level: u32,
@@ -1094,8 +963,6 @@ fn collect_levels_from_list(
     }
 }
 
-/// Collect one level definition per nesting depth an enum subtree
-/// reaches, first writer wins per level.
 fn collect_levels_from_enum(
     enumer: &IrEnum,
     level: u32,
@@ -1116,7 +983,6 @@ fn collect_levels_from_enum(
     }
 }
 
-/// Walk blocks looking for nested lists/enums, at one deeper level.
 fn collect_levels_in_blocks(
     blocks: &[IrBlock],
     level: u32,
@@ -1132,9 +998,6 @@ fn collect_levels_in_blocks(
     }
 }
 
-/// Record this level's definition from the pattern in force (first
-/// writer wins: sibling sub-enums at one depth share a single OOXML
-/// level).
 fn record_level_def(
     level: u32,
     state: Option<&PatternState<'_>>,
@@ -1152,14 +1015,6 @@ fn record_level_def(
     }
 }
 
-/// Derive the OOXML level definition for piece `level` (0-based) of a
-/// Typst numbering pattern, mirroring the legacy `numbering_level_def`:
-/// deeper levels cycle the last piece; `full` selects Typst's `full`
-/// rendering, where a nested label includes its parent numbers.
-///
-/// Returns `None` when the pattern has no pieces, or for numeral systems
-/// with no OOXML equivalent (Greek, Hebrew, ...); those levels keep the
-/// shared decimal definition.
 #[must_use]
 pub fn numbering_level_def(pattern: &IrNumberingPattern, level: u32) -> Option<IrLevelDef> {
     if pattern.pieces.is_empty() {
@@ -1190,8 +1045,6 @@ pub fn numbering_level_def(pattern: &IrNumberingPattern, level: u32) -> Option<I
     Some(IrLevelDef { num_fmt, lvl_text })
 }
 
-/// Map a `num_fmt` string to the static string the writer's
-/// `LevelOverride` requires; unknown values fall back to decimal.
 fn num_fmt_static(num_fmt: &str) -> &'static str {
     match num_fmt {
         "lowerLetter" => "lowerLetter",
@@ -1203,19 +1056,10 @@ fn num_fmt_static(num_fmt: &str) -> &'static str {
     }
 }
 
-/// Whether a level definition equals the shared abstract definition for
-/// that level (decimal `"%{n}."`), i.e. no `w:lvlOverride` is needed.
 fn is_default_level_def(def: &IrLevelDef, level: u32) -> bool {
     def.num_fmt == "decimal" && def.lvl_text == format!("%{}.", level + 1)
 }
 
-/// Whether two runs have identical formatting (all fields except text
-/// and span), so adjacent runs may be merged.
-///
-/// A line-break run never merges with anything: the writer emits one
-/// `<w:br/>` per such run, so merging two adjacent breaks would delete a
-/// forced blank line the author wrote (`#linebreak()#linebreak()`).
-/// Mirrors `convert::coalesce::same_run_formatting`.
 fn same_format(a: &Run, b: &Run) -> bool {
     if a.line_break || b.line_break {
         return false;
@@ -1236,7 +1080,6 @@ fn same_format(a: &Run, b: &Run) -> bool {
         && a.size_half_pt == b.size_half_pt
 }
 
-/// Merge adjacent text runs with identical formatting.
 fn merge_runs(inlines: Vec<InlineElement>) -> Vec<InlineElement> {
     let mut out: Vec<InlineElement> = Vec::new();
     for inline in inlines {
@@ -1415,8 +1258,6 @@ mod tests {
 
     #[test]
     fn multi_piece_enum_pattern_overrides_both_levels() {
-        // A level's definition is recorded only when the walk reaches that
-        // level, so the second piece is exercised by a nested enum.
         let nested = IrBlock::Enum(IrEnum {
             items: vec![IrEnumItem {
                 number_text: Some("a)".to_owned()),
@@ -1686,6 +1527,20 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_line_break_runs_do_not_merge() {
+        let mut ir = empty_doc();
+        let mut para = IrParagraph::default();
+        para.inlines.push(IrInline::LineBreak);
+        para.inlines.push(IrInline::LineBreak);
+        ir.body.push(IrBlock::Paragraph(para));
+        let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
+        let BlockElement::Paragraph(para) = &doc.body.elements[0] else {
+            panic!("expected a paragraph");
+        };
+        assert_eq!(para.inlines.len(), 2);
+    }
+
+    #[test]
     fn c1_shape_keeps_body_text_and_reports() {
         let mut ir = empty_doc();
         ir.body.push(IrBlock::Shape {
@@ -1694,12 +1549,32 @@ mod tests {
             body: vec![IrBlock::Paragraph(text_para("inside"))],
         });
         let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
-        assert!(degradations.iter().any(|d| d.construct == "shape"));
+        assert!(
+            degradations
+                .iter()
+                .any(|d| d.construct == "shape" && d.message == "rectangle dropped")
+        );
         assert!(matches!(
             &doc.body.elements[0],
             BlockElement::Paragraph(para)
                 if matches!(&para.inlines[0], InlineElement::Text(run) if run.text == "inside")
         ));
+    }
+
+    #[test]
+    fn c1_curve_shape_reports_curve() {
+        let mut ir = empty_doc();
+        ir.body.push(IrBlock::Shape {
+            kind: IrShapeKind::Curve,
+            span: None,
+            body: vec![IrBlock::Paragraph(text_para("inside"))],
+        });
+        let (_, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
+        assert!(
+            degradations
+                .iter()
+                .any(|d| d.construct == "shape" && d.message == "curve dropped")
+        );
     }
 
     #[test]

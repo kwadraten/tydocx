@@ -1,18 +1,3 @@
-//! Companion-Paged patch: footnote bodies and image display sizes.
-//!
-//! The collector reads semantics from the realize pairs; two things only
-//! exist in the companion `PagedDocument`:
-//!
-//! - Footnote entry bodies: the pairs carry the marker, not the entry
-//!   text. An entry lives in a frame group whose `parent` is the marker's
-//!   `Location` and which contains a `Tag::Start("entry")`; the entry's
-//!   marker number (inside `link-marker` tags) is skipped, the rest is
-//!   the body text (probe §9, `paged-frames.txt`).
-//! - On-page image display sizes, by content hash (the legacy
-//!   `collect_image_sizes` map). Re-encoded images (GIF/WebP/SVG) change
-//!   bytes, so a hash miss falls back to intrinsic dimensions at 96 DPI,
-//!   exactly as the legacy path does.
-
 use std::collections::HashMap;
 
 use typort_ir::{
@@ -29,22 +14,6 @@ use super::style::{contains_cjk, lower_runs_match};
 use crate::convert::image::{collect_image_sizes, hash_bytes};
 use crate::convert::page::{effective_style, effective_weight, extract_non_black_color};
 
-/// Patch an IR document with companion-Paged facts.
-///
-/// Footnote bodies are matched to markers by ordinal (marker order =
-/// entry order — never by `Location` across the boundary; the locations
-/// are only used to find the entry group *within* this one Paged
-/// document). Image sizes are filled by content hash, with an intrinsic
-/// fallback. Returns the degradations recorded during patching.
-/// Patch an IR document with companion-Paged data: footnote entry bodies
-/// and image display sizes.
-///
-/// `collected_bodies` are the footnote bodies collected from content
-/// during the walk (keyed by marker location); they are preferred over
-/// the Paged-frame bodies because frames carry only rendered glyphs —
-/// math becomes literal Mathematical-Alphanumeric text and hyperlink
-/// display text is lost there. A marker with no collected body falls
-/// back to the frame entries below.
 pub fn patch_document(
     doc: &mut IrDocument,
     markers: &[(Location, String)],
@@ -54,12 +23,6 @@ pub fn patch_document(
 ) -> Vec<Degradation> {
     let mut degradations = Vec::new();
 
-    // Footnote bodies, keyed by marker location within this Paged document.
-    // A marker realized inside a table/figure fragment carries a location
-    // from the fragment's split locator, which never matches the Paged
-    // compile's location for the same footnote — so a location miss falls
-    // back to the ordinal: markers are collected in document order and
-    // entries are listed in page order, which agree.
     let entries = collect_footnote_entries(paged, style, &mut degradations);
     let ordered = &entries.in_order;
     let mut used: Vec<bool> = vec![false; ordered.len()];
@@ -81,9 +44,6 @@ pub fn patch_document(
                     Some(body.clone())
                 }
                 None => {
-                    // Ordinal fallback: the entry at this marker's position in
-                    // document order, when it has not already been claimed by
-                    // a location match.
                     if index < ordered.len() && !used[index] {
                         used[index] = true;
                         Some(ordered[index].1.clone())
@@ -111,7 +71,6 @@ pub fn patch_document(
     }
     doc.footnotes = footnotes;
 
-    // Image display sizes.
     let sizes = collect_image_sizes(paged);
     patch_block_images(&mut doc.body, &sizes);
     for footnote in &mut doc.footnotes {
@@ -123,17 +82,11 @@ pub fn patch_document(
     degradations
 }
 
-/// Footnote entry bodies from the Paged frames: the map (for location
-/// matches) and the same entries in page order (for the ordinal fallback
-/// in `patch_document`).
 struct FootnoteEntries {
     by_location: HashMap<Location, Vec<IrParagraph>>,
     in_order: Vec<(Location, Vec<IrParagraph>)>,
 }
 
-/// Collect footnote entry bodies from the Paged frames, keyed by the
-/// marker location (the entry group's `parent`) — and, in the same
-/// order, as a list for the ordinal fallback in `patch_document`.
 fn collect_footnote_entries(
     paged: &PagedDocument,
     style: &DocumentStyle,
@@ -149,10 +102,8 @@ fn collect_footnote_entries(
     entries
 }
 
-/// Recurse into frame groups; a group whose `parent` is set and whose
-/// frame directly contains a `Tag::Start("entry")` is a footnote entry
-/// group. (Outline entries also carry an `"entry"` tag, but their groups
-/// have no parent, so they never match here.)
+/// Outline entries share the `"entry"` tag but have no parent, so they
+/// never match here.
 fn collect_entries_from_frame(
     frame: &Frame,
     style: &DocumentStyle,
@@ -185,19 +136,12 @@ fn collect_entries_from_frame(
     }
 }
 
-/// Walk state for one footnote entry's frame.
 struct EntryWalk<'a> {
     style: &'a DocumentStyle,
-    /// Open tags, as (element name, location), innermost last.
     tag_stack: Vec<(&'static str, Location)>,
-    /// The entry body, as a single paragraph (the lowering concatenates
-    /// footnote paragraphs anyway, so line/paragraph splits inside an
-    /// entry carry no information).
     paragraph: IrParagraph,
 }
 
-/// Walk an entry group's frame, collecting its text (and raster images)
-/// into the walk's paragraph.
 fn walk_entry_frame(frame: &Frame, walk: &mut EntryWalk<'_>, degradations: &mut Vec<Degradation>) {
     for (_, item) in frame.items() {
         match item {
@@ -218,8 +162,6 @@ fn walk_entry_frame(frame: &Frame, walk: &mut EntryWalk<'_>, degradations: &mut 
                 if !in_entry(walk) {
                     continue;
                 }
-                // The entry's marker number lives inside `link-marker`
-                // tags; the body text follows it.
                 if walk
                     .tag_stack
                     .iter()
@@ -247,15 +189,10 @@ fn walk_entry_frame(frame: &Frame, walk: &mut EntryWalk<'_>, degradations: &mut 
     }
 }
 
-/// Whether the walk is currently inside the entry tag.
 fn in_entry(walk: &EntryWalk<'_>) -> bool {
     walk.tag_stack.iter().any(|(name, _)| *name == "entry")
 }
 
-/// One frame text item as a run: weight/style from the shaped font
-/// (variable-font aware, as the legacy path reads them), tag context
-/// (`strong`/`emph`/`super`/`sub`) OR-ed in, size and font recorded only
-/// when they differ from the document body.
 fn footnote_run(text: &TextItem, walk: &EntryWalk<'_>) -> Run {
     let mut run = Run::new(text.text.to_string());
     let info = text.font.info();
@@ -290,10 +227,6 @@ fn footnote_run(text: &TextItem, walk: &EntryWalk<'_>) -> Run {
     run
 }
 
-/// A raster image inside a footnote entry: kept with its frame display
-/// size. SVG/PDF images have no raster form here and are skipped with a
-/// degradation (the main image path rasterizes SVGs; the footnote path
-/// does not yet).
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -342,9 +275,6 @@ fn push_frame_image(
     }));
 }
 
-/// Push a run onto a paragraph, merging it into the previous run when the
-/// format matches (frame text is split at shaping boundaries the lowering
-/// would otherwise have to re-merge).
 fn push_merged(paragraph: &mut IrParagraph, run: Run) {
     if let Some(IrInline::Text(prev)) = paragraph.inlines.last_mut()
         && lower_runs_match(prev, &run)
@@ -355,8 +285,6 @@ fn push_merged(paragraph: &mut IrParagraph, run: Run) {
     paragraph.inlines.push(IrInline::Text(run));
 }
 
-/// Fill image display sizes throughout the body, by content hash, with an
-/// intrinsic fallback (see the module docs).
 fn patch_block_images(blocks: &mut [IrBlock], sizes: &HashMap<u64, (u64, u64)>) {
     for block in blocks {
         match block {
@@ -414,11 +342,6 @@ fn patch_inline_images(inlines: &mut [IrInline], sizes: &HashMap<u64, (u64, u64)
     for inline in inlines {
         match inline {
             IrInline::Image(image) => {
-                // Look the display size up by the original-bytes hash:
-                // re-encoded images (SVG/GIF/WebP) carry rasterized PNG
-                // bytes whose hash never appears in the frames. Fall back
-                // to hashing the stored bytes for images whose source
-                // hash was recorded before this field existed.
                 if let Some((width, height)) = sizes
                     .get(&image.source_hash)
                     .or_else(|| sizes.get(&hash_bytes(&image.bytes)))
@@ -429,10 +352,6 @@ fn patch_inline_images(inlines: &mut [IrInline], sizes: &HashMap<u64, (u64, u64)
                     image.width_emu = width;
                     image.height_emu = height;
                 }
-                // Otherwise the size stays zero: a re-encoded image whose
-                // original bytes never appeared in the frames, or an
-                // undecodable image. The writer still embeds it; its
-                // display size is a known gap (see fallback-registry.md).
             }
             IrInline::Link { body, .. } | IrInline::Shape { body, .. } => {
                 patch_inline_images(body, sizes);
@@ -442,20 +361,43 @@ fn patch_inline_images(inlines: &mut [IrInline], sizes: &HashMap<u64, (u64, u64)
     }
 }
 
-/// Intrinsic pixel size -> EMU at 96 DPI, the legacy fallback when the
-/// paged size is unavailable.
 fn intrinsic_size(bytes: &[u8]) -> Option<(u64, u64)> {
     let dims = ::image::load_from_memory(bytes).ok()?;
     let px_to_emu = |px: u32| u64::from(px) * 9525;
     Some((px_to_emu(dims.width()), px_to_emu(dims.height())))
 }
 
-/// Whether `bytes` are a PNG (magic `89 50 4E 47`).
 fn is_png(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && bytes[..4] == [0x89, 0x50, 0x4E, 0x47]
 }
 
-/// Whether `bytes` are a JPEG (magic `FF D8 FF`).
 fn is_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 3 && bytes[..3] == [0xFF, 0xD8, 0xFF]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intrinsic_size_uses_96_dpi() {
+        // Minimal 1x1 transparent PNG.
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        assert_eq!(intrinsic_size(png), Some((9525, 9525)));
+        assert_eq!(intrinsic_size(b"not an image"), None);
+    }
+
+    #[test]
+    fn magic_bytes_detect_png_and_jpeg() {
+        assert!(is_png(&[0x89, 0x50, 0x4E, 0x47, 0x00]));
+        assert!(!is_png(&[0xFF, 0xD8, 0xFF, 0xE0]));
+        assert!(is_jpeg(&[0xFF, 0xD8, 0xFF, 0xE0]));
+        assert!(!is_jpeg(&[0x89, 0x50, 0x4E, 0x47]));
+    }
 }
