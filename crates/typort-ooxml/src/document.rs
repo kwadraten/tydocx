@@ -254,6 +254,9 @@ pub struct Run {
     /// Per-run font size override in half-points (e.g. 24 = 12pt).
     /// `None` means inherit the document default.
     pub size_half_pt: Option<u32>,
+    /// Character spacing (tracking) in twentieths of a point. `None` or
+    /// `Some(0)` means no expansion; `Some(n)` emits `w:spacing w:val="n"`.
+    pub tracking_twips: Option<u32>,
     /// Source span for cross-referencing with `PagedDocument` styling.
     pub span: Option<typst_syntax::Span>,
     /// A forced line break (`\` in Typst): the writer emits `<w:r><w:br/></w:r>`
@@ -281,6 +284,7 @@ impl Run {
             font_ascii: None,
             font_east_asia: None,
             size_half_pt: None,
+            tracking_twips: None,
             span: None,
             line_break: false,
         }
@@ -319,6 +323,7 @@ impl Run {
             font_ascii,
             font_east_asia,
             size_half_pt,
+            tracking_twips,
         } = self;
         RunFormat {
             bold: *bold,
@@ -336,6 +341,7 @@ impl Run {
             font_ascii: font_ascii.as_deref(),
             font_east_asia: font_east_asia.as_deref(),
             size_half_pt: *size_half_pt,
+            tracking_twips: tracking_twips.filter(|t| *t > 0),
         }
     }
 }
@@ -367,6 +373,7 @@ pub struct RunFormat<'a> {
     font_ascii: Option<&'a str>,
     font_east_asia: Option<&'a str>,
     size_half_pt: Option<u32>,
+    tracking_twips: Option<u32>,
 }
 
 impl RunFormat<'_> {
@@ -414,6 +421,12 @@ pub struct Paragraph {
     pub hanging_indent: Option<HangingIndent>,
     /// Left indent in twips (e.g., 720 for block quotes).
     pub left_indent: Option<u32>,
+    /// Right indent in twips (e.g., from `#pad(right:)` or `#block(inset:)`).
+    pub right_indent: Option<u32>,
+    /// Keep all lines of this paragraph on the same page (`w:keepLines`).
+    pub keep_lines: bool,
+    /// Keep this paragraph on the same page as the next one (`w:keepNext`).
+    pub keep_next: bool,
     /// Apply `CodeBlock` style (monospace, no indent, optional shading).
     pub code_block: bool,
     /// If set, this paragraph ends a section. The `w:sectPr` is emitted
@@ -745,6 +758,15 @@ pub struct TableBorders {
     pub header_rows: usize,
 }
 
+/// Default cell margins for a table (`w:tblCellMar` in `w:tblPr`), in twips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableCellMargins {
+    pub top: u32,
+    pub left: u32,
+    pub bottom: u32,
+    pub right: u32,
+}
+
 /// A table with rows and cells.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Table {
@@ -759,6 +781,9 @@ pub struct Table {
     /// writer emits exactly these (so a three-line table is not boxed into a
     /// grid); when `None`, it falls back to a uniform `border_size` grid.
     pub borders: Option<TableBorders>,
+    /// Cell margins applied to every cell (`w:tblCellMar`). `None` leaves the
+    /// Word default (left/right 108 twips).
+    pub cell_margins: Option<TableCellMargins>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -959,6 +984,10 @@ impl PageNumberFormat {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "flat bag of orthogonal document-level flags; a state machine would not model them"
+)]
 pub struct DocumentStyle {
     pub body_font_ascii: String,
     pub body_font_east_asia: String,
@@ -1009,6 +1038,8 @@ pub struct DocumentStyle {
     /// Body font's cap-height ratio (em units). Used to compute line pitch:
     /// `line_pitch = cap_height_ratio × body_size + leading`.
     pub body_cap_height_ratio: f64,
+    /// `#set text(hyphenate: false)` → `w:suppressAutoHyphens` in settings.
+    pub suppress_auto_hyphens: bool,
 }
 
 impl Default for DocumentStyle {
@@ -1043,6 +1074,7 @@ impl Default for DocumentStyle {
             has_cjk_content: true,
             hyperlink_color: "0563C1".to_string(),
             body_cap_height_ratio: 0.66,
+            suppress_auto_hyphens: false,
         }
     }
 }

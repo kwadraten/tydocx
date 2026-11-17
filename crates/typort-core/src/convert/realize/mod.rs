@@ -387,6 +387,34 @@ pub fn export_ir(
                 "page columns or margins change mid-document; kept as a single section",
             ));
         }
+        let overrides = page::extract_source_style_overrides(main.text(), &template_names);
+        if overrides.margins_mirrored {
+            degradations.push(Degradation::new(
+                None,
+                "mirrored-margins",
+                DegradationAction::Skipped,
+                "inside/outside margins are not representable without w:mirrorMargins; \
+                 both sides keep the Typst default",
+            ));
+        }
+        if overrides.numbering_changed {
+            degradations.push(Degradation::new(
+                None,
+                "page-numbering-change",
+                DegradationAction::Skipped,
+                "the page numbering format or counter restart changes mid-document; \
+                 kept as a single numbering scheme",
+            ));
+        }
+        if overrides.page_furniture {
+            degradations.push(Degradation::new(
+                None,
+                "page-foreground",
+                DegradationAction::Approximated,
+                "page foreground/background is not representable as anchored content; \
+                 its content is kept in the page header or dropped",
+            ));
+        }
     }
 
     ConvertOutcome::new(doc, degradations)

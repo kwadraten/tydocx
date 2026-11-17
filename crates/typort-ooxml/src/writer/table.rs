@@ -65,6 +65,24 @@ pub(super) fn write_table<W: Write>(
                     }
                     Ok(())
                 })?;
+            if let Some(margins) = &table.cell_margins {
+                tpr.create_element("w:tblCellMar")
+                    .write_inner_content(|mar| {
+                        for (name, value) in [
+                            ("w:top", margins.top),
+                            ("w:left", margins.left),
+                            ("w:bottom", margins.bottom),
+                            ("w:right", margins.right),
+                        ] {
+                            let v = value.to_string();
+                            mar.create_element(name)
+                                .with_attribute(("w:w", v.as_str()))
+                                .with_attribute(("w:type", "dxa"))
+                                .write_empty()?;
+                        }
+                        Ok(())
+                    })?;
+            }
             Ok(())
         })?;
         // Table rows

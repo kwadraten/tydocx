@@ -1,5 +1,6 @@
 use typort_ooxml::document::Run;
 use typst_library::foundations::StyleChain;
+use typst_library::layout::Abs;
 use typst_library::text::{
     DecoLine, FontFamily, FontStyle, FontWeight, ScriptKind, TextElem, variant,
 };
@@ -60,7 +61,7 @@ pub fn run_from_styles(
     run.span = span;
 
     let variant = variant(styles);
-    run.bold = variant.weight >= FontWeight::BOLD;
+    run.bold = variant.weight >= FontWeight::SEMIBOLD;
     run.italic = variant.style != FontStyle::Normal;
 
     let size_pt = styles.resolve(TextElem::size).to_pt();
@@ -72,6 +73,18 @@ pub fn run_from_styles(
     let size_half_pt = (size_pt * 2.0).round().max(1.0) as u32;
     if size_half_pt != defaults.size_half_pt {
         run.size_half_pt = Some(size_half_pt);
+    }
+
+    let tracking = styles.resolve(TextElem::tracking);
+    if tracking > Abs::zero() {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "tracking is a small non-negative length"
+        )]
+        {
+            run.tracking_twips = Some((tracking.to_pt() * 20.0).round().max(1.0) as u32);
+        }
     }
 
     let families: Vec<&str> = typst_library::text::families(styles)

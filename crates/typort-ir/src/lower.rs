@@ -106,6 +106,27 @@ pub fn lower(
         doc.body.elements.extend(lowered);
     }
 
+    if compat.is_c1() && !ir.page_furniture.is_empty() {
+        ctx.degrade(
+            "page-foreground",
+            DegradationAction::Literalized,
+            "page foreground/background content has no Word equivalent; its text is kept as \
+             literal body paragraphs"
+                .to_string(),
+        );
+        let mut furniture: Vec<BlockElement> = ir
+            .page_furniture
+            .iter()
+            .map(|text| {
+                let mut para = Paragraph::new();
+                para.push_run(Run::new(text.clone()));
+                BlockElement::Paragraph(para)
+            })
+            .collect();
+        furniture.append(&mut doc.body.elements);
+        doc.body.elements = furniture;
+    }
+
     doc.bookmark_counter = ctx.next_bookmark_id;
     let degradations = ctx.degradations;
     (doc, degradations)
@@ -191,12 +212,12 @@ fn lower_block_in(
         IrBlock::Quote { body } => lower_quote(body, doc, ctx),
         IrBlock::Raw(raw) => lower_raw(raw),
         IrBlock::Outline {
-            title: _,
+            title,
             entries: _,
             depth,
             custom_target,
             custom_indent,
-        } => lower_outline(*depth, *custom_target, *custom_indent, ctx),
+        } => lower_outline(title, *depth, *custom_target, *custom_indent, ctx),
         IrBlock::Bibliography { entries } => lower_bibliography(entries, ctx),
         IrBlock::Place { float, body } => lower_place(*float, body, doc, ctx),
         IrBlock::PageBreak { weak, to } => lower_pagebreak(*weak, *to),
@@ -219,6 +240,7 @@ fn lower_block_in(
 }
 
 fn lower_outline(
+    title: &[IrInline],
     depth: u8,
     custom_target: bool,
     custom_indent: bool,
@@ -241,9 +263,16 @@ fn lower_outline(
             );
         }
     }
+    let mut out = Vec::new();
+    if !title.is_empty() {
+        let mut title_para = Paragraph::new();
+        title_para.inlines = lower_inlines(title, ctx);
+        out.push(BlockElement::Paragraph(title_para));
+    }
     let mut para = Paragraph::new();
     para.add_toc(depth);
-    vec![BlockElement::Paragraph(para)]
+    out.push(BlockElement::Paragraph(para));
+    out
 }
 
 fn lower_heading(
@@ -450,6 +479,9 @@ fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     out.suppress_indent = para.suppress_indent;
     out.hanging_indent = para.hanging_indent;
     out.left_indent = para.left_indent;
+    out.right_indent = para.right_indent;
+    out.keep_lines = para.keep_lines;
+    out.keep_next = para.keep_next;
     out.code_block = para.code_block;
     out.horizontal_rule = para.horizontal_rule;
     out.tab_stops.clone_from(&para.tab_stops);
@@ -679,6 +711,7 @@ fn lower_table(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Table
         width_pct: Some(5000),
         border_size: None,
         borders: table.borders.clone(),
+        cell_margins: table.cell_margins,
     }
 }
 
@@ -705,6 +738,7 @@ fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Table {
         width_pct: Some(5000),
         border_size: None,
         borders: grid.borders.clone(),
+        cell_margins: None,
     }
 }
 
@@ -1078,6 +1112,7 @@ fn same_format(a: &Run, b: &Run) -> bool {
         && a.font_ascii == b.font_ascii
         && a.font_east_asia == b.font_east_asia
         && a.size_half_pt == b.size_half_pt
+        && a.tracking_twips == b.tracking_twips
 }
 
 fn merge_runs(inlines: Vec<InlineElement>) -> Vec<InlineElement> {
@@ -1112,6 +1147,7 @@ mod tests {
             body: Vec::new(),
             footnotes: Vec::new(),
             citation_sources: Vec::new(),
+            page_furniture: Vec::new(),
         }
     }
 
@@ -1181,6 +1217,7 @@ mod tests {
             column_widths_pct: Some(vec![2500, 2500]),
             borders: None,
             gutter: false,
+            cell_margins: None,
         }));
         let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         let BlockElement::Table(table) = &doc.body.elements[0] else {

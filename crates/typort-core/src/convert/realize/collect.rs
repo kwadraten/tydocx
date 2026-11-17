@@ -6,6 +6,7 @@ use typort_ir::{
     IrEnum, IrEnumItem, IrEquation, IrFigureKind, IrGrid, IrInline, IrList, IrListItem,
     IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrRaw, IrSectionBreakType,
     IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, PageSettings, TableBorders,
+    TableCellMargins,
 };
 use typort_ooxml::document::{Alignment, VerticalAlign};
 use typst_library::diag::SourceResult;
@@ -15,10 +16,11 @@ use typst_library::foundations::{
     StyledElem, Value,
 };
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
+use typst_library::layout::grid::Celled;
 use typst_library::layout::grid::resolve::{Cell, CellGrid, Entry, Line};
 use typst_library::layout::{
-    Abs, BlockBody, BlockElem, ColbreakElem, GridElem, HAlignment, Length, Margin, PageElem,
-    PagebreakElem, Parity, PlaceElem, Rel, VAlignment,
+    Abs, BlockBody, BlockElem, ColbreakElem, GridElem, HAlignment, Length, Margin, PadElem,
+    PageElem, PagebreakElem, Parity, PlaceElem, Rel, VAlignment, VElem,
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
@@ -37,7 +39,7 @@ use typst_syntax::Span;
 
 use super::inline::{
     InlineCtx, alignment_from_styles, collect_inlines, collect_paragraph, image_inline,
-    smart_quotes_for,
+    smart_quotes_for, spacing_twips,
 };
 use super::style::{StyleDefaults, defaults_from_root, run_from_styles};
 use super::with_fragment;
@@ -157,6 +159,19 @@ pub fn collect_document(
         footnote_circled: collector.footnote_circled,
         degradations: std::mem::take(&mut collector.degradations),
     };
+    let mut page_furniture = Vec::new();
+    for content in [
+        root_styles.get_cloned(PageElem::foreground),
+        root_styles.get_cloned(PageElem::background),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let text = plain_text(&content);
+        if !text.is_empty() {
+            page_furniture.push(text);
+        }
+    }
     let doc = IrDocument {
         info: info.clone(),
         page: PageSettings::default(),
@@ -164,6 +179,7 @@ pub fn collect_document(
         body,
         footnotes: Vec::new(),
         citation_sources: Vec::new(),
+        page_furniture,
     };
     Ok((doc, state))
 }
@@ -269,6 +285,7 @@ impl Collector<'_> {
         locator: &mut SplitLocator,
     ) -> SourceResult<Vec<IrBlock>> {
         let mut out = Vec::new();
+        let mut pending_vspace: Option<u32> = None;
         let mut i = 0;
         while i < pairs.len() {
             let (content, styles) = pairs[i];
@@ -277,16 +294,39 @@ impl Collector<'_> {
                     Tag::Start(inner, _) => {
                         let end = find_end(pairs, i + 1, inner.location());
                         let group = &pairs[i + 1..end];
+                        let base = out.len();
                         out.extend(self.collect_tag_group(inner, group, styles, engine, locator)?);
                         i = end + 1;
+                        if out.len() > base
+                            && let Some(twips) = pending_vspace.take()
+                            && let Some(IrBlock::Paragraph(para)) = out.get_mut(base)
+                        {
+                            para.spacing_before =
+                                Some(para.spacing_before.map_or(twips, |s| s.max(twips)));
+                        }
+                        continue;
                     }
                     Tag::End(_, _, _) => {
                         i += 1;
+                        continue;
                     }
                 }
+            }
+            if let Some(v) = content.to_packed::<VElem>() {
+                if let Some(twips) = spacing_twips(&v.amount, styles) {
+                    pending_vspace = Some(pending_vspace.map_or(twips, |p| p.max(twips)));
+                }
+                i += 1;
                 continue;
             }
+            let base = out.len();
             out.extend(self.collect_standalone(content, styles, engine, locator)?);
+            if out.len() > base
+                && let Some(twips) = pending_vspace.take()
+                && let Some(IrBlock::Paragraph(para)) = out.get_mut(base)
+            {
+                para.spacing_before = Some(para.spacing_before.map_or(twips, |s| s.max(twips)));
+            }
             i += 1;
         }
         Ok(out)
@@ -394,9 +434,19 @@ impl Collector<'_> {
         }
         if let Some(block) = content.to_packed::<BlockElem>() {
             if let Some(body) = block_body_content(block, styles) {
-                return self.collect_content_blocks(body, styles, engine, locator);
+                let mut blocks = self.collect_content_blocks(body, styles, engine, locator)?;
+                apply_block_props(&mut blocks, block, styles);
+                return Ok(blocks);
             }
             return self.collect_layouter_block(content, styles, engine, locator);
+        }
+        if let Some(pad) = content.to_packed::<PadElem>() {
+            let mut blocks = self.collect_content_blocks(&pad.body, styles, engine, locator)?;
+            apply_pad_insets(&mut blocks, pad, styles);
+            return Ok(blocks);
+        }
+        if content.to_packed::<VElem>().is_some() {
+            return Ok(Vec::new());
         }
         if let Some(pagebreak) = content.to_packed::<PagebreakElem>() {
             return Ok(vec![Self::collect_pagebreak(pagebreak, styles)]);
@@ -448,6 +498,11 @@ impl Collector<'_> {
         let Some(original) = self.layouter_index.get(&content.span()).cloned() else {
             return Ok(Vec::new());
         };
+        if let Some(pad) = original.to_packed::<PadElem>() {
+            let mut blocks = self.collect_content_blocks(&pad.body, styles, engine, locator)?;
+            apply_pad_insets(&mut blocks, pad, styles);
+            return Ok(blocks);
+        }
         if let Some((kind, shape_body)) = shape_parts(&original) {
             let body = match shape_body {
                 Some(shape_content) => {
@@ -488,9 +543,11 @@ impl Collector<'_> {
         let children = flatten_sequences(content_children(content));
         let mut out = Vec::new();
         let mut pending: Vec<Content> = Vec::new();
+        let mut pending_vspace: Option<u32> = None;
         let mut i = 0;
         while i < children.len() {
             let child = children[i];
+            let base = out.len();
             if let Some(list) = child.to_packed::<ListElem>() {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
                 out.push(self.collect_list(list, list_ctx.depth, styles, engine, locator)?);
@@ -541,6 +598,17 @@ impl Collector<'_> {
             } else if child.to_packed::<LineElem>().is_some() {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
                 i += 1;
+            } else if let Some(v) = child.to_packed::<VElem>() {
+                if let Some(twips) = spacing_twips(&v.amount, styles) {
+                    pending_vspace = Some(pending_vspace.map_or(twips, |p| p.max(twips)));
+                }
+                i += 1;
+            } else if let Some(pad) = child.to_packed::<PadElem>() {
+                flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
+                let mut blocks = self.collect_content_blocks(&pad.body, styles, engine, locator)?;
+                apply_pad_insets(&mut blocks, pad, styles);
+                out.extend(blocks);
+                i += 1;
             } else if is_block_element(child) {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
                 out.extend(self.collect_content_element(child, styles, engine, locator)?);
@@ -554,8 +622,19 @@ impl Collector<'_> {
             } else {
                 i += 1;
             }
+            if out.len() > base
+                && let Some(twips) = pending_vspace.take()
+                && let Some(IrBlock::Paragraph(para)) = out.get_mut(base)
+            {
+                para.spacing_before = Some(para.spacing_before.map_or(twips, |s| s.max(twips)));
+            }
         }
         flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
+        if let Some(twips) = pending_vspace
+            && let Some(IrBlock::Paragraph(para)) = out.last_mut()
+        {
+            para.spacing_before = Some(para.spacing_before.map_or(twips, |s| s.max(twips)));
+        }
         Ok(out)
     }
 
@@ -743,7 +822,9 @@ impl Collector<'_> {
         }
         if let Some(block) = child.to_packed::<BlockElem>() {
             if let Some(body) = block_body_content(block, styles) {
-                return self.collect_content_blocks(body, styles, engine, locator);
+                let mut blocks = self.collect_content_blocks(body, styles, engine, locator)?;
+                apply_block_props(&mut blocks, block, styles);
+                return Ok(blocks);
             }
             return self.collect_layouter_block(child, styles, engine, locator);
         }
@@ -1248,6 +1329,7 @@ impl Collector<'_> {
                 column_widths_pct: None,
                 borders: None,
                 gutter: false,
+                cell_margins: None,
             }));
         };
         if let Some(grid) = table.grid.as_ref()
@@ -1379,6 +1461,7 @@ impl Collector<'_> {
             column_widths_pct,
             borders: table_borders_from_grid(grid),
             gutter: table_gutter(table, styles),
+            cell_margins: table_cell_margins(table, styles),
         })
     }
 
@@ -1615,6 +1698,7 @@ impl Collector<'_> {
             column_widths_pct,
             borders: None,
             gutter: table_gutter(table, styles),
+            cell_margins: table_cell_margins(table, styles),
         })
     }
 
@@ -1939,6 +2023,72 @@ fn flush_pending(
         }));
     }
     Ok(())
+}
+
+/// `#set table(inset:)` becomes `w:tblCellMar`. `Auto` (never declared) keeps
+/// the Word default instead of baking in Typst's 5pt.
+fn table_cell_margins(table: &TableElem, styles: StyleChain<'_>) -> Option<TableCellMargins> {
+    let Celled::Value(sides) = table.inset.get_cloned(styles) else {
+        return None;
+    };
+    let side = |side: Option<Rel<Length>>| side.map_or(0, |rel| rel_side_twips(&rel, styles));
+    Some(TableCellMargins {
+        top: side(sides.top),
+        left: side(sides.left),
+        bottom: side(sides.bottom),
+        right: side(sides.right),
+    })
+}
+
+/// Absolute twips for one `Rel<Length>` side (`em` resolved against the current
+/// font size; the parent-relative ratio part is not representable and ignored).
+fn rel_side_twips(rel: &Rel<Length>, styles: StyleChain<'_>) -> u32 {
+    crate::convert::page::pt_to_twips(rel.abs.at(styles.resolve(TextElem::size)).to_pt())
+}
+
+fn apply_pad_insets(blocks: &mut [IrBlock], pad: &PadElem, styles: StyleChain<'_>) {
+    let left = rel_side_twips(&pad.left.get_cloned(styles), styles);
+    let right = rel_side_twips(&pad.right.get_cloned(styles), styles);
+    if left == 0 && right == 0 {
+        return;
+    }
+    apply_side_indents(blocks, left, right);
+}
+
+/// `#block(inset:)` narrows the text column on both sides; `breakable: false`
+/// keeps the block's paragraphs on one page.
+fn apply_block_props(blocks: &mut [IrBlock], block: &BlockElem, styles: StyleChain<'_>) {
+    let inset = block.inset.get_cloned(styles);
+    let left = inset.left.map_or(0, |rel| rel_side_twips(&rel, styles));
+    let right = inset.right.map_or(0, |rel| rel_side_twips(&rel, styles));
+    if left != 0 || right != 0 {
+        apply_side_indents(blocks, left, right);
+    }
+    if !block.breakable.get(styles) {
+        let last = blocks
+            .iter()
+            .rposition(|b| matches!(b, IrBlock::Paragraph(_)))
+            .unwrap_or(0);
+        for (idx, inner) in blocks.iter_mut().enumerate() {
+            if let IrBlock::Paragraph(para) = inner {
+                para.keep_lines = true;
+                para.keep_next = idx != last;
+            }
+        }
+    }
+}
+
+fn apply_side_indents(blocks: &mut [IrBlock], left: u32, right: u32) {
+    for block in blocks {
+        if let IrBlock::Paragraph(para) = block {
+            if left > 0 {
+                para.left_indent = Some(para.left_indent.unwrap_or(0) + left);
+            }
+            if right > 0 {
+                para.right_indent = Some(para.right_indent.unwrap_or(0) + right);
+            }
+        }
+    }
 }
 
 fn find_synthesized_raw_lines(content: &Content) -> Option<Vec<Packed<RawLine>>> {

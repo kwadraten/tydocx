@@ -2,8 +2,10 @@
 
 use crate::common::{
     fixture_doc_xml, fixture_doc_xml_legacy, fixture_document, fixture_document_legacy,
-    fixture_outcome, fixture_package, fixture_package_from_document, paragraph_texts,
+    fixture_outcome, fixture_outcome_with_options, fixture_package, fixture_package_from_document,
+    fixture_package_with_options, paragraph_containing, paragraph_texts,
 };
+use typort_core::{CompatMode, ConvertOptions};
 
 #[test]
 fn toc_produces_field_code() {
@@ -940,5 +942,103 @@ fn issue_column_break() {
     assert!(
         first < br && br < second,
         "column break should fall between the first and second column content"
+    );
+}
+
+#[test]
+fn issue_place_absolute_c1_reports_and_keeps_text() {
+    let outcome = fixture_outcome_with_options(
+        "issue_place_absolute_dx",
+        &ConvertOptions::new(CompatMode::C1),
+    );
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "placed-content"),
+        "expected a placed-content degradation, got {:?}",
+        outcome.degradations
+    );
+    let xml = fixture_package_with_options(
+        "issue_place_absolute_dx",
+        &ConvertOptions::new(CompatMode::C1),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
+    assert!(
+        xml.contains("PLACE ME"),
+        "placed text is kept as a normal paragraph:\n{xml}"
+    );
+}
+
+#[test]
+fn issue_rect_text_band_c1_reports_shape_and_keeps_text() {
+    let outcome =
+        fixture_outcome_with_options("issue_rect_text_band", &ConvertOptions::new(CompatMode::C1));
+    assert!(
+        outcome.degradations.iter().any(|d| d.construct == "shape"),
+        "expected a shape degradation, got {:?}",
+        outcome.degradations
+    );
+    let xml =
+        fixture_package_with_options("issue_rect_text_band", &ConvertOptions::new(CompatMode::C1))
+            .part_text("word/document.xml")
+            .to_owned();
+    assert!(
+        xml.contains("A rectangular color band"),
+        "the rect's text content survives as a paragraph:\n{xml}"
+    );
+}
+
+#[test]
+fn issue_weak_pagebreak_after_hard_break_emits_one_break() {
+    let doc_xml = fixture_doc_xml("issue_pagebreak_weak");
+    assert_eq!(
+        doc_xml.matches(r#"w:br w:type="page""#).count(),
+        1,
+        "a weak pagebreak following a hard break must not add a second break:\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let first = texts.iter().position(|t| t.contains("First page."));
+    let second = texts
+        .iter()
+        .position(|t| t.contains("Second page starts here."));
+    assert!(first.is_some() && second.is_some() && first < second);
+}
+
+#[test]
+fn issue_block_breakable_false_keeps_together() {
+    let doc_xml = fixture_doc_xml("issue_block_breakable_false");
+    let first = paragraph_containing(&doc_xml, "Block line one.");
+    assert!(
+        first.contains("<w:keepNext/>") && first.contains("<w:keepLines/>"),
+        "first paragraph of an unbreakable block keeps with the next:\n{first}"
+    );
+    let second = paragraph_containing(&doc_xml, "Block line two.");
+    assert!(
+        second.contains("<w:keepLines/>"),
+        "last paragraph of an unbreakable block stays unbroken:\n{second}"
+    );
+    let after = paragraph_containing(&doc_xml, "Body text after the block.");
+    assert!(
+        !after.contains("<w:keep"),
+        "content after the block is not glued to it:\n{after}"
+    );
+}
+
+#[test]
+fn issue_outline_title_emitted_before_toc() {
+    let doc_xml = fixture_doc_xml("issue_outline_title");
+    let title = doc_xml
+        .find("Contents")
+        .expect("outline title text present");
+    let field = doc_xml.find("TOC \\o").expect("TOC field present");
+    assert!(
+        title < field,
+        "the outline title paragraph precedes the TOC field"
+    );
+    assert!(
+        doc_xml.contains("1-2"),
+        "outline depth 2 reaches the TOC switch"
     );
 }

@@ -196,7 +196,7 @@ fn in_entry(walk: &EntryWalk<'_>) -> bool {
 fn footnote_run(text: &TextItem, walk: &EntryWalk<'_>) -> Run {
     let mut run = Run::new(text.text.to_string());
     let info = text.font.info();
-    run.bold = effective_weight(&text.font) >= 700
+    run.bold = effective_weight(&text.font) >= 600
         || walk.tag_stack.iter().any(|(name, _)| *name == "strong");
     run.italic = matches!(
         effective_style(&text.font),

@@ -22,7 +22,8 @@ pub(super) fn write_paragraph<W: Write>(
         let has_style = para.style.is_some();
         let has_list = para.list_info.is_some();
         let has_alignment = para.alignment.is_some();
-        let has_left_indent = para.left_indent.is_some();
+        let has_left_indent = para.left_indent.is_some() || para.right_indent.is_some();
+        let has_keep = para.keep_lines || para.keep_next;
         let has_code_block = para.code_block;
         let has_section_break = para.section_break.is_some();
         // Determine if we need to suppress the inherited first-line indent
@@ -55,6 +56,7 @@ pub(super) fn write_paragraph<W: Write>(
             || has_hrule
             || has_tab_stops
             || has_spacing
+            || has_keep
         {
             w.create_element("w:pPr").write_inner_content(|ppr| {
                 // Horizontal rule: emit bottom border
@@ -78,6 +80,12 @@ pub(super) fn write_paragraph<W: Write>(
                     ppr.create_element("w:pStyle")
                         .with_attribute(("w:val", style_id.as_ref()))
                         .write_empty()?;
+                }
+                if para.keep_next {
+                    ppr.create_element("w:keepNext").write_empty()?;
+                }
+                if para.keep_lines {
+                    ppr.create_element("w:keepLines").write_empty()?;
                 }
                 if let Some(li) = &para.list_info {
                     let id_str = li.id.to_string();
@@ -131,12 +139,14 @@ pub(super) fn write_paragraph<W: Write>(
                 // Word's char-based value wins and the zeroing is ignored. When
                 // None, emit exactly the historical attribute set (byte-identical).
                 let zero_chars = ctx.doc_style.first_line_indent_chars.is_some();
-                if let Some(left) = para.left_indent {
-                    let left_str = left.to_string();
+                if para.left_indent.is_some() || para.right_indent.is_some() {
+                    let left_str = para.left_indent.map(|v| v.to_string());
+                    let right_str = para.right_indent.map(|v| v.to_string());
                     write_indentation(
                         ppr,
                         Indentation {
-                            left: Some(left_str.as_str()),
+                            left: left_str.as_deref(),
+                            right: right_str.as_deref(),
                             first_line_chars: zero_chars.then_some("0"),
                             first_line: Some("0"),
                             ..Default::default()
@@ -159,6 +169,7 @@ pub(super) fn write_paragraph<W: Write>(
                             hanging: Some(bib_indent_str.as_str()),
                             first_line_chars: zero_chars.then_some("0"),
                             first_line: Some("0"),
+                            ..Default::default()
                         },
                     )?;
                 } else if has_list {

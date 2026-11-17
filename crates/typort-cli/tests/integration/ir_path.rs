@@ -15,16 +15,12 @@ const IDENTICAL: &[&str] = &[
     "style_justify",
     "style_heading_custom",
     "issue_deep_headings",
-    "rowspan_test",
-    "edge_complex_table",
     "nested_list",
     "enum_custom_start",
     "style_footnotes",
-    "footnote_in_table",
     "formatted_footnote",
     "image_test",
     "svg_test",
-    "figure_caption",
     "pagebreak_test",
     "style_columns",
     "header_footer_test",
@@ -52,6 +48,10 @@ const DOCUMENTED: &[&str] = &[
     "edge_blockquote",
     "style_code_blocks",
     "terms_wide",
+    "rowspan_test",
+    "edge_complex_table",
+    "footnote_in_table",
+    "figure_caption",
 ];
 
 fn convert_both(fixture: &str) -> (String, String) {
@@ -180,8 +180,12 @@ fn ir_path_documented_diffs() {
         );
         assert!(new_xml.contains(">Rust<"), "term present");
         assert!(
-            new_xml.contains(" A systems programming language"),
-            "tight term merged"
+            new_xml.contains(">A systems programming language<"),
+            "term description kept"
+        );
+        assert!(
+            new_xml.contains("<w:spacing w:val="),
+            "term gap emitted as tracked spacing"
         );
         assert!(legacy_xml.contains(">A systems programming language<"));
     }
@@ -209,8 +213,8 @@ fn ir_path_documented_diffs() {
         assert!(legacy_xml.contains(">数字化转型不是选择题，而是生存题。<"));
         assert!(legacy_xml.contains(">—— CEO 张明<"));
         assert!(
-            new_xml.contains(" 预计贡献营收 2000 万元"),
-            "tight term merged"
+            new_xml.contains(">预计贡献营收 2000 万元<"),
+            "term description kept"
         );
         assert!(legacy_xml.contains(">预计贡献营收 2000 万元<"));
     }
@@ -338,6 +342,34 @@ fn ir_path_documented_diffs() {
         assert!(legacy_xml.contains("First wide term description here."));
         assert_eq!(count(&legacy_xml, "w:left=\"0\""), 2);
         assert_eq!(count(&new_xml, "w:left=\"0\""), 0);
+    }
+
+    for fixture in [
+        "rowspan_test",
+        "edge_complex_table",
+        "footnote_in_table",
+        "figure_caption",
+    ] {
+        let (new_xml, legacy_xml) = convert_both(fixture);
+        assert!(
+            new_xml.contains("<w:tblCellMar>"),
+            "{fixture}: realize path emits cell margins; legacy does not"
+        );
+        assert!(!legacy_xml.contains("<w:tblCellMar>"));
+        assert_eq!(
+            without_lines(
+                &new_xml,
+                &[
+                    "w:tblCellMar",
+                    "w:top w:w=",
+                    "w:left w:w=",
+                    "w:bottom w:w=",
+                    "w:right w:w="
+                ]
+            ),
+            without_lines(&legacy_xml, &[]),
+            "{fixture}: cell margins are the only diff"
+        );
     }
 
     {

@@ -16,6 +16,7 @@ mod lists;
 mod math;
 mod misc;
 mod recovery;
+mod sections;
 mod structure;
 mod tables;
 mod visual;

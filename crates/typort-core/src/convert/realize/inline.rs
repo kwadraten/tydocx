@@ -2,13 +2,15 @@ use std::collections::HashMap;
 
 use crate::convert::footnote::parse_circled_number;
 use crate::convert::page::{CounterUse, classify_counter_use, counter_page_label};
-use typort_ir::{Degradation, DegradationAction, IrImage, IrInline, IrParagraph};
+use typort_ir::{Degradation, DegradationAction, HangingIndent, IrImage, IrInline, IrParagraph};
 use typort_ooxml::document::Alignment;
 use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
 use typst_library::foundations::{Content, ContextElem, Packed, Smart, StyleChain};
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
-use typst_library::layout::{AlignElem, BlockElem, BoxElem, HAlignment};
+use typst_library::layout::{
+    Abs, AlignElem, BlockElem, BoxElem, HAlignment, HElem, PadElem, Spacing,
+};
 use typst_library::math::EquationElem;
 use typst_library::model::{
     CiteElem, CiteGroup, Destination, FootnoteBody, FootnoteElem, LinkElem, LinkTarget, Numbering,
@@ -130,23 +132,20 @@ fn collect_fragment_inlines(
             i += 1;
             continue;
         }
+        if let Some(h) = content.to_packed::<HElem>() {
+            push_tracked_space(h, styles, content.span(), ctx, &mut out);
+            i += 1;
+            continue;
+        }
+        if let Some(pad) = content.to_packed::<PadElem>() {
+            collect_pad_inlines(pad, styles, engine, locator, ctx, &mut out);
+            i += 1;
+            continue;
+        }
         if let Some(block) = content.to_packed::<BlockElem>()
             && block_body_content(block, styles).is_none()
         {
-            if let Some(original) = ctx.layouter_index.get(&content.span()).cloned()
-                && let Some((kind, body)) = shape_parts(&original)
-            {
-                push_shape_inline(
-                    kind,
-                    body,
-                    original.span(),
-                    styles,
-                    engine,
-                    locator,
-                    ctx,
-                    &mut out,
-                );
-            }
+            collect_layouter_shape(content, styles, engine, locator, ctx, &mut out);
             i += 1;
             continue;
         }
@@ -167,6 +166,65 @@ fn collect_fragment_inlines(
         i += 1;
     }
     out
+}
+
+fn push_tracked_space(
+    h: &Packed<HElem>,
+    styles: StyleChain<'_>,
+    span: Span,
+    ctx: &mut InlineCtx<'_>,
+    out: &mut Vec<IrInline>,
+) {
+    if let Some(twips) = spacing_twips(&h.amount, styles) {
+        let mut run = run_from_styles(" ", styles, ctx.defaults, Some(span));
+        run.tracking_twips = Some(twips);
+        out.push(IrInline::Text(run));
+        ctx.prev_char = Some(' ');
+    }
+}
+
+fn collect_pad_inlines(
+    pad: &Packed<PadElem>,
+    styles: StyleChain<'_>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    ctx: &mut InlineCtx<'_>,
+    out: &mut Vec<IrInline>,
+) {
+    match collect_inlines(&pad.body, styles, engine, locator, ctx) {
+        Ok(inlines) => out.extend(inlines),
+        Err(_) => ctx.degradations.push(Degradation {
+            span: None,
+            construct: "pad-in-fragment",
+            action: DegradationAction::Skipped,
+            message: "a #pad inside a paragraph could not be realized; its content was dropped"
+                .to_string(),
+        }),
+    }
+}
+
+fn collect_layouter_shape(
+    content: &Content,
+    styles: StyleChain<'_>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    ctx: &mut InlineCtx<'_>,
+    out: &mut Vec<IrInline>,
+) {
+    if let Some(original) = ctx.layouter_index.get(&content.span()).cloned()
+        && let Some((kind, body)) = shape_parts(&original)
+    {
+        push_shape_inline(
+            kind,
+            body,
+            original.span(),
+            styles,
+            engine,
+            locator,
+            ctx,
+            out,
+        );
+    }
 }
 
 fn push_par_inlines(
@@ -702,8 +760,36 @@ pub fn collect_paragraph(
     Ok(IrParagraph {
         inlines,
         alignment: alignment_from_styles(styles),
+        hanging_indent: hanging_indent_from_styles(styles),
         ..IrParagraph::default()
     })
+}
+
+/// `#set par(hanging-indent:)` — read from the element's `StyleChain` so rules
+/// scoped inside `#let`/function bodies still apply to the paragraphs they
+/// create (the source-AST pass only sees top-level set rules).
+pub(crate) fn hanging_indent_from_styles(styles: StyleChain<'_>) -> Option<HangingIndent> {
+    let hanging = styles.resolve(ParElem::hanging_indent);
+    if hanging <= Abs::zero() {
+        return None;
+    }
+    Some(HangingIndent::Twips(crate::convert::page::pt_to_twips(
+        hanging.to_pt(),
+    )))
+}
+
+/// Absolute twips for a `#v()`/`#h()` spacing amount (`em` resolved against the
+/// current font size). `Fr` spacing and the ratio component cannot be resolved
+/// without the parent extent and return `None`.
+pub(crate) fn spacing_twips(amount: &Spacing, styles: StyleChain<'_>) -> Option<u32> {
+    let Spacing::Rel(rel) = amount else {
+        return None;
+    };
+    let abs = rel.abs.at(styles.resolve(TextElem::size));
+    if abs <= Abs::zero() {
+        return None;
+    }
+    Some(crate::convert::page::pt_to_twips(abs.to_pt()))
 }
 
 pub(crate) fn alignment_from_styles(styles: StyleChain<'_>) -> Option<Alignment> {

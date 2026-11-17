@@ -9,7 +9,13 @@
         <w:t xml:space="preserve">Supervised Learning</w:t>
       </w:r>
       <w:r>
-        <w:t xml:space="preserve"> Training a model on labeled data to predict outcomes for unseen data.</w:t>
+        <w:rPr>
+          <w:spacing w:val="132"/>
+        </w:rPr>
+        <w:t xml:space="preserve"> </w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve">Training a model on labeled data to predict outcomes for unseen data.</w:t>
       </w:r>
     </w:p>
     <w:p>
@@ -20,7 +26,13 @@
         <w:t xml:space="preserve">Unsupervised Learning</w:t>
       </w:r>
       <w:r>
-        <w:t xml:space="preserve"> Finding patterns in unlabeled data without predefined categories.</w:t>
+        <w:rPr>
+          <w:spacing w:val="132"/>
+        </w:rPr>
+        <w:t xml:space="preserve"> </w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve">Finding patterns in unlabeled data without predefined categories.</w:t>
       </w:r>
     </w:p>
     <w:p>
@@ -31,7 +43,13 @@
         <w:t xml:space="preserve">Reinforcement Learning</w:t>
       </w:r>
       <w:r>
-        <w:t xml:space="preserve"> An agent learns by interacting with an environment and receiving rewards.</w:t>
+        <w:rPr>
+          <w:spacing w:val="132"/>
+        </w:rPr>
+        <w:t xml:space="preserve"> </w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve">An agent learns by interacting with an environment and receiving rewards.</w:t>
       </w:r>
     </w:p>
     <w:sectPr>

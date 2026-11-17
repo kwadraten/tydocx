@@ -18,9 +18,16 @@ pub(super) struct TextFragment {
     pub(super) y: f64,
     pub(super) x: f64,
     pub(super) text: String,
+    /// Rendered font size in half-points; preserved on header/footer runs.
+    pub(super) size_half_pt: u32,
 }
 
 /// Collect text fragments with absolute positions from a frame.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "font sizes are small non-negative values"
+)]
 pub(super) fn collect_text_fragments(frame: &Frame, items: &mut Vec<TextFragment>) {
     super::super::frames::visit_frame_items(frame, false, &mut |position, item| {
         if let FrameItem::Text(text_item) = item {
@@ -30,6 +37,7 @@ pub(super) fn collect_text_fragments(frame: &Frame, items: &mut Vec<TextFragment
                     y: position.y.to_pt(),
                     x: position.x.to_pt(),
                     text,
+                    size_half_pt: (text_item.size.to_pt() * 2.0).round().max(1.0) as u32,
                 });
             }
         }
@@ -173,20 +181,34 @@ fn extract_margin_zone(
             .collect::<String>()
     });
 
+    let zone_size = fragments
+        .first()
+        .filter(|first| {
+            fragments
+                .iter()
+                .all(|f| f.size_half_pt == first.size_half_pt)
+        })
+        .map(|f| f.size_half_pt);
     let mut para = Paragraph::new();
     if let Some((prefix, token, suffix)) =
         split_page_number_token(&text1, text2.as_deref(), text3.as_deref(), declared)
     {
         if !prefix.is_empty() {
-            para.push_run(Run::new(&prefix));
+            let mut run = Run::new(&prefix);
+            run.size_half_pt = zone_size;
+            para.push_run(run);
         }
         para.add_field_page(token);
         if !suffix.is_empty() {
-            para.push_run(Run::new(&suffix));
+            let mut run = Run::new(&suffix);
+            run.size_half_pt = zone_size;
+            para.push_run(run);
         }
     } else {
         for item in &fragments {
-            para.push_run(Run::new(&item.text));
+            let mut run = Run::new(&item.text);
+            run.size_half_pt = Some(item.size_half_pt);
+            para.push_run(run);
         }
     }
 
@@ -735,22 +757,13 @@ pub fn header_footer_variant(paged: &PagedDocument, margins: MarginsPt) -> Optio
     None
 }
 
-/// In C1, check whether the first page's header/footer text carries run
-/// styles the flattened extraction drops: a size other than the body size,
-/// or a bold weight (same 700 threshold as `run_style`'s
-/// `BOLD_WEIGHT_THRESHOLD`; a warning heuristic, not layout). Returns
-/// `true` when any such fragment exists in either margin zone.
 #[must_use]
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "font sizes are non-negative; half-point rounding is intentional"
 )]
-pub fn header_footer_style_lost(
-    paged: &PagedDocument,
-    margins: MarginsPt,
-    body_size_half_pt: u32,
-) -> bool {
+pub fn header_footer_style_lost(paged: &PagedDocument, margins: MarginsPt) -> bool {
     let Some(page) = paged.pages().first() else {
         return false;
     };
@@ -770,9 +783,8 @@ pub fn header_footer_style_lost(
         if let FrameItem::Text(text_item) = item {
             let y = position.y.to_pt();
             if y < body_top || y > body_bottom {
-                let size_half_pt = (text_item.size.to_pt() * 2.0).round() as u32;
-                let bold = text_item.font.info().variant.weight.to_number() >= 700;
-                if size_half_pt != body_size_half_pt || bold {
+                let bold = text_item.font.info().variant.weight.to_number() >= 600;
+                if bold {
                     lost = true;
                 }
             }
