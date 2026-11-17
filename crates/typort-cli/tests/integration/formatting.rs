@@ -1045,3 +1045,89 @@ fn issue_import_parent_dir_set_rule_reaches_document() {
         "Normal style must declare a non-zero first-line indent from the parent-dir import:\n{normal}"
     );
 }
+
+#[test]
+fn issue_semibold_weight_emits_bold() {
+    let doc_xml = fixture_doc_xml("issue_semibold_weight_630");
+    for needle in ["plain semibold text", "plain strong run"] {
+        let pos = doc_xml.find(needle).expect("run present");
+        let run_start = doc_xml[..pos].rfind("<w:r>").unwrap_or(0);
+        let run_end = doc_xml[pos..]
+            .find("</w:r>")
+            .map_or(doc_xml.len(), |e| pos + e);
+        let run = &doc_xml[run_start..run_end];
+        assert!(
+            run.contains("<w:b/>"),
+            "{needle:?} must serialize as <w:b/>:\n{run}"
+        );
+    }
+}
+
+#[test]
+fn issue_let_hanging_indent_applies_at_call_site() {
+    let doc_xml = fixture_doc_xml("issue_let_hanging_indent");
+    let para = paragraph_containing(&doc_xml, "Hanging item body text here.");
+    assert!(
+        para.contains(r#"w:left="440""#) && para.contains(r#"w:hanging="440""#),
+        "2em hanging indent inside a #let body must reach the call-site paragraph:\n{para}"
+    );
+}
+
+#[test]
+fn issue_v_vertical_space_becomes_spacing_before() {
+    let doc_xml = fixture_doc_xml("issue_v_vertical_space");
+    let para = paragraph_containing(&doc_xml, "Paragraph two.");
+    assert!(
+        para.contains(r#"<w:spacing w:before="330"/>"#),
+        "#v(1.5em) at 11pt must become w:before=330 twips:\n{para}"
+    );
+}
+
+#[test]
+fn issue_h_horizontal_space_becomes_tracked_space() {
+    let doc_xml = fixture_doc_xml("issue_h_horizontal_space");
+    assert!(
+        doc_xml.contains(r#"<w:spacing w:val="440"/>"#),
+        "#h(2em) at 11pt must become a space run with w:spacing=440:\n{doc_xml}"
+    );
+}
+
+#[test]
+fn issue_pad_inset_becomes_side_indents() {
+    let doc_xml = fixture_doc_xml("issue_pad_inset");
+    let para = paragraph_containing(&doc_xml, "Padded paragraph body.");
+    assert!(
+        para.contains(r#"w:left="720""#),
+        "#pad(left: 0.5in) must become w:left=720 twips:\n{para}"
+    );
+}
+
+#[test]
+fn issue_block_inset_becomes_side_indents() {
+    let doc_xml = fixture_doc_xml("issue_block_inset");
+    let para = paragraph_containing(&doc_xml, "Block inset body.");
+    assert!(
+        para.contains(r#"w:left="567""#) && para.contains(r#"w:right="567""#),
+        "#block(inset: 1cm) must indent both sides by 567 twips:\n{para}"
+    );
+}
+
+#[test]
+fn issue_tracking_becomes_run_spacing() {
+    let doc_xml = fixture_doc_xml("issue_tracking_spacing");
+    let para = paragraph_containing(&doc_xml, "SPACED TRACKED TEXT");
+    assert!(
+        para.contains(r#"<w:spacing w:val="20"/>"#),
+        "tracking 0.05em at 20pt must emit w:spacing=20 on the run:\n{para}"
+    );
+}
+
+#[test]
+fn issue_hyphenate_false_suppresses_auto_hyphens() {
+    let package = fixture_package("issue_hyphenate_false");
+    let settings = package.part_text("word/settings.xml");
+    assert!(
+        settings.contains("<w:suppressAutoHyphens/>"),
+        "#set text(hyphenate: false) must emit w:suppressAutoHyphens:\n{settings}"
+    );
+}

@@ -191,6 +191,10 @@ pub(super) fn apply_source_overrides(
 
     apply_language_override(ovr, doc);
 
+    if ovr.text_hyphenate == Some(false) {
+        doc.style.suppress_auto_hyphens = true;
+    }
+
     // Resolve em-based values using actual body size
     let body_pt = f64::from(doc.style.body_size_half_pt) / 2.0;
 

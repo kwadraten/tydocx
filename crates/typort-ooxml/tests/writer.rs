@@ -461,6 +461,7 @@ mod tests {
             width_pct: None,
             border_size: None,
             borders: None,
+            cell_margins: None,
         };
         doc.add_table(table);
 

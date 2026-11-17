@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 pub use typort_ooxml::document::{
     Alignment, CitationSource, DocumentStyle, FootnoteFormat, HangingIndent, PageNumberFormat,
-    PageSettings, ParagraphStyle, Run, TableBorders, VerticalAlign,
+    PageSettings, ParagraphStyle, Run, TableBorders, TableCellMargins, VerticalAlign,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,6 +13,10 @@ pub struct IrDocument {
     pub body: Vec<IrBlock>,
     pub footnotes: Vec<IrFootnote>,
     pub citation_sources: Vec<CitationSource>,
+    /// Text declared in `#set page(foreground:)` / `background:`. Rendered on
+    /// every page by Typst but dropped by Word conversion; C1 literalizes it
+    /// into the body with a `page-foreground` degradation.
+    pub page_furniture: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -108,6 +112,10 @@ pub enum IrSectionBreakType {
 /// Only properties the OOXML `Paragraph` can carry are represented here;
 /// document-wide facts live on `DocumentStyle`.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "flat bag of orthogonal paragraph flags; a state machine would not model them"
+)]
 pub struct IrParagraph {
     pub inlines: Vec<IrInline>,
     pub style: Option<ParagraphStyle>,
@@ -115,6 +123,9 @@ pub struct IrParagraph {
     pub suppress_indent: bool,
     pub hanging_indent: Option<HangingIndent>,
     pub left_indent: Option<u32>,
+    pub right_indent: Option<u32>,
+    pub keep_lines: bool,
+    pub keep_next: bool,
     pub code_block: bool,
     pub horizontal_rule: bool,
     pub tab_stops: Vec<u32>,
@@ -182,6 +193,7 @@ pub struct IrTable {
     pub column_widths_pct: Option<Vec<u32>>,
     pub borders: Option<TableBorders>,
     pub gutter: bool,
+    pub cell_margins: Option<TableCellMargins>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

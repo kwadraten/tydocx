@@ -78,6 +78,7 @@ pub(crate) fn write_language_pair<W: Write>(
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Indentation<'a> {
     pub left: Option<&'a str>,
+    pub right: Option<&'a str>,
     pub hanging: Option<&'a str>,
     pub first_line_chars: Option<&'a str>,
     pub first_line: Option<&'a str>,
@@ -90,6 +91,9 @@ pub(crate) fn write_indentation<W: Write>(
     let mut element = writer.create_element("w:ind");
     if let Some(value) = indentation.left {
         element = element.with_attribute(("w:left", value));
+    }
+    if let Some(value) = indentation.right {
+        element = element.with_attribute(("w:right", value));
     }
     if let Some(value) = indentation.hanging {
         element = element.with_attribute(("w:hanging", value));
@@ -265,6 +269,9 @@ pub(super) fn generate_settings(
             "http://schemas.openxmlformats.org/officeDocument/2006/math",
         ))
         .write_inner_content(|w| {
+            if style.suppress_auto_hyphens {
+                w.create_element("w:suppressAutoHyphens").write_empty()?;
+            }
             write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
             w.create_element("w:compat").write_inner_content(|c| {
                 c.create_element("w:useFELayout").write_empty()?;

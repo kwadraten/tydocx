@@ -1,9 +1,11 @@
 //! Table structure, cell merging, and math-in-table tests.
 
 use crate::common::{
-    fixture_doc_xml, fixture_document, fixture_package, fixture_package_from_document,
-    paragraph_containing,
+    fixture_doc_xml, fixture_document, fixture_outcome_with_options, fixture_package,
+    fixture_package_from_document, fixture_package_with_options, paragraph_containing,
+    paragraph_texts,
 };
+use typort_core::{CompatMode, ConvertOptions};
 
 #[test]
 fn three_line_table_is_not_a_boxed_grid() {
@@ -175,6 +177,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
         width_pct: None,
         border_size: None,
         borders: None,
+        cell_margins: None,
     };
     doc.add_table(table);
 
@@ -894,5 +897,97 @@ fn issue_table_cell_fill_writes_cell_shading() {
         xml.matches("<w:shd ").count(),
         3,
         "gradient-filled cells must not gain shading:\n{xml}"
+    );
+}
+
+#[test]
+fn issue_grid_list_entry_c2_becomes_borderless_table() {
+    let doc_xml = fixture_doc_xml("issue_grid_list_entry");
+    assert!(doc_xml.contains("<w:tbl>"), "grid lowers to a table");
+    assert_eq!(doc_xml.matches("<w:tr>").count(), 2, "two grid rows");
+    assert_eq!(
+        doc_xml.matches("<w:tc>").count(),
+        6,
+        "three cells per row keep the grid's column structure"
+    );
+    assert!(
+        doc_xml.contains(r#"<w:top w:val="nil"/>"#)
+            && doc_xml.contains(r#"<w:bottom w:val="nil"/>"#)
+            && doc_xml.contains(r#"<w:insideH w:val="nil"/>"#),
+        "a borderless grid must not grow visible cell borders:\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let order: Vec<usize> = [
+        "A.1.1",
+        "The first entry",
+        "A.1.2",
+        "The second entry",
+        "Text right",
+    ]
+    .iter()
+    .map(|needle| {
+        texts
+            .iter()
+            .position(|t| t.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} missing from {texts:?}"))
+    })
+    .collect();
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "grid cells keep reading order, positions {order:?}"
+    );
+    assert!(
+        !doc_xml.contains("PAGEREF"),
+        "literal page numbers stay literal text"
+    );
+}
+
+#[test]
+fn issue_grid_list_entry_c1_reports_and_keeps_text() {
+    let outcome = fixture_outcome_with_options(
+        "issue_grid_list_entry",
+        &ConvertOptions::new(CompatMode::C1),
+    );
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "grid-layout"),
+        "expected a grid-layout degradation, got {:?}",
+        outcome.degradations
+    );
+    let xml = fixture_package_with_options(
+        "issue_grid_list_entry",
+        &ConvertOptions::new(CompatMode::C1),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
+    for needle in [
+        "A.1.1",
+        "The first entry",
+        "A.1.2",
+        "The second entry",
+        "Text right",
+    ] {
+        assert!(xml.contains(needle), "{needle:?} missing from {xml}");
+    }
+}
+
+#[test]
+fn issue_table_inset_becomes_cell_margins() {
+    let doc_xml = fixture_doc_xml("issue_table_inset");
+    let mar_start = doc_xml
+        .find("<w:tblCellMar>")
+        .expect("w:tblCellMar emitted for #set table(inset:)");
+    let mar = &doc_xml[mar_start
+        ..doc_xml[mar_start..]
+            .find("</w:tblCellMar>")
+            .map_or(doc_xml.len(), |e| mar_start + e)];
+    assert!(
+        mar.contains(r#"<w:top w:w="100" w:type="dxa"/>"#)
+            && mar.contains(r#"<w:left w:w="80" w:type="dxa"/>"#)
+            && mar.contains(r#"<w:bottom w:w="100" w:type="dxa"/>"#)
+            && mar.contains(r#"<w:right w:w="80" w:type="dxa"/>"#),
+        "inset (x: 4pt, y: 5pt) must map to y=100 / x=80 twips:\n{mar}"
     );
 }

@@ -428,3 +428,53 @@ fn issue_two_footnotes_with_images_embed_their_own_image() {
         "the second footnote image bytes must be packaged, got: {names:?}"
     );
 }
+
+#[test]
+fn issue_fn_paren_numbering_c1_reports_and_keeps_body() {
+    let outcome = crate::common::fixture_outcome_with_options(
+        "issue_fn_paren_numbering",
+        &typort_core::ConvertOptions::new(typort_core::CompatMode::C1),
+    );
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "footnote-numbering"),
+        "expected a footnote-numbering degradation, got {:?}",
+        outcome.degradations
+    );
+    let package = crate::common::fixture_package_with_options(
+        "issue_fn_paren_numbering",
+        &typort_core::ConvertOptions::new(typort_core::CompatMode::C1),
+    );
+    assert!(
+        package
+            .part_text("word/document.xml")
+            .contains("w:footnoteReference"),
+        "the marker degrades to a decimal footnote reference"
+    );
+    assert!(
+        package
+            .part_text("word/footnotes.xml")
+            .contains("Parenthesized footnote body."),
+        "the footnote body text survives"
+    );
+}
+
+#[test]
+fn issue_fn_semibold_weight_emits_bold_in_footnotes_part() {
+    let package = fixture_package("issue_fn_semibold_weight");
+    let fn_xml = package.part_text("word/footnotes.xml");
+    let pos = fn_xml
+        .find("semibold footnote body")
+        .expect("footnote body present");
+    let run_start = fn_xml[..pos].rfind("<w:r>").unwrap_or(0);
+    let run_end = fn_xml[pos..]
+        .find("</w:r>")
+        .map_or(fn_xml.len(), |e| pos + e);
+    let run = &fn_xml[run_start..run_end];
+    assert!(
+        run.contains("<w:b/>"),
+        "a weight-630 footnote run must serialize as <w:b/>:\n{run}"
+    );
+}

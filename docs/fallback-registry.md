@@ -245,6 +245,71 @@ not a deletion list.
   equivalent for some forms).
 - **Owner:** C1 follow-up.
 
+## Manuscript-case C2 targets (Phase 2)
+
+These are the C2 forms the Phase 2 work should implement; each is currently
+covered by the C1 degradation named below (integration tests live in
+`sections.rs` / `structure.rs` / `tables.rs` / `footnotes.rs`).
+
+### Odd/even running headers (M7, T-01)
+- **Current:** the first page's margin-zone header is emitted; a differing
+  later header reports `header-footer-variant` (all modes).
+- **C2 target:** `w:headerReference w:type="even"`/`"default"` parts plus
+  `w:evenAndOddHeaders` in settings; title-page suppression maps to
+  `w:titlePg`.
+
+### Page `foreground:`/`background:` (U13, T-02)
+- **Current:** `page_furniture` is detected from the source AST; margin-zone
+  content reaches the header part but is not anchored, and positioned
+  foreground outside the margin zone is dropped. C1 reports
+  `page-foreground`.
+- **C2 target:** `wp:anchor` (not `wp:inline`) inside the header part,
+  `positionH`/`positionV` relative to page, `txbxContent` carrying the text.
+
+### Absolute `#place` (U1, T-03)
+- **Current:** `IrBlock::Place` lowers to normal paragraphs; C1 reports
+  `placed-content` (approximated, text kept).
+- **C2 target:** `wp:anchor` with page-relative `positionH`/`positionV`
+  offsets, text in `txbxContent`.
+
+### `#rect` / drawn color bands (M5, T-04)
+- **Current:** `IrBlock::Shape`/`IrInline::Shape` drops the drawing; its
+  text body is kept as paragraphs; C1 reports `shape`.
+- **C2 target:** a full-width paragraph shading (`w:shd`/`w:pBdr`) or a
+  VML/DrawingML rectangle; body text in the shaded paragraph.
+
+### Mid-document margin/column changes (M6, T-06)
+- **Current:** single section; C1 reports `section-break` from
+  `detect_page_setting_change`. `margin_amount` still reads a `0pt` margin
+  as unset (explicit zero margins are undetectable).
+- **C2 target:** one `w:sectPr` per Typst section carrying its real
+  `w:pgMar`; `margin_amount` must treat `0pt` as a declared zero.
+
+### `inside:`/`outside:` margins (U31, T-07)
+- **Current:** keys parse to `margins_mirrored`; C1 reports
+  `mirrored-margins`, sides keep the Typst defaults.
+- **C2 target:** `w:mirrorMargins` in `settings.xml`; `sectPr` `pgMar`
+  left=inside, right=outside (Word swaps on even pages).
+
+### Page-numbering format change + restart (U30, T-08)
+- **Current:** a second distinct `numbering:` declaration sets
+  `numbering_changed`; C1 reports `page-numbering-change`, no `pgNumType`.
+- **C2 target:** per-section `w:pgNumType` (`fmt="lowerRoman"`/`"decimal"`,
+  `w:start` on restart). Depends on M6 multi-section output.
+
+### Header/footer run weight (L3, T-22)
+- **Current:** margin-zone extraction keeps per-run size (`w:sz`) but
+  flattens weight; `header-footer-style` reports it when a bold weight
+  (>=600) is flattened.
+- **C2 target:** per-run `<w:b/>` in header/footer parts.
+
+### Function footnote numbering `(n)` (U26, T-09)
+- **Current:** `footnote-numbering` degradation (literalized); markers fall
+  back to decimal `w:footnoteReference`.
+- **C2 target:** pending design decision — literal `(n)` marker text (the
+  L2-style literal fallback) vs `w:numFmt`; no Word numFmt renders
+  parentheses.
+
 ## Retargeted tests (step 2)
 
 These tests pin legacy-only behavior and run against `convert_legacy`

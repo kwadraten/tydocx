@@ -22,12 +22,16 @@ pub struct SourceStyleOverrides {
     // unmappable value (a function, a computed value). `numbering: none`
     // leaves this `None` (numbering disabled, nothing to consume).
     pub page_numbering: Option<PageNumberingDecl>,
+    pub numbering_changed: bool,
+    pub margins_mirrored: bool,
+    pub page_furniture: bool,
     // #set text(font: ..., size: ...)
     pub text_font: Option<Vec<String>>,
     pub text_size_half_pt: Option<u32>,
     // #set text(lang: "zh", region: "cn") — ISO 639 lang + optional ISO 3166 region.
     pub text_lang: Option<String>,
     pub text_region: Option<String>,
+    pub text_hyphenate: Option<bool>,
     // #set par(first-line-indent: ..., leading: ..., justify: ..., spacing: ...)
     // Values in twips for absolute units, or as em*1000 (milliem) for em units.
     pub first_line_indent_twips: Option<u32>,
@@ -72,10 +76,14 @@ impl SourceStyleOverrides {
         fill!(margin_right_em);
         fill!(columns);
         fill!(page_numbering);
+        self.numbering_changed |= other.numbering_changed;
+        self.margins_mirrored |= other.margins_mirrored;
+        self.page_furniture |= other.page_furniture;
         fill!(text_font);
         fill!(text_size_half_pt);
         fill!(text_lang);
         fill!(text_region);
+        fill!(text_hyphenate);
         fill!(first_line_indent_twips);
         fill!(first_line_indent_em);
         fill!(first_line_indent_all);
@@ -545,15 +553,31 @@ fn parse_page_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverr
             }
             "numbering" => match named.expr() {
                 typst_syntax::ast::Expr::Str(s) => {
-                    ovr.page_numbering = Some(PageNumberingDecl::Pattern(s.get().to_string()));
+                    let decl = PageNumberingDecl::Pattern(s.get().to_string());
+                    if let Some(prev) = &ovr.page_numbering
+                        && *prev != decl
+                    {
+                        ovr.numbering_changed = true;
+                    }
+                    ovr.page_numbering = Some(decl);
                 }
                 // `numbering: none` disables numbering — no declaration.
                 typst_syntax::ast::Expr::None(_) => {}
                 // A function, a variable, … — declared but not mappable.
                 _ => {
+                    if let Some(prev) = &ovr.page_numbering
+                        && *prev != PageNumberingDecl::Unmappable
+                    {
+                        ovr.numbering_changed = true;
+                    }
                     ovr.page_numbering = Some(PageNumberingDecl::Unmappable);
                 }
             },
+            "foreground" | "background"
+                if !matches!(named.expr(), typst_syntax::ast::Expr::None(_)) =>
+            {
+                ovr.page_furniture = true;
+            }
             _ => {}
         }
     }
@@ -612,6 +636,10 @@ fn parse_margin_value(expr: typst_syntax::ast::Expr<'_>, ovr: &mut SourceStyleOv
                 let typst_syntax::ast::DictItem::Named(entry) = item else {
                     continue;
                 };
+                match entry.name().as_str() {
+                    "inside" | "outside" => ovr.margins_mirrored = true,
+                    _ => {}
+                }
                 if let typst_syntax::ast::Expr::Numeric(n) = entry.expr() {
                     let amount = margin_amount(n);
                     match entry.name().as_str() {
@@ -684,6 +712,13 @@ fn parse_text_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverr
                         && let typst_syntax::ast::Expr::Str(s) = named.expr()
                     {
                         ovr.text_region = Some(s.get().to_string());
+                    }
+                }
+                "hyphenate" => {
+                    if ovr.text_hyphenate.is_none()
+                        && let typst_syntax::ast::Expr::Bool(b) = named.expr()
+                    {
+                        ovr.text_hyphenate = Some(b.get());
                     }
                 }
                 _ => {}

@@ -133,7 +133,10 @@ fn is_whitespace_run(run: &Run) -> bool {
 /// either carrying or adopting any of these is *not* invisible. Colour, font,
 /// size and smallcaps need a glyph and so render nothing on whitespace.
 fn renders_on_whitespace(run: &Run) -> bool {
-    run.highlight_color.is_some() || run.underline || run.strikethrough
+    run.highlight_color.is_some()
+        || run.underline
+        || run.strikethrough
+        || run.tracking_twips.is_some()
 }
 
 /// Fold an isolated whitespace-only run into an adjacent text run when doing so

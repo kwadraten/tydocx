@@ -180,6 +180,11 @@ pub(super) fn write_run<W: Write>(
                         .with_attribute(("w:val", color.as_str()))
                         .write_empty()?;
                 }
+                if let Some(tracking) = run.tracking_twips.filter(|t| *t > 0) {
+                    rpr.create_element("w:spacing")
+                        .with_attribute(("w:val", tracking.to_string().as_str()))
+                        .write_empty()?;
+                }
                 // A super/subscript run must not carry an explicit reduced size:
                 // `w:vertAlign` already shrinks the glyph and raises it by a fraction
                 // of the *effective* em, so a pre-shrunk `w:sz` collapses the raise and

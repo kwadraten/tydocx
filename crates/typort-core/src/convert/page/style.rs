@@ -223,6 +223,7 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
         has_cjk_content: has_cjk,
         hyperlink_color: "0563C1".to_string(),
         body_cap_height_ratio,
+        suppress_auto_hyphens: false,
     }
 }
 

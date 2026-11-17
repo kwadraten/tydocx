@@ -361,14 +361,14 @@ fn apply_headers_and_footers(
             if let Some(degradation) = page::header_footer_variant(paged, margins) {
                 degradations.push(degradation);
             }
-            // L3: the margin-zone extraction flattens runs to plain text;
-            // warn when a size or bold weight is flattened away.
-            if page::header_footer_style_lost(paged, margins, doc.style.body_size_half_pt) {
+            // L3: the margin-zone extraction keeps run size but not weight;
+            // warn when a bold weight is flattened away.
+            if page::header_footer_style_lost(paged, margins) {
                 degradations.push(Degradation::new(
                     None,
                     "header-footer-style",
                     DegradationAction::Skipped,
-                    "header/footer run styles (size or bold) are flattened to plain text",
+                    "header/footer bold styling is flattened to plain text",
                 ));
             }
         }
@@ -448,6 +448,34 @@ fn run_post_passes(
                 "section-break",
                 DegradationAction::Skipped,
                 "page columns or margins change mid-document; kept as a single section",
+            ));
+        }
+        let overrides = page::extract_source_style_overrides(main.text(), &template_names);
+        if overrides.margins_mirrored {
+            degradations.push(Degradation::new(
+                None,
+                "mirrored-margins",
+                DegradationAction::Skipped,
+                "inside/outside margins are not representable without w:mirrorMargins; \
+                 both sides keep the Typst default",
+            ));
+        }
+        if overrides.numbering_changed {
+            degradations.push(Degradation::new(
+                None,
+                "page-numbering-change",
+                DegradationAction::Skipped,
+                "the page numbering format or counter restart changes mid-document; \
+                 kept as a single numbering scheme",
+            ));
+        }
+        if overrides.page_furniture {
+            degradations.push(Degradation::new(
+                None,
+                "page-foreground",
+                DegradationAction::Approximated,
+                "page foreground/background is not representable as anchored content; \
+                 its content is kept in the page header or dropped",
             ));
         }
     }
