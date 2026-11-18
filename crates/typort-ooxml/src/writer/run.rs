@@ -10,7 +10,7 @@ use super::fields::{
     write_field_ref, write_hyperlink, write_toc_field,
 };
 use super::footnotes::write_footnote_ref;
-use super::image::{image_rel_id, write_image_inline};
+use super::image::{image_rel_id, write_anchored_line, write_image_inline};
 use super::math::write_math_inline;
 use super::package::{write_font_triple, write_size_pair};
 use crate::document::{DocumentStyle, InlineElement, Run};
@@ -69,6 +69,11 @@ pub(super) fn write_inline<W: Write>(
             Ok(())
         }
         InlineElement::PageBreak => write_page_break(writer),
+        InlineElement::AnchoredLine(line) => {
+            let n = ctx.shape_id_counter.get() + 1;
+            ctx.shape_id_counter.set(n);
+            write_anchored_line(writer, line, n)
+        }
         InlineElement::ColumnBreak => write_column_break(writer),
         InlineElement::FieldToc { max_depth } => write_toc_field(writer, *max_depth),
         InlineElement::Tab => write_tab(writer),

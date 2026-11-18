@@ -27,7 +27,7 @@ use citation::{
 use document::generate_document_xml;
 use footnotes::{generate_footnote_rels, generate_footnotes_xml};
 use header_footer::{generate_footer_xml, generate_header_xml, generate_page_number_footer_xml};
-use image::{collect_footnote_images, collect_images};
+use image::{body_has_drawing, collect_footnote_images, collect_images, footnotes_have_drawing};
 use numbering::generate_numbering_xml;
 use package::{
     generate_content_types, generate_core_properties, generate_document_rels, generate_rels,
@@ -78,6 +78,9 @@ struct WriteCtx<'a> {
     content_width_twips: u32,
     image_counter: &'a Cell<usize>,
     citation_id_counter: &'a Cell<u32>,
+    /// `wp:docPr` ids for anchored shape drawings. Starts high so it cannot
+    /// collide with the 1-based image `docPr` ids in the same part.
+    shape_id_counter: &'a Cell<usize>,
 }
 
 /// Write a Document to a .docx file (ZIP archive) into the given writer.
@@ -87,7 +90,6 @@ struct WriteCtx<'a> {
 pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<dyn Error>> {
     let parts = DocParts::new(doc);
     let images = collect_images(doc);
-    let has_images = !images.is_empty();
     let footnote_images = collect_footnote_images(doc);
     // Footnote images are numbered after the body images in the
     // document-wide media numbering.
@@ -97,6 +99,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     // footnotes.xml, so they never restart per part.
     let image_counter = Cell::new(0_usize);
     let citation_id_counter = Cell::new(1_000_000_u32);
+    let shape_id_counter = Cell::new(1_000_000_usize);
     let ps = &doc.page_settings;
     let ctx = WriteCtx {
         doc_style: &doc.style,
@@ -106,6 +109,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
             .saturating_sub(ps.margin_left + ps.margin_right),
         image_counter: &image_counter,
         citation_id_counter: &citation_id_counter,
+        shape_id_counter: &shape_id_counter,
     };
 
     let mut zip = ZipWriter::new(writer);
@@ -133,7 +137,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
 
     zip.start_file("word/document.xml", options)?;
     zip.write_all(&xml_part(|w| {
-        generate_document_xml(w, doc, has_images, &ctx)
+        generate_document_xml(w, doc, body_has_drawing(doc), &ctx)
     })?)?;
 
     if parts.has(RelKind::Footnotes) {
@@ -144,7 +148,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
                 doc,
                 &ctx,
                 footnote_image_base,
-                !footnote_images.is_empty(),
+                footnotes_have_drawing(doc),
             )
         })?)?;
         if !footnote_images.is_empty() {
@@ -208,15 +212,17 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     Ok(())
 }
 
-/// Check if the document contains any list items (paragraphs with `list_info` set).
+/// Check if the document needs the numbering part: list items (paragraphs
+/// with `list_info`) or numbered headings (allocated heading instances).
 fn doc_has_lists(doc: &Document) -> bool {
-    doc.body.elements.iter().any(|el| match el {
-        BlockElement::Paragraph(p) => p.list_info.is_some(),
-        BlockElement::Table(table) => table_has_lists(table),
-        BlockElement::BibliographyBlock { paragraphs } => {
-            paragraphs.iter().any(|p| p.list_info.is_some())
-        }
-    })
+    !doc.heading_num_instances.is_empty()
+        || doc.body.elements.iter().any(|el| match el {
+            BlockElement::Paragraph(p) => p.list_info.is_some(),
+            BlockElement::Table(table) => table_has_lists(table),
+            BlockElement::BibliographyBlock { paragraphs } => {
+                paragraphs.iter().any(|p| p.list_info.is_some())
+            }
+        })
 }
 
 /// A list anywhere inside a table — a cell paragraph, a structured cell

@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use codex::numeral_systems::NamedNumeralSystem;
 use typort_ir::{
     Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrDocument, IrDocumentInfo,
-    IrEnum, IrEnumItem, IrEquation, IrFigureKind, IrGrid, IrInline, IrList, IrListItem,
-    IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrRaw, IrSectionBreakType,
-    IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, PageSettings, TableBorders,
-    TableCellMargins,
+    IrEnum, IrEnumItem, IrEquation, IrFigureKind, IrGrid, IrHeadingNumbering, IrInline, IrList,
+    IrListItem, IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrRaw,
+    IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, PageSettings,
+    TableBorders, TableCellMargins,
 };
 use typort_ooxml::document::{Alignment, Run, VerticalAlign};
 use typst_library::diag::SourceResult;
@@ -1035,15 +1035,16 @@ impl Collector<'_> {
                     .to_string(),
             });
         }
-        Ok(heading_block(
+        Ok(heading_block(HeadingSpec {
             level,
+            numbering: heading_numbering(styles),
             numbering_text,
-            heading_func_numbering(styles),
             body,
-            child.label().map(|l| l.resolve().to_string()),
-            alignment_from_styles(styles),
+            label: child.label().map(|l| l.resolve().to_string()),
+            alignment: alignment_from_styles(styles),
+            span: child.span().id().map(|_| child.span()),
             outlined,
-        ))
+        }))
     }
 
     fn collect_equation_elem(
@@ -1126,15 +1127,16 @@ impl Collector<'_> {
                     .to_string(),
             });
         }
-        Ok(heading_block(
+        Ok(heading_block(HeadingSpec {
             level,
+            numbering: heading_numbering(styles),
             numbering_text,
-            heading_func_numbering(styles),
             body,
-            inner.label().map(|l| l.resolve().to_string()),
+            label: inner.label().map(|l| l.resolve().to_string()),
             alignment,
+            span: inner.span().id().map(|_| inner.span()),
             outlined,
-        ))
+        }))
     }
 
     fn collect_figure(
@@ -2699,11 +2701,16 @@ fn heading_numbers(heading: &HeadingElem) -> Option<String> {
     }
 }
 
-fn heading_func_numbering(styles: StyleChain<'_>) -> bool {
-    matches!(
-        styles.get_ref(HeadingElem::numbering),
-        Some(Numbering::Func(_))
-    )
+/// The heading's declared `set heading(numbering:)`: `Mappable` when the
+/// pattern's numeral systems all have an OOXML `w:numFmt`, `Unmappable` for a
+/// function numbering or an unrepresentable system. `None` = no numbering.
+fn heading_numbering(styles: StyleChain<'_>) -> Option<IrHeadingNumbering> {
+    let numbering = styles.get_cloned(HeadingElem::numbering)?;
+    Some(match &numbering {
+        Numbering::Func(_) => IrHeadingNumbering::Unmappable,
+        Numbering::Pattern(_) => pattern_from_numbering(&numbering, true)
+            .map_or(IrHeadingNumbering::Unmappable, IrHeadingNumbering::Mappable),
+    })
 }
 
 fn length_twips(length: Length, em_pt: f64) -> u32 {
@@ -2848,26 +2855,30 @@ fn figure_gap_twips(figure: &FigureElem, styles: StyleChain<'_>, em_pt: f64) -> 
     (gap != StyleChain::default().get(FigureElem::gap)).then(|| length_twips(gap, em_pt))
 }
 
-/// `outlined: false` headings leave the document outline, so they lower to a
-/// plain paragraph (numbering prefix and label kept) instead of a Heading
-/// style that would re-enter the TOC.
-fn heading_block(
+struct HeadingSpec {
     level: u8,
+    numbering: Option<IrHeadingNumbering>,
     numbering_text: Option<String>,
-    func_numbering: bool,
     body: Vec<IrInline>,
     label: Option<String>,
     alignment: Option<Alignment>,
+    span: Option<Span>,
     outlined: bool,
-) -> IrBlock {
-    if !outlined {
+}
+
+/// `outlined: false` headings leave the document outline, so they lower to a
+/// plain paragraph (numbering prefix and label kept) instead of a Heading
+/// style that would re-enter the TOC.
+fn heading_block(spec: HeadingSpec) -> IrBlock {
+    if !spec.outlined {
         let mut para = IrParagraph {
-            alignment,
-            bookmark: label,
+            alignment: spec.alignment,
+            bookmark: spec.label,
             ..IrParagraph::default()
         };
-        if let Some(number) = numbering_text {
-            let mut prefix = body
+        if let Some(number) = spec.numbering_text {
+            let mut prefix = spec
+                .body
                 .iter()
                 .find_map(|inline| match inline {
                     IrInline::Text(run) => Some(run.clone()),
@@ -2877,16 +2888,17 @@ fn heading_block(
             prefix.text = format!("{number} ");
             para.inlines.push(IrInline::Text(prefix));
         }
-        para.inlines.extend(body);
+        para.inlines.extend(spec.body);
         return IrBlock::Paragraph(para);
     }
     IrBlock::Heading {
-        level,
-        numbering_text,
-        func_numbering,
-        body,
-        label,
-        alignment,
+        level: spec.level,
+        numbering_text: spec.numbering_text,
+        numbering: spec.numbering,
+        body: spec.body,
+        label: spec.label,
+        alignment: spec.alignment,
+        span: spec.span,
     }
 }
 
@@ -3112,55 +3124,8 @@ fn enum_number_text(
     }
     let idx = (depth.saturating_sub(origin) as usize).min(pattern.pieces.len() - 1);
     let piece = &pattern.pieces[idx];
-    let rendered = render_numeral(piece.system, number);
+    let rendered = piece.system.render(number);
     Some(format!("{}{}{}", piece.prefix, rendered, pattern.suffix))
-}
-
-fn render_numeral(system: IrNumeralSystem, number: u64) -> String {
-    match system {
-        IrNumeralSystem::Arabic => number.to_string(),
-        IrNumeralSystem::LowerLatin => to_latin(number, false),
-        IrNumeralSystem::UpperLatin => to_latin(number, true),
-        IrNumeralSystem::LowerRoman => to_roman(number, false),
-        IrNumeralSystem::UpperRoman => to_roman(number, true),
-    }
-}
-
-fn to_latin(mut number: u64, upper: bool) -> String {
-    let mut out = String::new();
-    while number > 0 {
-        number -= 1;
-        let c = (b'a' + (number % 26) as u8) as char;
-        out.push(if upper { c.to_ascii_uppercase() } else { c });
-        number /= 26;
-    }
-    out.chars().rev().collect()
-}
-
-fn to_roman(mut number: u64, upper: bool) -> String {
-    const TABLE: &[(u64, &str)] = &[
-        (1000, "m"),
-        (900, "cm"),
-        (500, "d"),
-        (400, "cd"),
-        (100, "c"),
-        (90, "xc"),
-        (50, "l"),
-        (40, "xl"),
-        (10, "x"),
-        (9, "ix"),
-        (5, "v"),
-        (4, "iv"),
-        (1, "i"),
-    ];
-    let mut out = String::new();
-    for (value, numeral) in TABLE {
-        while number >= *value {
-            out.push_str(numeral);
-            number -= value;
-        }
-    }
-    if upper { out.to_ascii_uppercase() } else { out }
 }
 
 fn page_content_width_pt(styles: StyleChain<'_>) -> f64 {

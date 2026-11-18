@@ -2,7 +2,9 @@
 //! `Degradation` with a stable `construct` identifier, and C2/C3 output is
 //! unchanged from the Phase 0 baseline. The default options are C2.
 
-use crate::common::{fixture_outcome_with_options, fixture_package_with_options, paragraph_texts};
+use crate::common::{
+    fixture_outcome_with_options, fixture_package, fixture_package_with_options, paragraph_texts,
+};
 use typort_core::{CompatMode, ConvertOptions};
 
 /// The `construct` identifiers C1 reported for a fixture, in order.
@@ -80,8 +82,8 @@ fn c1_overline_drops_decoration() {
     let constructs = c1_constructs("conformance/conf-overline");
     assert_has(&constructs, "overline");
     assert_clean("conformance/conf-overline");
-    // C2 maps overline to underline (2 `<w:u ` runs); C1 keeps only the
-    // real underline.
+    // C2 draws the overline as a floating line shape; the only `<w:u ` in
+    // either mode is the fixture's real underline.
     let c1 = fixture_package_with_options(
         "conformance/conf-overline",
         &ConvertOptions::new(CompatMode::C1),
@@ -101,8 +103,132 @@ fn c1_overline_drops_decoration() {
     );
     assert_eq!(
         c2.matches("<w:u ").count(),
-        2,
-        "C2 maps overline to underline as well"
+        1,
+        "C2 underlines only the real underline; the overline is a floating line"
+    );
+    assert!(
+        c2.contains("<wp:anchor"),
+        "C2 should emit the overline as an anchored shape"
+    );
+}
+
+#[test]
+fn c2_c3_overline_draws_line_above_text() {
+    for mode in [CompatMode::C2, CompatMode::C3] {
+        let xml = fixture_package_with_options(
+            "conformance/conf-overline-line",
+            &ConvertOptions::new(mode),
+        )
+        .part_text("word/document.xml")
+        .to_owned();
+        assert!(
+            xml.contains("<wp:anchor"),
+            "{mode:?}: overline should emit an anchored shape: {xml}"
+        );
+        assert!(
+            xml.contains(r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing""#),
+            "{mode:?}: the wp: prefix used by the anchor must be declared: {xml}"
+        );
+        assert!(
+            xml.contains(r#"relativeFrom="line""#),
+            "{mode:?}: the shape is positioned relative to the text line: {xml}"
+        );
+        assert!(
+            xml.contains(r#"prstGeom prst="line""#),
+            "{mode:?}: the shape is a line: {xml}"
+        );
+        assert!(
+            xml.contains("<wp:posOffset>1306527</wp:posOffset>"),
+            "{mode:?}: measured page-x of the overline: {xml}"
+        );
+        assert!(
+            xml.contains("<wp:posOffset>18999</wp:posOffset>"),
+            "{mode:?}: measured line-relative y, just below the ascender top: {xml}"
+        );
+        assert!(
+            xml.contains(r#"cx="789864""#),
+            "{mode:?}: measured length of the overline: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<a:srgbClr val="000000""#),
+            "{mode:?}: a colorless overline strokes in black: {xml}"
+        );
+        // The vertical offset is measured from Typst's own deco line and is
+        // small (near the top of the line box): a real above-text position,
+        // not an underline.
+        assert!(
+            xml.contains("overlined text"),
+            "{mode:?}: overlined text should survive: {xml}"
+        );
+        assert_eq!(
+            xml.matches("<w:u ").count(),
+            0,
+            "{mode:?}: nothing is underlined in this fixture: {xml}"
+        );
+        let constructs = constructs_for("conformance/conf-overline-line", mode);
+        assert!(
+            constructs.is_empty(),
+            "{mode:?}: a measured overline reports no degradations, got {constructs:?}"
+        );
+    }
+    let c1 = fixture_package_with_options(
+        "conformance/conf-overline-line",
+        &ConvertOptions::new(CompatMode::C1),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
+    assert!(
+        !c1.contains("<wp:anchor"),
+        "C1 should not emit the anchored overline shape"
+    );
+    assert!(
+        c1.contains("overlined text"),
+        "C1 keeps the overlined text: {c1}"
+    );
+    let constructs = c1_constructs("conformance/conf-overline-line");
+    assert_has(&constructs, "overline");
+}
+
+#[test]
+fn c2_overline_position_tracks_text_offset() {
+    let xml = fixture_package("conformance/conf-overline-offset")
+        .part_text("word/document.xml")
+        .to_owned();
+    assert!(
+        xml.contains("<wp:posOffset>1620000</wp:posOffset>"),
+        "a leading #h(2cm) places the line at margin + 2cm (1620000 EMU): {xml}"
+    );
+    assert!(
+        xml.contains("<wp:posOffset>18999</wp:posOffset>"),
+        "the line-relative y is unchanged by the horizontal shift: {xml}"
+    );
+}
+
+#[test]
+fn c2_overline_split_segments_each_get_an_anchor() {
+    let xml = fixture_package("conformance/conf-overline-split")
+        .part_text("word/document.xml")
+        .to_owned();
+    assert_eq!(
+        xml.matches("<wp:anchor").count(),
+        3,
+        "each evade-split segment emits its own anchored line: {xml}"
+    );
+}
+
+#[test]
+fn c2_overline_in_footnote_declares_drawing_namespaces() {
+    let package = fixture_package("conformance/conf-overline-footnote");
+    let footnotes = package.part_text("word/footnotes.xml");
+    assert!(
+        footnotes.contains("<wp:anchor"),
+        "the footnote overline should emit an anchored shape: {footnotes}"
+    );
+    assert!(
+        footnotes.contains(
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing""#
+        ),
+        "footnotes.xml must declare the wp: prefix its anchor uses: {footnotes}"
     );
 }
 

@@ -1,5 +1,6 @@
 mod collect;
 mod inline;
+mod overline;
 mod patch;
 mod style;
 
@@ -458,6 +459,9 @@ pub fn export_ir(
             &style,
         );
         degradations.extend(patch_degradations.iter().map(core_degradation));
+        if options.compat != CompatMode::C1 {
+            overline::patch_overlines(&mut ir, paged, world);
+        }
     }
 
     let (mut doc, lower_degradations) = lower(&ir, &geometry, ir_compat(options.compat));

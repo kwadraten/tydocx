@@ -79,7 +79,7 @@ pub(super) fn generate_footnotes_xml(
     doc: &Document,
     ctx: &WriteCtx,
     footnote_image_base: usize,
-    has_footnote_images: bool,
+    has_drawings: bool,
 ) -> io::Result<()> {
     let mut elem = writer
         .create_element("w:footnotes")
@@ -91,7 +91,7 @@ pub(super) fn generate_footnotes_xml(
             "xmlns:r",
             "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
         ));
-    if has_footnote_images {
+    if has_drawings {
         elem = elem
             .with_attribute((
                 "xmlns:wp",

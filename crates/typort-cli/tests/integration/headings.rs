@@ -3,6 +3,7 @@
 use crate::common::{
     fixture_doc_xml, fixture_outcome, fixture_part, fixture_styles_xml, paragraph_containing,
 };
+use typort_core::{CompatMode, ConvertOptions};
 
 #[test]
 fn issue_show_rule_heading_styles() {
@@ -131,6 +132,163 @@ fn heading_smart_quotes_are_resolved() {
     assert!(
         h2.contains('\u{201C}') && h2.contains('\u{201D}'),
         "English quoted heading should keep its curly quotes"
+    );
+}
+
+#[test]
+fn issue_heading_numbering_native_uses_word_numbering() {
+    // L2: a static "1.1" pattern is representable — heading paragraphs carry
+    // w:numPr pointing at a real abstract numbering definition, and the
+    // numbers are not baked into the text.
+    let outcome = fixture_outcome("issue_heading_numbering_native");
+    assert!(
+        outcome.degradations.is_empty(),
+        "mappable numbering should report nothing: {:?}",
+        outcome.degradations
+    );
+    let xml = fixture_doc_xml("issue_heading_numbering_native");
+    let first = paragraph_containing(&xml, "First One");
+    assert!(
+        first.contains("<w:numPr>"),
+        "numbered heading should carry w:numPr: {first}"
+    );
+    assert!(
+        first.contains(r#"<w:ilvl w:val="1"/>"#),
+        "level-2 heading uses ilvl 1: {first}"
+    );
+    assert!(
+        !first.contains("1.1"),
+        "the number is Word's, not literal text: {first}"
+    );
+    let second = paragraph_containing(&xml, "Second");
+    assert!(
+        second.contains(r#"<w:ilvl w:val="0"/>"#),
+        "level-1 heading uses ilvl 0: {second}"
+    );
+
+    let numbering = fixture_part("issue_heading_numbering_native", "word/numbering.xml");
+    assert!(
+        numbering.contains(r#"w:numFmt w:val="decimal""#),
+        "the abstract definition uses decimal: {numbering}"
+    );
+    assert!(
+        numbering.contains(r#"w:lvlText w:val="%1.%2""#),
+        "level 2 inherits the level-1 counter like Typst's 1.1: {numbering}"
+    );
+    assert!(
+        numbering.contains(r#"w:suff w:val="space""#),
+        "the number/body separator is a space, not Word's default tab: {numbering}"
+    );
+    assert!(
+        !numbering.contains("chineseCounting"),
+        "no unmappable formats are emitted: {numbering}"
+    );
+
+    // C1 keeps the rendered number as literal text instead.
+    let c1 = fixture_package_xml_with("issue_heading_numbering_native", CompatMode::C1);
+    assert!(
+        !c1.contains("<w:numPr>"),
+        "C1 does not link Word numbering: {c1}"
+    );
+    assert!(
+        c1.contains(">1.1 <") || c1.contains("1.1 "),
+        "C1 keeps the literal number: {c1}"
+    );
+}
+
+fn fixture_package_xml_with(fixture: &str, mode: CompatMode) -> String {
+    crate::common::fixture_package_with_options(fixture, &ConvertOptions::new(mode))
+        .part_text("word/document.xml")
+        .to_owned()
+}
+
+#[test]
+fn issue_heading_numbering_func_keeps_literal() {
+    // L2: function numbering has no w:numFmt mapping — the number Typst
+    // rendered stays literal and the fallback is reported, never dropped.
+    let outcome = fixture_outcome("issue_heading_numbering_func");
+    let constructs: Vec<&str> = outcome.degradations.iter().map(|d| d.construct).collect();
+    assert!(
+        constructs.contains(&"heading-numbering"),
+        "function numbering should report heading-numbering: {constructs:?}"
+    );
+    let xml = fixture_doc_xml("issue_heading_numbering_func");
+    let alpha = paragraph_containing(&xml, "Alpha");
+    assert!(
+        alpha.contains("Sec.1"),
+        "the rendered number stays in the heading text: {alpha}"
+    );
+    assert!(
+        !alpha.contains("<w:numPr>"),
+        "no Word numbering for a function: {alpha}"
+    );
+    let beta = paragraph_containing(&xml, "Beta");
+    assert!(
+        beta.contains("Sec.2"),
+        "second number is literal too: {beta}"
+    );
+}
+
+#[test]
+fn issue_cjk_heading_numbering_reports_and_stays_literal() {
+    // L2: "一、" has no exact w:numFmt — its numbers stay literal and degrade.
+    let outcome = fixture_outcome("issue_cjk_heading_numbering");
+    let constructs: Vec<&str> = outcome.degradations.iter().map(|d| d.construct).collect();
+    assert!(
+        constructs.contains(&"heading-numbering"),
+        "Chinese numbering should report heading-numbering: {constructs:?}"
+    );
+    let xml = fixture_doc_xml("issue_cjk_heading_numbering");
+    let para = paragraph_containing(&xml, "绪论");
+    assert!(
+        para.contains("一、"),
+        "the CJK number stays literal: {para}"
+    );
+    assert!(
+        !para.contains("<w:numPr>"),
+        "no Word numbering for an unrepresentable system: {para}"
+    );
+}
+
+#[test]
+fn issue_mixed_heading_numbering_maps_per_heading() {
+    // L2: numbering is decided per heading — switching from a mappable
+    // system to an unmappable one mid-document numbers the first group and
+    // literalizes + reports the last.
+    let outcome = fixture_outcome("issue_heading_numbering_mixed");
+    let reports = outcome
+        .degradations
+        .iter()
+        .filter(|d| d.construct == "heading-numbering")
+        .count();
+    assert_eq!(
+        reports, 1,
+        "exactly one literalized report for the unmappable heading: {:?}",
+        outcome.degradations
+    );
+    let xml = fixture_doc_xml("issue_heading_numbering_mixed");
+    let second = paragraph_containing(&xml, "Second");
+    assert!(
+        second.contains(r#"<w:ilvl w:val="0"/>"#),
+        "the mappable heading uses Word numbering: {second}"
+    );
+    let second_one = paragraph_containing(&xml, "Second One");
+    assert!(
+        second_one.contains(r#"<w:ilvl w:val="1"/>"#),
+        "level 2 also maps: {second_one}"
+    );
+    assert!(
+        !second_one.contains("1.1"),
+        "no literal number baked in: {second_one}"
+    );
+    let appendix = paragraph_containing(&xml, "附录");
+    assert!(
+        appendix.contains("二、"),
+        "the unmappable number stays literal: {appendix}"
+    );
+    assert!(
+        !appendix.contains("<w:numPr>"),
+        "no Word numbering on the unmappable heading: {appendix}"
     );
 }
 

@@ -157,6 +157,28 @@ pub struct CitationSource {
     pub book_title: Option<String>,
 }
 
+/// A horizontal line drawn at an absolute position, anchored to a text run
+/// (`wp:anchor` + `wps:wsp` with a `line` preset geometry). Used for the
+/// overline trick: Typst renders overlines as line shapes, so the C2
+/// representation is the same kind of object — a floating line above the
+/// anchored line of text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchoredLine {
+    /// Horizontal position relative to the page edge (`relativeFrom="page"`),
+    /// in EMU.
+    pub x_emu: i64,
+    /// Vertical offset downward from the top of the anchor's text line
+    /// (`relativeFrom="line"`), in EMU. Typst draws the overline just below
+    /// the ascender top, so measured values are small positive numbers.
+    pub y_emu: i64,
+    /// Line length, in EMU.
+    pub length_emu: u64,
+    /// Stroke thickness, in EMU.
+    pub thickness_emu: u64,
+    /// Stroke color as a 6-digit hex string. `None` = automatic (black).
+    pub color: Option<String>,
+}
+
 /// A single inline element within a paragraph.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InlineElement {
@@ -202,6 +224,9 @@ pub enum InlineElement {
     InternalLink { anchor: String, runs: Vec<Run> },
     /// A page break (`w:br type="page"`).
     PageBreak,
+    /// A floating line shape anchored to this position in the text
+    /// (`wp:anchor`); used for the overline trick.
+    AnchoredLine(AnchoredLine),
     /// A column break (`w:br type="column"`) — `#colbreak()` in a multi-column page.
     ColumnBreak,
     /// A Table of Contents field code (`TOC \o "1-N" \h \z \u`).
@@ -439,6 +464,10 @@ pub struct Paragraph {
     pub style: Option<ParagraphStyle>,
     /// If this paragraph is a list item, its numbering info (level + ID).
     pub list_info: Option<ListInfo>,
+    /// Heading-level numbering (`w:numPr` without the list indent): `level`
+    /// is the 0-based heading level, `id` is a heading numbering instance in
+    /// [`Document::heading_num_instances`].
+    pub num_pr: Option<ListInfo>,
     /// Paragraph alignment (left, center, right, justify).
     pub alignment: Option<Alignment>,
     /// Suppress first-line indent (e.g., first paragraph after a heading).
@@ -1164,6 +1193,20 @@ pub struct LevelOverride {
     pub lvl_text: String,
 }
 
+/// A heading numbering instance: one `w:num`/`w:abstractNum` pair per
+/// distinct mappable heading numbering pattern. `levels` holds the full
+/// `w:lvl` definitions for ilvl 0..=8 (deeper heading levels reuse the
+/// pattern's last piece, matching Typst's pattern cycling).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadingNumInstance {
+    /// Unique `w:numId` for this heading numbering instance.
+    pub num_id: u32,
+    /// `w:abstractNumId` this instance points at (heading abstracts start at 3).
+    pub abstract_num_id: u32,
+    /// Per-level definitions, in ascending `ilvl` order.
+    pub levels: Vec<LevelOverride>,
+}
+
 /// A dynamically allocated list numbering instance: one top-level list's
 /// `w:num` entry, with its abstract numbering definition (1=ordered,
 /// 2=unordered), level-0 start value, and per-level overrides.
@@ -1208,6 +1251,8 @@ pub struct Document {
     /// Dynamically allocated list numbering instances. Used to generate
     /// `w:num` entries with a `startOverride` and per-level overrides.
     pub list_num_instances: Vec<ListNumInstance>,
+    /// Heading numbering instances, one per distinct numbering pattern.
+    pub heading_num_instances: Vec<HeadingNumInstance>,
     /// Bibliography sources for Word's citation data store (customXml/item1.xml).
     pub citation_sources: Vec<CitationSource>,
 }
@@ -1227,6 +1272,7 @@ impl Default for Document {
             page_number_footer: false,
             next_list_id: 4,
             list_num_instances: Vec::new(),
+            heading_num_instances: Vec::new(),
             citation_sources: Vec::new(),
         }
     }
@@ -1332,6 +1378,29 @@ impl Document {
             level_overrides,
         });
         id
+    }
+
+    /// Find the heading numbering instance for these level definitions, or
+    /// allocate a new `w:num`/`w:abstractNum` pair for them. Returns the
+    /// `w:numId` and whether a new instance was created.
+    pub fn find_or_allocate_heading_numbering(&mut self, levels: &[LevelOverride]) -> (u32, bool) {
+        if let Some(instance) = self
+            .heading_num_instances
+            .iter()
+            .find(|instance| instance.levels == levels)
+        {
+            return (instance.num_id, false);
+        }
+        let num_id = self.next_list_id;
+        self.next_list_id += 1;
+        let abstract_num_id =
+            u32::try_from(self.heading_num_instances.len() + 3).unwrap_or(u32::MAX);
+        self.heading_num_instances.push(HeadingNumInstance {
+            num_id,
+            abstract_num_id,
+            levels: levels.to_vec(),
+        });
+        (num_id, true)
     }
 
     /// Replace the per-level overrides of an already allocated list instance
