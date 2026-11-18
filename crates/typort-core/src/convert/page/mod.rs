@@ -21,8 +21,8 @@ use super::{frames, stats};
 pub use hanging_indent::{ParHangingRule, collect_par_hanging_indent_rules};
 pub use language::{canonicalize_font_names, localize_cjk_fonts};
 pub use margin::{
-    MarginsPt, detect_page_numbering, extract_footer, extract_header, extract_page_settings,
-    page_number_format_from_declaration,
+    MarginZone, MarginsPt, ZoneParts, detect_multi_format_page_numbering, detect_page_numbering,
+    extract_page_settings, extract_zone_parts, page_number_format_from_declaration,
 };
 pub use reachable::{collect_reachable_source_texts, extract_import_paths};
 pub use run_style::apply_styles_from_paged;
@@ -40,7 +40,8 @@ pub(super) use body_size::{
 pub(crate) use language::is_cjk_char;
 pub(super) use language::{is_cjk_language, lang_region_to_bcp47};
 pub(super) use margin::find_body_zone;
-pub(super) use margin::{header_footer_style_lost, header_footer_variant};
+pub(super) use margin::header_footer_variant;
+pub(super) use margin::numbering_page_format;
 pub(super) use page_ref::{CounterUse, classify_counter_use, counter_page_label};
 pub(super) use source_ast::detect_page_setting_change;
 pub(super) use style::apply_footnote_text_size;

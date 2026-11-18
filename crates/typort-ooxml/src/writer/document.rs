@@ -11,21 +11,66 @@ use crate::document::{
     BlockElement, Document, DocumentStyle, PageNumberFormat, PageSettings, SectionBreak,
 };
 
-/// Compute the relationship ID for a header or footer by locating it in the
-/// single source of truth (`DocParts::relationships`). Only called when the part
-/// is present, as guarded by the call sites.
-fn header_footer_rel_id(is_header: bool, parts: &DocParts) -> String {
-    let kind = if is_header {
-        RelKind::Header
-    } else {
-        RelKind::Footer
-    };
-    let pos = parts
-        .relationships
-        .iter()
-        .position(|k| *k == kind)
-        .expect("header/footer rel id requested for a part that is not present");
-    format!("rId{}", pos + 1)
+/// Write `w:headerReference`/`w:footerReference` for every header/footer part
+/// the document carries. `include_first` adds the `w:type="first"` references,
+/// which are only meaningful on a `w:titlePg` section.
+fn write_header_footer_refs<W: Write>(
+    w: &mut Writer<W>,
+    parts: &DocParts,
+    include_first: bool,
+) -> io::Result<()> {
+    for (slot, kind, tag) in [
+        (1_u8, "default", "w:headerReference"),
+        (2, "even", "w:headerReference"),
+        (3, "first", "w:headerReference"),
+    ] {
+        if slot == 3 && !include_first {
+            continue;
+        }
+        if let Some(rid) = parts.rel_id(RelKind::Header(slot)) {
+            w.create_element(tag)
+                .with_attribute(("w:type", kind))
+                .with_attribute(("r:id", rid.as_str()))
+                .write_empty()?;
+        }
+    }
+    for (slot, kind, tag) in [
+        (1_u8, "default", "w:footerReference"),
+        (2, "even", "w:footerReference"),
+        (3, "first", "w:footerReference"),
+    ] {
+        if slot == 3 && !include_first {
+            continue;
+        }
+        if let Some(rid) = parts.rel_id(RelKind::Footer(slot)) {
+            w.create_element(tag)
+                .with_attribute(("w:type", kind))
+                .with_attribute(("r:id", rid.as_str()))
+                .write_empty()?;
+        }
+    }
+    Ok(())
+}
+
+/// Write `<w:pgNumType>` with optional `w:fmt` and `w:start` attributes.
+fn write_pg_num_type<W: Write>(
+    w: &mut Writer<W>,
+    fmt: Option<&PageNumberFormat>,
+    start: Option<u32>,
+) -> io::Result<()> {
+    if fmt.is_none() && start.is_none() {
+        return Ok(());
+    }
+    let mut elem = w.create_element("w:pgNumType");
+    if let Some(fmt) = fmt {
+        elem = elem.with_attribute(("w:fmt", fmt.ooxml_value()));
+    }
+    if let Some(start) = start {
+        let start = start.to_string();
+        elem = elem.with_attribute(("w:start", start.as_str()));
+    }
+    elem.write_empty()?;
+    Ok(())
 }
 
 /// Write `word/document.xml`. `ctx` is created by the caller (`write_docx`)
@@ -81,12 +126,21 @@ pub(super) fn generate_document_xml(
                     }
                 }
             }
+            // `w:titlePg` on the final sectPr only applies when the document is
+            // a single section — with earlier sections the flag belongs to the
+            // mid-body sectPr that ends the section containing page 1.
+            let is_single_section =
+                !doc.body.elements.iter().any(
+                    |el| matches!(el, BlockElement::Paragraph(p) if p.section_break.is_some()),
+                );
             write_section_properties(
                 body_w,
                 &doc.page_settings,
                 &doc.style,
                 ctx.parts,
                 doc.page_numbering.as_ref(),
+                doc.page_number_start,
+                doc.title_page && is_single_section,
             )?;
             Ok(())
         })?;
@@ -101,41 +155,27 @@ fn write_section_properties<W: Write>(
     style: &DocumentStyle,
     parts: &DocParts,
     page_numbering: Option<&PageNumberFormat>,
+    page_number_start: Option<u32>,
+    title_page: bool,
 ) -> io::Result<()> {
     writer.create_element("w:sectPr").write_inner_content(|w| {
-        // Header reference
-        if parts.has(RelKind::Header) {
-            let rid = header_footer_rel_id(true, parts);
-            w.create_element("w:headerReference")
-                .with_attribute(("w:type", "default"))
-                .with_attribute(("r:id", rid.as_str()))
-                .write_empty()?;
-        }
-        // Footer reference
-        if parts.has(RelKind::Footer) {
-            let rid = header_footer_rel_id(false, parts);
-            w.create_element("w:footerReference")
-                .with_attribute(("w:type", "default"))
-                .with_attribute(("r:id", rid.as_str()))
-                .write_empty()?;
-        }
+        write_header_footer_refs(w, parts, title_page)?;
         write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
-        // Page number format (w:pgNumType)
-        if let Some(fmt) = page_numbering {
-            w.create_element("w:pgNumType")
-                .with_attribute(("w:fmt", fmt.ooxml_value()))
-                .write_empty()?;
+        write_section_page_settings(w, settings, page_numbering, page_number_start)?;
+        if title_page {
+            w.create_element("w:titlePg").write_empty()?;
         }
-        write_section_page_settings(w, settings)?;
         Ok(())
     })?;
     Ok(())
 }
 
-/// Write page size, margins, columns, and document grid for a section.
+/// Write page size, margins, page-numbering, columns, and alignment for a section.
 fn write_section_page_settings<W: Write>(
     w: &mut Writer<W>,
     settings: &PageSettings,
+    page_numbering: Option<&PageNumberFormat>,
+    page_number_start: Option<u32>,
 ) -> io::Result<()> {
     w.create_element("w:pgSz")
         .with_attribute(("w:w", settings.width_twips.to_string().as_str()))
@@ -165,6 +205,7 @@ fn write_section_page_settings<W: Write>(
             .with_attribute(("w:restart", "continuous"))
             .write_empty()?;
     }
+    write_pg_num_type(w, page_numbering, page_number_start)?;
     // Columns
     if let Some(cols) = settings.columns.filter(|&c| c > 1) {
         let num = cols.to_string();
@@ -184,20 +225,32 @@ fn write_section_page_settings<W: Write>(
     Ok(())
 }
 /// Write a `w:sectPr` element inside a paragraph's `w:pPr` for a section break.
+///
+/// The `sectPr` describes the section that *ends* at this paragraph: its page
+/// settings, page numbering, and (when the section owns page 1) `w:titlePg`.
+/// Header/footer references are re-emitted so the ending section points at the
+/// same parts the following section inherits.
 pub(super) fn write_section_break<W: Write>(
     writer: &mut Writer<W>,
     section: &SectionBreak,
+    parts: &DocParts,
 ) -> io::Result<()> {
     writer.create_element("w:sectPr").write_inner_content(|w| {
+        write_header_footer_refs(w, parts, section.title_page)?;
         let break_val = section.break_type.ooxml_value();
         w.create_element("w:type")
             .with_attribute(("w:val", break_val))
             .write_empty()?;
-        if let Some(ps) = &section.page_settings {
-            write_section_page_settings(w, ps)?;
-        } else {
-            // Use default page settings
-            write_section_page_settings(w, &PageSettings::default())?;
+        let default_settings = PageSettings::default();
+        let ps = section.page_settings.as_ref().unwrap_or(&default_settings);
+        write_section_page_settings(
+            w,
+            ps,
+            section.page_numbering.as_ref(),
+            section.page_number_start,
+        )?;
+        if section.title_page {
+            w.create_element("w:titlePg").write_empty()?;
         }
         Ok(())
     })?;

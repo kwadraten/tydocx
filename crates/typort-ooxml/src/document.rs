@@ -214,8 +214,14 @@ pub enum InlineElement {
     /// A current-page field (PAGE field code). The cached `display_text` is the
     /// page number Typst rendered at this spot (e.g. from a bare
     /// `counter(page).display()` or `counter(page).at(here())`); Word recomputes
-    /// the field, the cache is only the pre-update display value.
-    FieldPage { display_text: String },
+    /// the field, the cache is only the pre-update display value. `bold` and
+    /// `size_half_pt` style the field's runs (the cached result and the field
+    /// chars) so a styled page-number token in a header/footer keeps its look.
+    FieldPage {
+        display_text: String,
+        bold: bool,
+        size_half_pt: Option<u32>,
+    },
     /// An external hyperlink using `fldSimple` with HYPERLINK field code.
     Hyperlink { url: String, runs: Vec<Run> },
     /// An internal hyperlink (`w:hyperlink w:anchor`) to a bookmark — e.g. a
@@ -487,6 +493,11 @@ pub struct Paragraph {
     /// If set, this paragraph ends a section. The `w:sectPr` is emitted
     /// inside this paragraph's `w:pPr`.
     pub section_break: Option<SectionBreak>,
+    /// Paragraph-mark font size in half-points, emitted as
+    /// `w:pPr/w:rPr/w:sz`. Shrinks an empty paragraph's line height —
+    /// used for section-break markers so they do not spill onto a new
+    /// page when the section ends near the page bottom.
+    pub mark_size_half_pt: Option<u32>,
     /// If true, this paragraph represents a horizontal rule (bottom border).
     pub horizontal_rule: bool,
     /// Tab stop positions in twips (e.g., for grid/multi-column recovery).
@@ -593,7 +604,7 @@ impl Paragraph {
                 }
                 InlineElement::FieldRef { display_text, .. }
                 | InlineElement::FieldPageRef { display_text, .. }
-                | InlineElement::FieldPage { display_text }
+                | InlineElement::FieldPage { display_text, .. }
                 | InlineElement::Citation { display_text, .. } => {
                     text.push_str(display_text);
                 }
@@ -682,7 +693,11 @@ impl Paragraph {
 
     /// Add a current-page field (PAGE field code).
     pub fn add_field_page(&mut self, display_text: String) {
-        self.inlines.push(InlineElement::FieldPage { display_text });
+        self.inlines.push(InlineElement::FieldPage {
+            display_text,
+            bold: false,
+            size_half_pt: None,
+        });
     }
 
     /// Add an external hyperlink.
@@ -955,13 +970,32 @@ impl SectionBreakType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionBreak {
     pub break_type: SectionBreakType,
+    /// Page settings (`w:pgSz`/`w:pgMar`/`w:cols`) of the section that ends here.
     pub page_settings: Option<PageSettings>,
+    /// `w:titlePg` — the section that ends here has a distinct first page.
+    pub title_page: bool,
+    /// `w:pgNumType w:fmt` of the section that ends here.
+    pub page_numbering: Option<PageNumberFormat>,
+    /// `w:pgNumType w:start` restart of the section that ends here.
+    pub page_number_start: Option<u32>,
 }
 
 /// Header or footer content (a sequence of paragraphs).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeaderFooter {
     pub paragraphs: Vec<Paragraph>,
+}
+
+/// Which footer slots carry a generated PAGE-field footer (a bare page
+/// number in the margin zone) instead of authored `footer*` content.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageNumberFooters {
+    /// Default (`w:type="default"`) slot.
+    pub default: bool,
+    /// Even-page (`w:type="even"`) slot.
+    pub even: bool,
+    /// First-page (`w:type="first"`) slot.
+    pub first: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1234,17 +1268,37 @@ pub struct Document {
     pub style: DocumentStyle,
     /// Counter for generating unique bookmark IDs.
     pub bookmark_counter: u32,
-    /// Default header for the document (written to `word/header1.xml`).
+    /// Default (`w:type="default"`, odd/first) header (written to `word/header1.xml`).
     pub header: Option<HeaderFooter>,
+    /// Even-page header (`w:type="even"`, `word/header2.xml`). Only referenced
+    /// when `even_and_odd_headers` is set.
+    pub header_even: Option<HeaderFooter>,
+    /// First-page header (`w:type="first"`, `word/header3.xml`). Only
+    /// referenced when `title_page` is set.
+    pub header_first: Option<HeaderFooter>,
     /// Default footer for the document (written to `word/footer1.xml`).
     pub footer: Option<HeaderFooter>,
+    /// Even-page footer (`w:type="even"`, `word/footer2.xml`).
+    pub footer_even: Option<HeaderFooter>,
+    /// First-page footer (`w:type="first"`, `word/footer3.xml`).
+    pub footer_first: Option<HeaderFooter>,
     /// If set, footer contains a PAGE field code with this number format.
     /// When this is `Some`, a footer is always generated (even if `footer` is `None`).
     pub page_numbering: Option<PageNumberFormat>,
-    /// Whether the footer is a generated PAGE field (a bare page number in the
-    /// footer margin zone). Decoupled from `page_numbering`: the number format
-    /// may be declared (`#set page(numbering:)`) without any footer existing.
-    pub page_number_footer: bool,
+    /// `w:start` on the final section's `w:pgNumType` — a page-number restart
+    /// declared for the last section (Typst `counter(page).update(n)`).
+    pub page_number_start: Option<u32>,
+    /// Whether each footer slot carries a generated PAGE field (a bare page
+    /// number in the footer margin zone). Decoupled from `page_numbering`: the
+    /// number format may be declared (`#set page(numbering:)`) without any
+    /// footer existing.
+    pub page_number_footers: PageNumberFooters,
+    /// `w:evenAndOddHeaders` in settings.xml — Typst's header/footer rendered
+    /// different content on odd vs even pages.
+    pub even_and_odd_headers: bool,
+    /// `w:titlePg` on the section that contains page 1 — Typst's header/footer
+    /// differed on the first page (e.g. a `page(header:)` suppressed there).
+    pub title_page: bool,
     /// Counter for generating unique list numbering IDs (starts at 4;
     /// 1=ordered, 2=unordered, 3=Chinese headings are reserved).
     pub next_list_id: u32,
@@ -1267,9 +1321,16 @@ impl Default for Document {
             style: DocumentStyle::default(),
             bookmark_counter: 0,
             header: None,
+            header_even: None,
+            header_first: None,
             footer: None,
+            footer_even: None,
+            footer_first: None,
             page_numbering: None,
-            page_number_footer: false,
+            page_number_start: None,
+            page_number_footers: PageNumberFooters::default(),
+            even_and_odd_headers: false,
+            title_page: false,
             next_list_id: 4,
             list_num_instances: Vec::new(),
             heading_num_instances: Vec::new(),
@@ -1320,11 +1381,39 @@ impl Document {
                 }
             }
         }
-        for hf in self.header.iter_mut().chain(self.footer.iter_mut()) {
+        for hf in self.header_footers_mut() {
             for para in &mut hf.paragraphs {
                 para.for_each_run_mut(f);
             }
         }
+    }
+
+    /// Mutable iterator over every header/footer part that will be serialized.
+    fn header_footers_mut(&mut self) -> impl Iterator<Item = &mut HeaderFooter> {
+        [
+            &mut self.header,
+            &mut self.header_even,
+            &mut self.header_first,
+            &mut self.footer,
+            &mut self.footer_even,
+            &mut self.footer_first,
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// Immutable iterator over every header/footer part that will be serialized.
+    pub fn header_footers(&self) -> impl Iterator<Item = &HeaderFooter> {
+        [
+            &self.header,
+            &self.header_even,
+            &self.header_first,
+            &self.footer,
+            &self.footer_even,
+            &self.footer_first,
+        ]
+        .into_iter()
+        .flatten()
     }
 
     /// Immutable twin of [`Self::for_each_run_mut`].
@@ -1345,7 +1434,7 @@ impl Document {
                 }
             }
         }
-        for hf in self.header.iter().chain(self.footer.iter()) {
+        for hf in self.header_footers() {
             for para in &hf.paragraphs {
                 para.for_each_run(f);
             }

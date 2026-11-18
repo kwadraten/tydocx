@@ -127,6 +127,9 @@ pub fn apply_section_breaks(
             para.section_break = Some(SectionBreak {
                 break_type: SectionBreakType::NextPage,
                 page_settings: Some(section.page_settings.clone()),
+                title_page: false,
+                page_numbering: None,
+                page_number_start: None,
             });
         }
     }

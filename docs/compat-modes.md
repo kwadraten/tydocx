@@ -110,13 +110,13 @@ M4 网格以制表位拼回、M5 形状内文本以纯文本存活——都是 C
 | M3 | 浮动图形（`#place(..., float: true)`） | 未修 |
 | M4 | 网格布局（`#grid`） | 未修（现为制表位恢复） |
 | M5 | 图形与简单形状（`rect`/`line`/`circle` 等） | 未修（形状丢弃，内文以纯文本存活） |
-| M6 | 分节（栏数/边距变化） | 未修（只检测页尺寸变化） |
-| M7 | 首页不同 / 奇偶页不同页眉页脚 | 未修（IR 只有一对 header/footer） |
+| M6 | 分节（栏数/边距变化） | 已修复（batch 8）：按 StyleChain 快照切分，`w:sectPr` 各带真实 `w:pgMar`/`w:cols` |
+| M7 | 首页不同 / 奇偶页不同页眉页脚 | 已修复（batch 8）：default/even/first `headerReference` + `evenAndOddHeaders` + `titlePg` |
 | M8 | 页码交叉引用（PAGEREF） | 进行中（第六批，未落地） |
 | M9 | 上划线（`#overline`） | 已定设计（第七批）：文字上方插横线形状 |
 | L1 | 嵌套列表级定义 | 已修复（batch 1） |
 | L2 | 标题编号 | 已定设计（第七批）：尽力用 numbering，复杂回退文本 |
-| L3 | 页眉页脚格式 | 未修 |
+| L3 | 页眉页脚格式 | 已修复（batch 8）：页眉页脚保留逐 run 字重/字号，`w:b`/`w:sz` |
 | L4 | 矢量图（SVG、GIF/WebP、绘图画布） | 部分（栅格化回退已存在，矢量未保留） |
 | L5 | 高亮颜色 | 已修复（batch 2） |
 | L6 | 文内引用（`@key`） | 已定：C2 默认出字面标记 + 内部超链接，不发 CITATION 域；C3 是否发域见 §9 D2 |

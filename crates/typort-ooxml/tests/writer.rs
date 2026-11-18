@@ -1307,7 +1307,7 @@ mod tests {
         doc.page_numbering = Some(PageNumberFormat::Decimal);
         // The format alone does not conjure a footer; the generated footer
         // is requested separately (a bare number was detected in the margin).
-        doc.page_number_footer = true;
+        doc.page_number_footers.default = true;
         let mut para = document::Paragraph::new();
         para.add_run("body text");
         doc.add_paragraph(para);
@@ -1349,7 +1349,7 @@ mod tests {
     fn page_numbering_footer_does_not_contain_static_page_number_body() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
-        doc.page_number_footer = true;
+        doc.page_number_footers.default = true;
         let mut para = document::Paragraph::new();
         para.add_run("body text");
         doc.add_paragraph(para);
@@ -1370,7 +1370,7 @@ mod tests {
     fn page_numbering_sect_pr_references_footer() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
-        doc.page_number_footer = true;
+        doc.page_number_footers.default = true;
         let mut para = document::Paragraph::new();
         para.add_run("text");
         doc.add_paragraph(para);
@@ -1425,7 +1425,7 @@ mod tests {
     fn page_numbering_generates_content_types_and_rels() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
-        doc.page_number_footer = true;
+        doc.page_number_footers.default = true;
         let mut para = document::Paragraph::new();
         para.add_run("text");
         doc.add_paragraph(para);

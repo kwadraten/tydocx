@@ -5,8 +5,8 @@ use typort_ir::{
     Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrDocument, IrDocumentInfo,
     IrEnum, IrEnumItem, IrEquation, IrFigureKind, IrGrid, IrHeadingNumbering, IrInline, IrList,
     IrListItem, IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrRaw,
-    IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, PageSettings,
-    TableBorders, TableCellMargins,
+    IrSection, IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge,
+    PageSettings, TableBorders, TableCellMargins,
 };
 use typort_ooxml::document::{Alignment, Run, VerticalAlign};
 use typst_library::diag::SourceResult;
@@ -42,6 +42,7 @@ use super::inline::{
     InlineCtx, alignment_from_styles, collect_inlines, collect_paragraph, image_inline,
     smart_quotes_for, spacing_twips,
 };
+use super::page;
 use super::style::{StyleDefaults, defaults_from_root, run_from_styles};
 use super::with_fragment;
 use crate::convert::table_align::paint_to_shd_hex;
@@ -66,6 +67,9 @@ pub struct Collector<'a> {
     eq_count: u64,
     source: Option<Source>,
     layouter_index: HashMap<Span, Content>,
+    page_snapshot: Option<PageSnapshot>,
+    first_snapshot: Option<PageSnapshot>,
+    sections: Vec<IrSection>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -150,10 +154,15 @@ pub fn collect_document(
         eq_count: 0,
         source,
         layouter_index,
+        page_snapshot: None,
+        first_snapshot: None,
+        sections: Vec::new(),
         _marker: std::marker::PhantomData,
     };
     collector.pass_one(pairs, engine, locator)?;
-    let body = collector.collect_blocks(pairs, engine, locator)?;
+    let body = collector.collect_blocks(pairs, engine, locator, true)?;
+    let sections = std::mem::take(&mut collector.sections);
+    let first_snapshot = collector.first_snapshot.take();
     let state = CollectorState {
         footnote_markers: std::mem::take(&mut collector.footnote_markers),
         footnote_bodies: std::mem::take(&mut collector.footnote_bodies),
@@ -175,9 +184,23 @@ pub fn collect_document(
     }
     let doc = IrDocument {
         info: info.clone(),
-        page: PageSettings::default(),
+        page: if sections.is_empty() {
+            PageSettings::default()
+        } else {
+            first_snapshot
+                .as_ref()
+                .map_or_else(PageSettings::default, PageSnapshot::to_page_settings)
+        },
         style: DocumentStyle::default(),
         body,
+        sections,
+        first_numbering: if first_snapshot.is_some() {
+            first_snapshot
+                .as_ref()
+                .and_then(|s| page::numbering_page_format(s.numbering.as_ref()))
+        } else {
+            None
+        },
         footnotes: Vec::new(),
         citation_sources: Vec::new(),
         page_furniture,
@@ -316,12 +339,33 @@ impl Collector<'_> {
         pairs: &[Pair<'_>],
         engine: &mut Engine,
         locator: &mut SplitLocator,
+        track_sections: bool,
     ) -> SourceResult<Vec<IrBlock>> {
         let mut out = Vec::new();
         let mut pending_vspace: Option<u32> = None;
         let mut i = 0;
         while i < pairs.len() {
             let (content, styles) = pairs[i];
+            if track_sections && content.to_packed::<PagebreakElem>().is_none() {
+                let snapshot = PageSnapshot::resolve(styles);
+                match &self.page_snapshot {
+                    None => {
+                        self.page_snapshot = Some(snapshot.clone());
+                        self.first_snapshot = Some(snapshot);
+                    }
+                    Some(prev) => {
+                        if *prev != snapshot {
+                            self.sections.push(IrSection {
+                                start_block: out.len(),
+                                settings: snapshot.to_page_settings(),
+                                numbering: page::numbering_page_format(snapshot.numbering.as_ref()),
+                                numbering_start: None,
+                            });
+                            self.page_snapshot = Some(snapshot);
+                        }
+                    }
+                }
+            }
             if let Some(tagged) = content.to_packed::<TagElem>() {
                 match &tagged.tag {
                     Tag::Start(inner, _) => {
@@ -448,7 +492,7 @@ impl Collector<'_> {
             let para = collect_paragraph(&par.body, styles, engine, locator, &mut ctx)?;
             return Ok(vec![IrBlock::Paragraph(para)]);
         }
-        self.collect_blocks(group, engine, locator)
+        self.collect_blocks(group, engine, locator, false)
     }
 
     fn image_paragraph(
@@ -3158,12 +3202,90 @@ fn margin_side_pt(
     } else {
         margin.sides.right
     };
+    margin_side_resolved(side, page_width_pt, auto_margin)
+}
+
+fn margin_side_resolved(side: Option<Smart<Rel<Length>>>, dim_pt: f64, auto_margin: f64) -> f64 {
     let Some(side) = side else {
         return auto_margin;
     };
     match side {
-        Smart::Custom(rel) => rel.abs.at(Abs::pt(11.0)).to_pt() + rel.rel.get() * page_width_pt,
+        Smart::Custom(rel) => rel.abs.at(Abs::pt(11.0)).to_pt() + rel.rel.get() * dim_pt,
         Smart::Auto => auto_margin,
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct PageSnapshot {
+    width_pt: f64,
+    height_pt: f64,
+    top_pt: f64,
+    bottom_pt: f64,
+    left_pt: f64,
+    right_pt: f64,
+    columns: u32,
+    header_pt: f64,
+    footer_pt: f64,
+    numbering: Option<Numbering>,
+}
+
+impl PageSnapshot {
+    fn resolve(styles: StyleChain<'_>) -> Self {
+        let width_pt = match styles.get(PageElem::width) {
+            Smart::Custom(length) => length.at(Abs::pt(11.0)).to_pt(),
+            Smart::Auto => 595.28,
+        };
+        let height_pt = match styles.get(PageElem::height) {
+            Smart::Custom(length) => length.at(Abs::pt(11.0)).to_pt(),
+            Smart::Auto => 841.89,
+        };
+        let auto_margin = 2.5 / 21.0 * width_pt.min(height_pt);
+        let margin = styles.get(PageElem::margin);
+        let Smart::Custom(custom_margin) = &margin else {
+            return Self::fixed(width_pt, height_pt, auto_margin, styles);
+        };
+        Self {
+            width_pt,
+            height_pt,
+            top_pt: margin_side_resolved(custom_margin.sides.top, height_pt, auto_margin),
+            bottom_pt: margin_side_resolved(custom_margin.sides.bottom, height_pt, auto_margin),
+            left_pt: margin_side_resolved(custom_margin.sides.left, width_pt, auto_margin),
+            right_pt: margin_side_resolved(custom_margin.sides.right, width_pt, auto_margin),
+            columns: u32::try_from(styles.get(PageElem::columns).get()).unwrap_or(u32::MAX),
+            header_pt: styles.resolve(PageElem::header_ascent).abs.to_pt(),
+            footer_pt: styles.resolve(PageElem::footer_descent).abs.to_pt(),
+            numbering: styles.get_cloned(PageElem::numbering),
+        }
+    }
+
+    fn fixed(width_pt: f64, height_pt: f64, auto_margin: f64, styles: StyleChain<'_>) -> Self {
+        Self {
+            width_pt,
+            height_pt,
+            top_pt: auto_margin,
+            bottom_pt: auto_margin,
+            left_pt: auto_margin,
+            right_pt: auto_margin,
+            columns: u32::try_from(styles.get(PageElem::columns).get()).unwrap_or(u32::MAX),
+            header_pt: styles.resolve(PageElem::header_ascent).abs.to_pt(),
+            footer_pt: styles.resolve(PageElem::footer_descent).abs.to_pt(),
+            numbering: styles.get_cloned(PageElem::numbering),
+        }
+    }
+
+    fn to_page_settings(&self) -> PageSettings {
+        PageSettings {
+            width_twips: page::pt_to_twips(self.width_pt),
+            height_twips: page::pt_to_twips(self.height_pt),
+            margin_top: page::pt_to_twips(self.top_pt),
+            margin_bottom: page::pt_to_twips(self.bottom_pt),
+            margin_left: page::pt_to_twips(self.left_pt),
+            margin_right: page::pt_to_twips(self.right_pt),
+            columns: (self.columns > 1).then_some(self.columns),
+            header_twips: Some(page::pt_to_twips(self.header_pt)),
+            footer_twips: Some(page::pt_to_twips(self.footer_pt)),
+            ..PageSettings::default()
+        }
     }
 }
 

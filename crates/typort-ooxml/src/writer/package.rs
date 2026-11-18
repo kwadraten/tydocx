@@ -165,17 +165,21 @@ pub(super) fn generate_content_types(
                 .with_attribute(("PartName", "/word/settings.xml"))
                 .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"))
                 .write_empty()?;
-            if parts.has(RelKind::Header) {
-                w.create_element("Override")
-                    .with_attribute(("PartName", "/word/header1.xml"))
-                    .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"))
-                    .write_empty()?;
+            for slot in 1_u8..=3 {
+                if parts.has(RelKind::Header(slot)) {
+                    w.create_element("Override")
+                        .with_attribute(("PartName", format!("/word/header{slot}.xml").as_str()))
+                        .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"))
+                        .write_empty()?;
+                }
             }
-            if parts.has(RelKind::Footer) {
-                w.create_element("Override")
-                    .with_attribute(("PartName", "/word/footer1.xml"))
-                    .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"))
-                    .write_empty()?;
+            for slot in 1_u8..=3 {
+                if parts.has(RelKind::Footer(slot)) {
+                    w.create_element("Override")
+                        .with_attribute(("PartName", format!("/word/footer{slot}.xml").as_str()))
+                        .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"))
+                        .write_empty()?;
+                }
             }
             w.create_element("Override")
                 .with_attribute(("PartName", "/docProps/core.xml"))
@@ -231,7 +235,7 @@ pub(super) fn generate_document_rels(
                 w.create_element("Relationship")
                     .with_attribute(("Id", rid.as_str()))
                     .with_attribute(("Type", rel_type.as_str()))
-                    .with_attribute(("Target", target))
+                    .with_attribute(("Target", target.as_str()))
                     .write_empty()?;
             }
 
@@ -257,6 +261,7 @@ pub(super) fn generate_document_rels(
 pub(super) fn generate_settings(
     writer: &mut Writer<&mut Vec<u8>>,
     style: &DocumentStyle,
+    even_and_odd_headers: bool,
 ) -> io::Result<()> {
     writer
         .create_element("w:settings")
@@ -271,6 +276,9 @@ pub(super) fn generate_settings(
         .write_inner_content(|w| {
             if style.suppress_auto_hyphens {
                 w.create_element("w:suppressAutoHyphens").write_empty()?;
+            }
+            if even_and_odd_headers {
+                w.create_element("w:evenAndOddHeaders").write_empty()?;
             }
             write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
             w.create_element("w:compat").write_inner_content(|c| {

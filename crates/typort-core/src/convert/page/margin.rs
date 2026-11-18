@@ -1,11 +1,14 @@
+use codex::numeral_systems::NamedNumeralSystem;
 use typort_ooxml::document::{
     Alignment, HeaderFooter, PageNumberFormat, PageSettings, Paragraph, Run,
 };
 use typst::layout::{Frame, FrameItem};
 use typst_layout::PagedDocument;
+use typst_library::model::Numbering;
 
 use crate::compat::{Degradation, DegradationAction};
 
+use super::run_style::effective_weight;
 use super::units::pt_to_twips;
 
 /// Fraction of each margin retained as a guard between body and margin content.
@@ -20,6 +23,8 @@ pub(super) struct TextFragment {
     pub(super) text: String,
     /// Rendered font size in half-points; preserved on header/footer runs.
     pub(super) size_half_pt: u32,
+    /// Rendered font weight ≥ 600; preserved on header/footer runs.
+    pub(super) bold: bool,
 }
 
 /// Collect text fragments with absolute positions from a frame.
@@ -38,6 +43,7 @@ pub(super) fn collect_text_fragments(frame: &Frame, items: &mut Vec<TextFragment
                     x: position.x.to_pt(),
                     text,
                     size_half_pt: (text_item.size.to_pt() * 2.0).round().max(1.0) as u32,
+                    bold: effective_weight(&text_item.font) >= 600,
                 });
             }
         }
@@ -121,45 +127,219 @@ pub(in crate::convert) fn find_body_zone(
     (body_top, body_bottom)
 }
 
-/// Extract header content from the top margin area of the first page.
-///
-/// A page-number token inside the zone (e.g. "Page 3", "2 标题") is split
-/// out as a PAGE field; the rest stays literal text. `declared` is the
-/// `#set page(numbering:)` format, trusted for a single-page document where
-/// consecutiveness cannot be verified.
-#[must_use]
-pub fn extract_header(
-    paged: &PagedDocument,
-    margins: MarginsPt,
-    declared: Option<PageNumberFormat>,
-) -> Option<HeaderFooter> {
-    extract_margin_zone(paged, MarginZone::Top, margins, declared)
-}
-
-/// Extract footer content from the bottom margin area of the first page.
-#[must_use]
-pub fn extract_footer(
-    paged: &PagedDocument,
-    margins: MarginsPt,
-    declared: Option<PageNumberFormat>,
-) -> Option<HeaderFooter> {
-    extract_margin_zone(paged, MarginZone::Bottom, margins, declared)
-}
-
+/// Which page-margin band holds the content: top (headers) or bottom (footers).
 #[derive(Clone, Copy)]
-enum MarginZone {
+pub enum MarginZone {
     Top,
     Bottom,
 }
 
-fn extract_margin_zone(
+/// Every header/footer part extracted from one margin zone across the
+/// document's pages.
+///
+/// Typst evaluates `page(header:)`/`page(footer:)` per page in `context`, so
+/// the same declared content can render differently per page. Three shapes
+/// map onto OOXML header references: uniform content (`w:type="default"`
+/// only), odd-vs-even content (`w:type="even"` + `w:evenAndOddHeaders`), and
+/// a first page that differs from a uniform rest (`w:type="first"` +
+/// `w:titlePg`). Anything else keeps the first page's content and reports the
+/// first unrepresentable page.
+#[must_use]
+#[derive(Default)]
+pub struct ZoneParts {
+    /// `w:type="default"` part (odd pages under odd/even, otherwise all pages).
+    pub default: Option<HeaderFooter>,
+    /// `w:type="even"` part.
+    pub even: Option<HeaderFooter>,
+    /// `w:type="first"` part.
+    pub first: Option<HeaderFooter>,
+    /// Odd and even pages carried different content.
+    pub even_and_odd: bool,
+    /// Page 1's content differed from a uniform rest.
+    pub title_page: bool,
+    /// 1-based page index where content first differed in a way none of the
+    /// supported reference shapes cover — the default (page-1) part is kept.
+    pub unrepresentable_page: Option<usize>,
+}
+
+/// The page-number split of a zone's representative page for verification:
+/// consecutive pages inside one parity/first-vs-rest group must show the
+/// token incremented by the physical page distance within that group.
+fn zone_text_at(
+    paged: &PagedDocument,
+    zone: MarginZone,
+    margins: MarginsPt,
+    page_index: usize,
+) -> String {
+    let Some(page) = paged.pages().get(page_index) else {
+        return String::new();
+    };
+    zone_fragments(&page.frame, zone, margins)
+        .iter()
+        .map(|f| f.text.as_str())
+        .collect()
+}
+
+/// Extract all header/footer parts of one margin zone. `declared` is the
+/// `#set page(numbering:)` format, trusted to identify a page-number token
+/// when a group has only one page to check.
+pub fn extract_zone_parts(
     paged: &PagedDocument,
     zone: MarginZone,
     margins: MarginsPt,
     declared: Option<PageNumberFormat>,
+) -> ZoneParts {
+    let page_count = paged.pages().len();
+    if page_count == 0 {
+        return ZoneParts::default();
+    }
+    let texts: Vec<String> = (0..page_count)
+        .map(|i| zone_text_at(paged, zone, margins, i))
+        .collect();
+    let norm: Vec<String> = texts
+        .iter()
+        .map(|t| normalize_zone_text_for_comparison(t))
+        .collect();
+    if norm.iter().all(String::is_empty) {
+        return ZoneParts::default();
+    }
+
+    let first = &norm[0];
+    if norm.iter().all(|n| n == first) {
+        let indices: Vec<usize> = (0..page_count.min(3)).collect();
+        return ZoneParts {
+            default: extract_margin_zone_on(
+                paged,
+                zone,
+                margins,
+                declared,
+                0,
+                &rest_after(&texts, &indices),
+            ),
+            ..ZoneParts::default()
+        };
+    }
+
+    classify_zone_parts(paged, zone, margins, declared, &texts, &norm)
+}
+
+/// Consecutive same-group pages for page-number verification:
+/// `(text, value delta from the representative page)`.
+fn rest_after(texts: &[String], indices: &[usize]) -> Vec<(String, u32)> {
+    indices
+        .iter()
+        .skip(1)
+        .take(2)
+        .map(|&i| {
+            (
+                texts[i].clone(),
+                u32::try_from(i - indices[0]).unwrap_or(u32::MAX),
+            )
+        })
+        .collect()
+}
+
+/// Does a part carry a `PAGE` field? Then a lone group page can still be
+/// trusted as a page-number token without a declared format.
+fn has_page_field(hf: Option<&HeaderFooter>) -> bool {
+    hf.is_some_and(|hf| {
+        hf.paragraphs
+            .iter()
+            .flat_map(|p| &p.inlines)
+            .any(|i| matches!(i, typort_ooxml::document::InlineElement::FieldPage { .. }))
+    })
+}
+
+/// The three representable variance shapes, in priority order: page 1 vs a
+/// uniform rest (`w:titlePg`), odd vs even (`w:evenAndOddHeaders`), else the
+/// first page's part with the first unrepresentable page reported.
+fn classify_zone_parts(
+    paged: &PagedDocument,
+    zone: MarginZone,
+    margins: MarginsPt,
+    declared: Option<PageNumberFormat>,
+    texts: &[String],
+    norm: &[String],
+) -> ZoneParts {
+    let page_count = norm.len();
+    let extract = |index: usize, rest: &[(String, u32)], declared| {
+        extract_margin_zone_on(paged, zone, margins, declared, index, rest)
+    };
+    let first = &norm[0];
+    if norm[1..].iter().all(|n| n == &norm[1]) {
+        let rest_indices: Vec<usize> = (1..page_count.min(4)).collect();
+        let default = if norm[1].is_empty() {
+            None
+        } else {
+            extract(1, &rest_after(texts, &rest_indices), declared)
+        };
+        let declared_first = declared
+            .or_else(|| has_page_field(default.as_ref()).then_some(PageNumberFormat::Decimal));
+        let first_part = if norm[0].is_empty() {
+            None
+        } else {
+            extract(0, &[], declared_first)
+        };
+        return ZoneParts {
+            default,
+            first: first_part,
+            title_page: true,
+            ..ZoneParts::default()
+        };
+    }
+
+    let odd: Vec<usize> = (0..page_count).step_by(2).collect();
+    let even: Vec<usize> = (1..page_count).step_by(2).collect();
+    let odd_uniform = odd.iter().all(|&i| norm[i] == *first);
+    let even_uniform = even.iter().all(|&i| norm[i] == norm[even[0]]);
+    if odd_uniform && even_uniform {
+        let default = if norm[0].is_empty() {
+            None
+        } else {
+            extract(0, &rest_after(texts, &odd[..odd.len().min(3)]), declared)
+        };
+        let declared_even = declared
+            .or_else(|| has_page_field(default.as_ref()).then_some(PageNumberFormat::Decimal));
+        let even_part = if norm[even[0]].is_empty() {
+            None
+        } else {
+            extract(
+                even[0],
+                &rest_after(texts, &even[..even.len().min(3)]),
+                declared_even,
+            )
+        };
+        return ZoneParts {
+            default,
+            even: even_part,
+            even_and_odd: true,
+            ..ZoneParts::default()
+        };
+    }
+
+    let indices: Vec<usize> = (0..page_count.min(3)).collect();
+    let differing = norm.iter().position(|n| n != first).map(|i| i + 1);
+    ZoneParts {
+        default: extract(0, &rest_after(texts, &indices), declared),
+        unrepresentable_page: differing,
+        ..ZoneParts::default()
+    }
+}
+
+/// Extract header/footer content from the margin zone of one page.
+///
+/// `rest` holds consecutive same-group zone texts with the page-number delta
+/// each one should show relative to this page, used to verify a page-number
+/// token (see `split_page_number_token`).
+fn extract_margin_zone_on(
+    paged: &PagedDocument,
+    zone: MarginZone,
+    margins: MarginsPt,
+    declared: Option<PageNumberFormat>,
+    page_index: usize,
+    rest: &[(String, u32)],
 ) -> Option<HeaderFooter> {
-    let doc_pages = paged.pages();
-    let page = doc_pages.first()?;
+    let page = paged.pages().get(page_index)?;
     let page_width = page.frame.width().to_pt();
 
     let fragments = zone_fragments(&page.frame, zone, margins);
@@ -167,19 +347,7 @@ fn extract_margin_zone(
         return None;
     }
 
-    let text1: String = fragments.iter().map(|f| f.text.as_str()).collect();
-    let text2 = doc_pages.get(1).map(|p| {
-        zone_fragments(&p.frame, zone, margins)
-            .iter()
-            .map(|f| f.text.as_str())
-            .collect::<String>()
-    });
-    let text3 = doc_pages.get(2).map(|p| {
-        zone_fragments(&p.frame, zone, margins)
-            .iter()
-            .map(|f| f.text.as_str())
-            .collect::<String>()
-    });
+    let text: String = fragments.iter().map(|f| f.text.as_str()).collect();
 
     let zone_size = fragments
         .first()
@@ -189,25 +357,32 @@ fn extract_margin_zone(
                 .all(|f| f.size_half_pt == first.size_half_pt)
         })
         .map(|f| f.size_half_pt);
+    let zone_bold = !fragments.is_empty() && fragments.iter().all(|f| f.bold);
     let mut para = Paragraph::new();
-    if let Some((prefix, token, suffix)) =
-        split_page_number_token(&text1, text2.as_deref(), text3.as_deref(), declared)
-    {
+    if let Some((prefix, token, suffix)) = split_page_number_token(&text, rest, declared) {
         if !prefix.is_empty() {
             let mut run = Run::new(&prefix);
             run.size_half_pt = zone_size;
+            run.bold = zone_bold;
             para.push_run(run);
         }
-        para.add_field_page(token);
+        para.inlines
+            .push(typort_ooxml::document::InlineElement::FieldPage {
+                display_text: token,
+                bold: zone_bold,
+                size_half_pt: zone_size,
+            });
         if !suffix.is_empty() {
             let mut run = Run::new(&suffix);
             run.size_half_pt = zone_size;
+            run.bold = zone_bold;
             para.push_run(run);
         }
     } else {
         for item in &fragments {
             let mut run = Run::new(&item.text);
             run.size_half_pt = Some(item.size_half_pt);
+            run.bold = item.bold;
             para.push_run(run);
         }
     }
@@ -272,20 +447,19 @@ struct TokenCandidate {
 /// Split a margin-zone text into `(prefix, page-number token, suffix)` when
 /// the token is verifiably a page number, else `None`.
 ///
-/// Verification: with three or more pages the token must increment by exactly
-/// one on both page 1→2 and page 2→3; with exactly two pages one +1 step is
-/// required. With a single page consecutiveness cannot be verified, so only
-/// the declared format is trusted — and only for Decimal and Roman (a lone
-/// letter is too ambiguous) — and the token must be the only candidate in the
-/// text.
+/// Verification: `rest` is `(text, value delta)` for up to two later pages in
+/// the same parity/first-vs-rest group — the token must increment by exactly
+/// `delta` on each. With no later page to check, consecutiveness cannot be
+/// verified, so only the declared format is trusted — and only for Decimal
+/// and Roman (a lone letter is too ambiguous) — and the token must be the
+/// only candidate in the text.
 ///
 /// Residual risk (accepted): a section number that happens to increment by
-/// exactly one per page is indistinguishable from a page number by this
-/// check; with three pages the check still accepts it.
+/// exactly the page distance is indistinguishable from a page number by this
+/// check.
 fn split_page_number_token(
     page1: &str,
-    page2: Option<&str>,
-    page3: Option<&str>,
+    rest: &[(String, u32)],
     declared: Option<PageNumberFormat>,
 ) -> Option<(String, String, String)> {
     let candidates = find_token_candidates(page1);
@@ -296,52 +470,34 @@ fn split_page_number_token(
             page1[c.end..].to_string(),
         )
     };
-    match (page2, page3) {
-        (Some(p2), Some(p3)) => candidates
-            .iter()
-            .find(|c| {
-                let Some(v2) = c.value.checked_add(1) else {
-                    return false;
-                };
-                let Some(v3) = c.value.checked_add(2) else {
-                    return false;
-                };
-                let prefix = &page1[..c.start];
-                let suffix = &page1[c.end..];
-                p2 == format!("{prefix}{}{suffix}", format_page_number(v2, c.fmt))
-                    && p3 == format!("{prefix}{}{suffix}", format_page_number(v3, c.fmt))
-            })
-            .map(split),
-        (Some(p2), None) => candidates
-            .iter()
-            .find(|c| {
-                let Some(v2) = c.value.checked_add(1) else {
-                    return false;
-                };
-                let prefix = &page1[..c.start];
-                let suffix = &page1[c.end..];
-                p2 == format!("{prefix}{}{suffix}", format_page_number(v2, c.fmt))
-            })
-            .map(split),
-        (None, _) => {
-            if candidates.len() != 1 {
-                return None;
-            }
-            let c = &candidates[0];
-            if declared != Some(c.fmt) {
-                return None;
-            }
-            if !matches!(
-                c.fmt,
-                PageNumberFormat::Decimal
-                    | PageNumberFormat::LowerRoman
-                    | PageNumberFormat::UpperRoman
-            ) {
-                return None;
-            }
-            Some(split(c))
+    if rest.is_empty() {
+        if candidates.len() != 1 {
+            return None;
         }
+        let c = &candidates[0];
+        if declared != Some(c.fmt) {
+            return None;
+        }
+        if !matches!(
+            c.fmt,
+            PageNumberFormat::Decimal | PageNumberFormat::LowerRoman | PageNumberFormat::UpperRoman
+        ) {
+            return None;
+        }
+        return Some(split(c));
     }
+    candidates
+        .iter()
+        .find(|c| {
+            let prefix = &page1[..c.start];
+            let suffix = &page1[c.end..];
+            rest.iter().take(2).all(|(text, delta)| {
+                c.value.checked_add(*delta).is_some_and(|v| {
+                    text == &format!("{prefix}{}{suffix}", format_page_number(v, c.fmt))
+                })
+            })
+        })
+        .map(split)
 }
 
 /// Find number-like tokens in a margin-zone text: digit runs, Roman-numeral
@@ -544,6 +700,28 @@ fn int_to_letters(mut value: u32, upper: bool) -> String {
     String::from_utf8(out).unwrap_or_default()
 }
 
+/// Map a resolved `page(numbering:)` value to a `PageNumberFormat`. Mirrors
+/// [`page_number_format_from_declaration`] for a compiled `Numbering` (from a
+/// realize-pair `StyleChain` or a paged `Page`), not a source string.
+pub(in crate::convert) fn numbering_page_format(
+    numbering: Option<&Numbering>,
+) -> Option<PageNumberFormat> {
+    let Some(Numbering::Pattern(pattern)) = numbering else {
+        return None;
+    };
+    if pattern.pieces.len() != 1 || !pattern.pieces[0].0.is_empty() || !pattern.suffix.is_empty() {
+        return None;
+    }
+    match pattern.pieces[0].1 {
+        NamedNumeralSystem::Arabic => Some(PageNumberFormat::Decimal),
+        NamedNumeralSystem::LowerRoman => Some(PageNumberFormat::LowerRoman),
+        NamedNumeralSystem::UpperRoman => Some(PageNumberFormat::UpperRoman),
+        NamedNumeralSystem::LowerLatin => Some(PageNumberFormat::LowerLetter),
+        NamedNumeralSystem::UpperLatin => Some(PageNumberFormat::UpperLetter),
+        _ => None,
+    }
+}
+
 /// Map a declared `#set page(numbering:)` pattern to a `PageNumberFormat`.
 /// Only the plain single-symbol patterns have an OOXML equivalent: `"1"`
 /// (decimal), `"i"`/`"I"` (roman), `"a"`/`"A"` (letter). Anything else — a
@@ -618,6 +796,34 @@ pub fn detect_page_numbering(
     }
 
     Some(fmt)
+}
+
+/// Multi-section sibling of [`detect_page_numbering`]: every page's footer is
+/// a page-number token whose value matches the rendered `Page::number`, even
+/// when the numbering format changes mid-document (U30 — `w:pgNumType` per
+/// section). Returns the LAST page's format, which the final section carries.
+#[must_use]
+pub fn detect_multi_format_page_numbering(
+    paged: &PagedDocument,
+    margins: MarginsPt,
+) -> Option<PageNumberFormat> {
+    let rendered = paged.pages();
+    if rendered.len() < 2 {
+        return None;
+    }
+    let mut last_fmt = None;
+    for (index, page) in rendered.iter().enumerate() {
+        let text = extract_footer_text_from_page(&page.frame, margins)?;
+        let trimmed = text.trim();
+        let fmt = classify_page_number(trimmed)?;
+        if u64::from(page_number_value(trimmed, fmt)) != page.number {
+            return None;
+        }
+        if index + 1 == rendered.len() {
+            last_fmt = Some(fmt);
+        }
+    }
+    last_fmt
 }
 
 /// Get the numeric value of a page number string for a given format.
@@ -755,42 +961,6 @@ pub fn header_footer_variant(paged: &PagedDocument, margins: MarginsPt) -> Optio
         }
     }
     None
-}
-
-#[must_use]
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "font sizes are non-negative; half-point rounding is intentional"
-)]
-pub fn header_footer_style_lost(paged: &PagedDocument, margins: MarginsPt) -> bool {
-    let Some(page) = paged.pages().first() else {
-        return false;
-    };
-    let page_width = page.frame.width().to_pt();
-    let page_height = page.frame.height().to_pt();
-    let (body_top, body_bottom) = find_body_zone(
-        page_width,
-        page_height,
-        Some(margins.top),
-        Some(margins.bottom),
-    );
-    let mut lost = false;
-    super::super::frames::visit_frame_items(&page.frame, false, &mut |position, item| {
-        if lost {
-            return;
-        }
-        if let FrameItem::Text(text_item) = item {
-            let y = position.y.to_pt();
-            if y < body_top || y > body_bottom {
-                let bold = text_item.font.info().variant.weight.to_number() >= 600;
-                if bold {
-                    lost = true;
-                }
-            }
-        }
-    });
-    lost
 }
 
 /// Classify a string as a page number format.
@@ -1089,33 +1259,38 @@ mod tests {
         );
     }
 
+    fn rest(texts: &[&str], start_delta: u32, step: u32) -> Vec<(String, u32)> {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), start_delta + step * i as u32))
+            .collect()
+    }
+
     #[test]
     fn split_page_number_token_three_pages() {
+        let r = rest(&["Page 4", "Page 5"], 1, 1);
         assert_eq!(
-            split_page_number_token("Page 3", Some("Page 4"), Some("Page 5"), None),
+            split_page_number_token("Page 3", &r, None),
             Some(("Page ".to_string(), "3".to_string(), String::new()))
         );
+        let r = rest(&["3 标题", "4 标题"], 1, 1);
         assert_eq!(
-            split_page_number_token("2 标题", Some("3 标题"), Some("4 标题"), None),
+            split_page_number_token("2 标题", &r, None),
             Some((String::new(), "2".to_string(), " 标题".to_string()))
         );
+        let r = rest(&["Chapter v", "Chapter vi"], 1, 1);
         assert_eq!(
-            split_page_number_token("Chapter iv", Some("Chapter v"), Some("Chapter vi"), None),
+            split_page_number_token("Chapter iv", &r, None),
             Some(("Chapter ".to_string(), "iv".to_string(), String::new()))
         );
         // Static text never splits, however many pages repeat it.
-        assert_eq!(
-            split_page_number_token("Page 3", Some("Page 3"), Some("Page 3"), None),
-            None
-        );
+        let r = rest(&["Page 3", "Page 3"], 1, 1);
+        assert_eq!(split_page_number_token("Page 3", &r, None), None);
         // A section number that stays put does not block the real page token.
+        let r = rest(&["Section 2, page 4", "Section 2, page 5"], 1, 1);
         assert_eq!(
-            split_page_number_token(
-                "Section 2, page 3",
-                Some("Section 2, page 4"),
-                Some("Section 2, page 5"),
-                None
-            ),
+            split_page_number_token("Section 2, page 3", &r, None),
             Some((
                 "Section 2, page ".to_string(),
                 "3".to_string(),
@@ -1123,61 +1298,69 @@ mod tests {
             ))
         );
         // A lone letter is a page token when it increments on every page.
+        let r = rest(&["b", "c"], 1, 1);
         assert_eq!(
-            split_page_number_token("a", Some("b"), Some("c"), None),
+            split_page_number_token("a", &r, None),
             Some((String::new(), "a".to_string(), String::new()))
         );
         // "Draft" is not a token: the D is glued to a letter.
+        let r = rest(&["Draft", "Draft"], 1, 1);
+        assert_eq!(split_page_number_token("Draft", &r, None), None);
+    }
+
+    #[test]
+    fn split_page_number_token_parity_step() {
+        // Same-parity pages advance the number by the physical page distance:
+        // an odd-page header shows 1 on page 1 and 3 on page 3 (delta 2).
+        let r = rest(&["Odd Title 3", "Odd Title 5"], 2, 2);
         assert_eq!(
-            split_page_number_token("Draft", Some("Draft"), Some("Draft"), None),
-            None
+            split_page_number_token("Odd Title 1", &r, None),
+            Some(("Odd Title ".to_string(), "1".to_string(), String::new()))
         );
+        // A number that does not advance by the group's physical distance
+        // rejects the token (here it jumped by 2 while the delta says 1).
+        let r = rest(&["Odd Title 3"], 1, 1);
+        assert_eq!(split_page_number_token("Odd Title 1", &r, None), None);
     }
 
     #[test]
     fn split_page_number_token_two_pages() {
+        let r = rest(&["Page 4"], 1, 1);
         assert_eq!(
-            split_page_number_token("Page 3", Some("Page 4"), None, None),
+            split_page_number_token("Page 3", &r, None),
             Some(("Page ".to_string(), "3".to_string(), String::new()))
         );
         // A non-consecutive second page rejects the token.
-        assert_eq!(
-            split_page_number_token("Page 3", Some("Page 5"), None, None),
-            None
-        );
+        let r = rest(&["Page 5"], 1, 1);
+        assert_eq!(split_page_number_token("Page 3", &r, None), None);
     }
 
     #[test]
     fn split_page_number_token_single_page_declared_only() {
         // Declared format trusted, Decimal and Roman only.
         assert_eq!(
-            split_page_number_token("Page 3", None, None, Some(PageNumberFormat::Decimal)),
+            split_page_number_token("Page 3", &[], Some(PageNumberFormat::Decimal)),
             Some(("Page ".to_string(), "3".to_string(), String::new()))
         );
         assert_eq!(
-            split_page_number_token("Page i", None, None, Some(PageNumberFormat::LowerRoman)),
+            split_page_number_token("Page i", &[], Some(PageNumberFormat::LowerRoman)),
             Some(("Page ".to_string(), "i".to_string(), String::new()))
         );
         // No declaration, no split.
-        assert_eq!(split_page_number_token("Page 3", None, None, None), None);
+        assert_eq!(split_page_number_token("Page 3", &[], None), None);
         // Declared format must match the token's format.
         assert_eq!(
-            split_page_number_token("Page 3", None, None, Some(PageNumberFormat::LowerRoman)),
+            split_page_number_token("Page 3", &[], Some(PageNumberFormat::LowerRoman)),
             None
         );
         // A lone letter is too ambiguous for a single page, even declared.
         assert_eq!(
-            split_page_number_token("a", None, None, Some(PageNumberFormat::LowerLetter)),
+            split_page_number_token("a", &[], Some(PageNumberFormat::LowerLetter)),
             None
         );
         // Two candidates in the text: too ambiguous for a single page.
         assert_eq!(
-            split_page_number_token(
-                "Section 2, page 3",
-                None,
-                None,
-                Some(PageNumberFormat::Decimal)
-            ),
+            split_page_number_token("Section 2, page 3", &[], Some(PageNumberFormat::Decimal)),
             None
         );
     }

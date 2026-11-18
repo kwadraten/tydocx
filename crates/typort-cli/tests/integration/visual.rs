@@ -104,6 +104,39 @@ fn visual_regression_hello() {
 }
 
 #[test]
+#[ignore = "needs libreoffice + pdfinfo + pdftotext; run with --ignored"]
+fn visual_table_section_marker_no_blank_page() {
+    let pdf = typort_to_pdf_via_docx("issue_table_marker_height", "marker_height")
+        .expect("libreoffice required: install it or do not opt into the --ignored visual tests");
+    let tmp_dir = std::env::temp_dir().join("typort_visual_test");
+    std::fs::create_dir_all(&tmp_dir).expect("temp dir");
+    let pdf_path = tmp_dir.join("marker_height.pdf");
+    std::fs::write(&pdf_path, &pdf).expect("write pdf");
+    let info = std::process::Command::new("pdfinfo")
+        .arg(&pdf_path)
+        .output()
+        .expect("pdfinfo required for page count");
+    let info = String::from_utf8_lossy(&info.stdout);
+    let pages = info
+        .lines()
+        .find_map(|l| l.strip_prefix("Pages:"))
+        .map(str::trim)
+        .expect("pdfinfo Pages line");
+    assert_eq!(pages, "2", "section marker must not add a blank page");
+    let text = std::process::Command::new("pdftotext")
+        .args(["-layout"])
+        .arg(&pdf_path)
+        .arg("-")
+        .output()
+        .expect("pdftotext required for page contents");
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text.contains("After the table."),
+        "section-2 content lands on page 2, got {text:?}"
+    );
+}
+
+#[test]
 #[ignore = "needs libreoffice + pdftoppm + ImageMagick; run with --ignored"]
 fn visual_regression_complex_paper() {
     let path = fixture_path("complex_paper");
