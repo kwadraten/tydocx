@@ -454,14 +454,23 @@ mod tests {
             width_pct: None,
             vertical_align: None,
             shading: None,
+            width_twips: None,
+            borders: None,
+            zero_margins: false,
         };
-        let row = document::TableRow { cells: vec![cell] };
+        let row = document::TableRow {
+            cells: vec![cell],
+            height_twips: None,
+            is_header: false,
+        };
         let table = document::Table {
             rows: vec![row],
             width_pct: None,
             border_size: None,
             borders: None,
             cell_margins: None,
+            width_twips: None,
+            col_widths_twips: None,
         };
         doc.add_table(table);
 
@@ -778,6 +787,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0x89, 0x50, 0x4E, 0x47], // PNG magic bytes
             format: document::ImageFormat::Png,
             width_emu: 914_400,  // 1 inch
@@ -806,6 +816,7 @@ mod tests {
         let mut para = document::Paragraph::new();
         let png_data = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG header
         para.add_image(document::ImageData {
+            svg: None,
             bytes: png_data.clone(),
             format: document::ImageFormat::Png,
             width_emu: 914_400,
@@ -832,6 +843,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0x89],
             format: document::ImageFormat::Png,
             width_emu: 100,
@@ -852,6 +864,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0xFF, 0xD8],
             format: document::ImageFormat::Jpeg,
             width_emu: 100,
@@ -876,6 +889,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0x89],
             format: document::ImageFormat::Png,
             width_emu: 100,
@@ -900,6 +914,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0x89],
             format: document::ImageFormat::Png,
             width_emu: 100,

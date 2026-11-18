@@ -8,6 +8,7 @@
 
 pub mod degradation;
 pub mod geometry;
+pub mod grid_plan;
 pub mod lower;
 pub mod mode;
 pub mod types;

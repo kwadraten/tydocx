@@ -27,6 +27,7 @@ typst-html = "0.15.1"
 typst-pdf = "0.15.1"
 typst-render = "0.15.1"
 typst-layout = "0.15.1"
+typst-svg = "0.15.1"
 typst-realize = "0.15.1"
 
 # SVG rasterization. Pinned to match typst 0.15's usvg/tiny-skia (usvg 0.47,

@@ -16,6 +16,7 @@ typst-utils.workspace = true
 typst-html.workspace = true
 typst-render.workspace = true
 typst-layout.workspace = true
+typst-svg.workspace = true
 typst-realize.workspace = true
 typort-ir.workspace = true
 typort-ooxml.workspace = true

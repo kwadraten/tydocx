@@ -116,6 +116,9 @@ pub enum IrBlock {
         custom_placement: bool,
         /// `figure(gap:)` override in twips — spacing between body and caption.
         gap_twips: Option<u32>,
+        /// Hash of the figure's introspection `Location`; matches the paged
+        /// frame's figure tag brackets so drawn canvases reach this figure.
+        location_hash: Option<u64>,
     },
     List(IrList),
     Enum(IrEnum),
@@ -238,6 +241,9 @@ pub struct IrImage {
     pub vector: bool,
     pub non_cover_fit: bool,
     pub alt: Option<String>,
+    /// Original SVG bytes for vector content; emitted as `asvg:svgBlip`
+    /// inside `mc:AlternateContent` with `bytes` (PNG) as the fallback.
+    pub svg: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -252,17 +258,89 @@ pub struct IrTable {
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrTableRow {
     pub cells: Vec<IrTableCell>,
+    /// Rendered or declared row height in twips, when known. Emitted as an
+    /// exact `w:trHeight` so 5-minute timetable slots keep their pitch.
+    pub height_twips: Option<u32>,
+    /// Row repeats as a `w:tblHeader` on every page the table spills onto.
+    pub is_header: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrTableCell {
     pub body: Vec<IrBlock>,
+    /// Grid column (non-gutter track) the cell starts in.
+    pub x: usize,
     pub colspan: u32,
     pub rowspan: u32,
     pub vmerge: IrVMerge,
     pub fill_hex: Option<String>,
     pub vertical_align: Option<VerticalAlign>,
     pub inset_twips: Option<u32>,
+    /// Per-side strokes resolved on the cell, used when a grid's stroke
+    /// geometry must be reproduced cell-by-cell rather than as table borders.
+    pub borders: IrCellBorders,
+    /// Which `borders` sides were declared on the cell itself rather than
+    /// inherited from the grid's `stroke` function. Boundary resolution
+    /// gives a declared edge precedence over an undeclared one.
+    pub borders_declared: IrCellBorderFlags,
+}
+
+/// Which of a cell's four edge strokes were set on the cell itself rather
+/// than inherited from the grid's `stroke` function. Boundary resolution
+/// gives a declared edge precedence over an undeclared neighbour.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "four per-edge flags mirror the cell's Sides<..> stroke shape"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IrCellBorderFlags {
+    pub top: bool,
+    pub right: bool,
+    pub bottom: bool,
+    pub left: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct IrCellBorders {
+    pub top: Option<IrBorder>,
+    pub right: Option<IrBorder>,
+    pub bottom: Option<IrBorder>,
+    pub left: Option<IrBorder>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrBorder {
+    /// Stroke thickness in eighths of a point (`w:sz` units).
+    pub sz_eighths: u32,
+    pub color_hex: Option<String>,
+    /// Dashed lines emit `w:val="dashed"` instead of `single`.
+    pub dashed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum IrTrackSize {
+    Auto,
+    /// Fixed track length in twips.
+    Fixed(u32),
+    /// `fr` weight (e.g. `2fr` → 2.0).
+    Fr(f64),
+    /// `abs + ratio` sizing: absolute part in twips plus a share of the
+    /// container in thousandths.
+    Rel {
+        abs_twips: u32,
+        permille: u32,
+    },
+}
+
+/// A `grid.hline`/`grid.vline` resolved onto the track grid. `index` is the
+/// boundary after that many tracks (non-gutter space); `start..end` is the
+/// covered perpendicular range.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrGridLine {
+    pub index: usize,
+    pub start: usize,
+    pub end: usize,
+    pub border: IrBorder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -275,9 +353,17 @@ pub enum IrVMerge {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrGrid {
+    /// Every non-gutter row, in order, including the empty cells Typst
+    /// materializes at positions no declared cell covers (the mergeable
+    /// whitespace of timetables).
     pub rows: Vec<IrTableRow>,
     pub column_widths_pct: Option<Vec<u32>>,
     pub borders: Option<TableBorders>,
+    /// Non-gutter track sizings, same length as `rows` / column count.
+    pub row_sizes: Vec<IrTrackSize>,
+    pub col_sizes: Vec<IrTrackSize>,
+    pub hlines: Vec<IrGridLine>,
+    pub vlines: Vec<IrGridLine>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

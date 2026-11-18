@@ -5,7 +5,7 @@ use std::io::{Seek, Write};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
-use crate::document::{BlockElement, CellContent, Document, DocumentStyle, Table};
+use crate::document::{BlockElement, CellContent, Document, DocumentStyle, ImageData, Table};
 use crate::styles;
 
 mod citation;
@@ -95,6 +95,7 @@ impl DocParts {
 struct WriteCtx<'a> {
     doc_style: &'a DocumentStyle,
     parts: &'a DocParts,
+    images: &'a [&'a ImageData],
     content_width_twips: u32,
     image_counter: &'a Cell<usize>,
     citation_id_counter: &'a Cell<u32>,
@@ -124,6 +125,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     let ctx = WriteCtx {
         doc_style: &doc.style,
         parts: &parts,
+        images: &images,
         content_width_twips: ps
             .width_twips
             .saturating_sub(ps.margin_left + ps.margin_right),
@@ -195,6 +197,11 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
         let path = format!("word/media/image{n}.{ext}");
         zip.start_file(path, options)?;
         zip.write_all(&img.bytes)?;
+        if let Some(svg) = &img.svg {
+            let svg_path = format!("word/media/image{n}.svg");
+            zip.start_file(svg_path, options)?;
+            zip.write_all(svg)?;
+        }
     }
 
     // Always write docProps/core.xml with metadata

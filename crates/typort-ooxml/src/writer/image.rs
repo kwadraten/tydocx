@@ -79,10 +79,27 @@ fn collect_images_from_table<'a>(table: &'a Table, images: &mut Vec<&'a ImageDat
     }
 }
 
-/// Compute the relationship ID for an image given its 1-based index.
-/// Image relationships follow all fixed parts in `document.xml.rels`.
-pub(super) fn image_rel_id(image_index: usize, parts: &DocParts) -> String {
-    format!("rId{}", parts.relationships.len() + image_index)
+/// Compute the relationship ID for an image's raster (fallback) part given
+/// its 1-based index. Image relationships follow all fixed parts in
+/// `document.xml.rels`; an image with `svg` set consumes two consecutive
+/// relationships — raster first, SVG second.
+fn raster_rel_number(image_index: usize, images: &[&ImageData], parts: &DocParts) -> usize {
+    let extras = images
+        .iter()
+        .take(image_index.saturating_sub(1))
+        .filter(|img| img.svg.is_some())
+        .count();
+    parts.relationships.len() + image_index + extras
+}
+
+/// Relationship ID for the image's PNG/JPEG part.
+pub(super) fn image_rel_id(image_index: usize, images: &[&ImageData], parts: &DocParts) -> String {
+    format!("rId{}", raster_rel_number(image_index, images, parts))
+}
+
+/// Relationship ID for the image's SVG part, when it has one.
+pub(super) fn svg_rel_id(image_index: usize, images: &[&ImageData], parts: &DocParts) -> String {
+    format!("rId{}", raster_rel_number(image_index, images, parts) + 1)
 }
 
 fn inline_is_drawing(inline: &InlineElement) -> bool {
@@ -277,6 +294,43 @@ pub(super) fn write_image_inline<W: Write>(
     img: &ImageData,
     n: usize,
     rid: &str,
+    svg_rid: Option<&str>,
+) -> io::Result<()> {
+    if let Some(svg_rid) = svg_rid {
+        writer
+            .create_element("mc:AlternateContent")
+            .with_attribute((
+                "xmlns:mc",
+                "http://schemas.openxmlformats.org/markup-compatibility/2006",
+            ))
+            .write_inner_content(|mc| {
+                mc.create_element("mc:Choice")
+                    .with_attribute((
+                        "xmlns:asvg",
+                        "http://schemas.microsoft.com/office/drawing/2016/SVG/main",
+                    ))
+                    .with_attribute(("Requires", "asvg"))
+                    .write_inner_content(|choice| {
+                        write_drawing_run(choice, img, n, rid, Some(svg_rid))
+                    })?;
+                mc.create_element("mc:Fallback")
+                    .write_inner_content(|fallback| {
+                        write_drawing_run(fallback, img, n, rid, None)
+                    })?;
+                Ok(())
+            })?;
+        Ok(())
+    } else {
+        write_drawing_run(writer, img, n, rid, None)
+    }
+}
+
+fn write_drawing_run<W: Write>(
+    writer: &mut Writer<W>,
+    img: &ImageData,
+    n: usize,
+    rid: &str,
+    svg_rid: Option<&str>,
 ) -> io::Result<()> {
     let cx = img.width_emu.to_string();
     let cy = img.height_emu.to_string();
@@ -310,45 +364,7 @@ pub(super) fn write_image_inline<W: Write>(
                                     gd.create_element("pic:pic")
                                         .with_attribute(("xmlns:pic", "http://schemas.openxmlformats.org/drawingml/2006/picture"))
                                         .write_inner_content(|pic| {
-                                            pic.create_element("pic:nvPicPr").write_inner_content(|nv| {
-                                                nv.create_element("pic:cNvPr")
-                                                    .with_attribute(("id", id_str.as_str()))
-                                                    .with_attribute(("name", filename.as_str()))
-                                                    .write_empty()?;
-                                                nv.create_element("pic:cNvPicPr").write_empty()?;
-                                                Ok(())
-                                            })?;
-                                            pic.create_element("pic:blipFill").write_inner_content(|bf| {
-                                                bf.create_element("a:blip")
-                                                    .with_attribute(("r:embed", rid))
-                                                    .write_empty()?;
-                                                bf.create_element("a:stretch").write_inner_content(|st| {
-                                                    st.create_element("a:fillRect").write_empty()?;
-                                                    Ok(())
-                                                })?;
-                                                Ok(())
-                                            })?;
-                                            pic.create_element("pic:spPr").write_inner_content(|sp| {
-                                                sp.create_element("a:xfrm").write_inner_content(|xf| {
-                                                    xf.create_element("a:off")
-                                                        .with_attribute(("x", "0"))
-                                                        .with_attribute(("y", "0"))
-                                                        .write_empty()?;
-                                                    xf.create_element("a:ext")
-                                                        .with_attribute(("cx", cx.as_str()))
-                                                        .with_attribute(("cy", cy.as_str()))
-                                                        .write_empty()?;
-                                                    Ok(())
-                                                })?;
-                                                sp.create_element("a:prstGeom")
-                                                    .with_attribute(("prst", "rect"))
-                                                    .write_inner_content(|pg| {
-                                                        pg.create_element("a:avLst").write_empty()?;
-                                                        Ok(())
-                                                    })?;
-                                                Ok(())
-                                            })?;
-                                            Ok(())
+                                            write_pic_body(pic, &id_str, &filename, &cx, &cy, rid, svg_rid)
                                         })?;
                                     Ok(())
                                 })?;
@@ -358,6 +374,79 @@ pub(super) fn write_image_inline<W: Write>(
                 })?;
             Ok(())
         })?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn write_pic_body<W: Write>(
+    pic: &mut Writer<W>,
+    id_str: &str,
+    filename: &str,
+    cx: &str,
+    cy: &str,
+    rid: &str,
+    svg_rid: Option<&str>,
+) -> io::Result<()> {
+    pic.create_element("pic:nvPicPr")
+        .write_inner_content(|nv| {
+            nv.create_element("pic:cNvPr")
+                .with_attribute(("id", id_str))
+                .with_attribute(("name", filename))
+                .write_empty()?;
+            nv.create_element("pic:cNvPicPr").write_empty()?;
+            Ok(())
+        })?;
+    pic.create_element("pic:blipFill")
+        .write_inner_content(|bf| {
+            let blip = bf.create_element("a:blip").with_attribute(("r:embed", rid));
+            if let Some(svg_rid) = svg_rid {
+                blip.write_inner_content(|blip| {
+                    blip.create_element("a:extLst").write_inner_content(|lst| {
+                        lst.create_element("a:ext")
+                            .with_attribute(("uri", "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"))
+                            .write_inner_content(|ext_el| {
+                                ext_el
+                                    .create_element("asvg:svgBlip")
+                                    .with_attribute((
+                                        "xmlns:asvg",
+                                        "http://schemas.microsoft.com/office/drawing/2016/SVG/main",
+                                    ))
+                                    .with_attribute(("r:embed", svg_rid))
+                                    .write_empty()?;
+                                Ok(())
+                            })?;
+                        Ok(())
+                    })?;
+                    Ok(())
+                })?;
+            } else {
+                blip.write_empty()?;
+            }
+            bf.create_element("a:stretch").write_inner_content(|st| {
+                st.create_element("a:fillRect").write_empty()?;
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+    pic.create_element("pic:spPr").write_inner_content(|sp| {
+        sp.create_element("a:xfrm").write_inner_content(|xf| {
+            xf.create_element("a:off")
+                .with_attribute(("x", "0"))
+                .with_attribute(("y", "0"))
+                .write_empty()?;
+            xf.create_element("a:ext")
+                .with_attribute(("cx", cx))
+                .with_attribute(("cy", cy))
+                .write_empty()?;
+            Ok(())
+        })?;
+        sp.create_element("a:prstGeom")
+            .with_attribute(("prst", "rect"))
+            .write_inner_content(|pg| {
+                pg.create_element("a:avLst").write_empty()?;
+                Ok(())
+            })?;
         Ok(())
     })?;
     Ok(())

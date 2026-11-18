@@ -405,9 +405,7 @@ fn pagebreak_inside_include_recovered() {
 
 #[test]
 fn imported_template_line_rule_recovered() {
-    // Retargeted to the legacy path (step 2): #line is an M5 gap on the IR path (dropped; the legacy recovers it).
-    // See docs/fallback-registry.md.
-    let doc_xml = fixture_doc_xml_legacy("imported_line_rule");
+    let doc_xml = fixture_doc_xml("imported_line_rule");
     assert!(
         doc_xml.contains("w:pBdr"),
         "a #line() drawn via an imported template must produce a horizontal rule"
@@ -473,9 +471,7 @@ fn pagebreak_after_nearly_full_page_is_detected() {
 
 #[test]
 fn hrule_produces_paragraph_with_bottom_border() {
-    // Retargeted to the legacy path (step 2): #line is an M5 gap on the IR path (dropped; the legacy recovers it).
-    // See docs/fallback-registry.md.
-    let doc_xml = fixture_doc_xml_legacy("hrule_test");
+    let doc_xml = fixture_doc_xml("hrule_test");
 
     // The document should contain a paragraph border for horizontal rules
     assert!(
@@ -490,9 +486,7 @@ fn hrule_produces_paragraph_with_bottom_border() {
 
 #[test]
 fn hrule_document_model_has_horizontal_rule_flag() {
-    // Retargeted to the legacy path (step 2): #line is an M5 gap on the IR path (dropped; the legacy recovers it).
-    // See docs/fallback-registry.md.
-    let doc = fixture_document_legacy("hrule_test");
+    let doc = fixture_document("hrule_test");
 
     // At least one paragraph should have the horizontal_rule flag set
     let has_hrule = doc.body.elements.iter().any(|e| {
@@ -688,11 +682,9 @@ fn unmappable_page_numbering_is_reported() {
 
 #[test]
 fn source_line_call_still_produces_a_rule() {
-    // Retargeted to the legacy path (step 2): #line is an M5 gap on the IR path (dropped; the legacy recovers it).
-    // See docs/fallback-registry.md.
     // Guard the gate: a document that DOES declare `#line()` must still get its
     // horizontal rule (the gate only suppresses invented ones).
-    let doc_xml = fixture_doc_xml_legacy("hrule_test");
+    let doc_xml = fixture_doc_xml("hrule_test");
     assert!(
         doc_xml.contains("<w:pBdr>"),
         "a real #line() must still render as a horizontal rule:\n{doc_xml}"

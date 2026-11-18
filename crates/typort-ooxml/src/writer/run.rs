@@ -10,7 +10,7 @@ use super::fields::{
     write_field_ref, write_hyperlink, write_toc_field,
 };
 use super::footnotes::write_footnote_ref;
-use super::image::{image_rel_id, write_anchored_line, write_image_inline};
+use super::image::{image_rel_id, svg_rel_id, write_anchored_line, write_image_inline};
 use super::math::write_math_inline;
 use super::package::{write_font_triple, write_size_pair};
 use crate::document::{DocumentStyle, InlineElement, Run};
@@ -41,8 +41,12 @@ pub(super) fn write_inline<W: Write>(
         InlineElement::Image(img) => {
             let n = ctx.image_counter.get() + 1;
             ctx.image_counter.set(n);
-            let rid = image_rel_id(n, ctx.parts);
-            write_image_inline(writer, img, n, &rid)
+            let rid = image_rel_id(n, ctx.images, ctx.parts);
+            let svg_rid = img
+                .svg
+                .is_some()
+                .then(|| svg_rel_id(n, ctx.images, ctx.parts));
+            write_image_inline(writer, img, n, &rid, svg_rid.as_deref())
         }
         InlineElement::Bookmark { id, name } => write_bookmark_start(writer, *id, name),
         InlineElement::BookmarkEnd { id } => write_bookmark_end(writer, *id),

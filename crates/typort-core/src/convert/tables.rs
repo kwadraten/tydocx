@@ -163,6 +163,9 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
                     width_pct: None,
                     vertical_align: None,
                     shading: None,
+                    width_twips: None,
+                    borders: None,
+                    zero_margins: false,
                 });
                 logical_col += colspan as usize;
             } else if src_idx < src_cells.len() {
@@ -203,7 +206,11 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
             }
         }
 
-        final_rows.push(TableRow { cells: new_cells });
+        final_rows.push(TableRow {
+            cells: new_cells,
+            height_twips: None,
+            is_header: false,
+        });
     }
 
     Table {
@@ -212,6 +219,8 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
         border_size: None,
         borders: None,
         cell_margins: None,
+        width_twips: None,
+        col_widths_twips: None,
     }
 }
 
@@ -263,6 +272,9 @@ pub(super) fn convert_table_row(tr: &HtmlElement, ctx: &mut WalkCtx) -> Option<R
                     width_pct: None,
                     vertical_align: None,
                     shading: None,
+                    width_twips: None,
+                    borders: None,
+                    zero_margins: false,
                 });
                 cell_idx += 1;
             }
@@ -271,7 +283,14 @@ pub(super) fn convert_table_row(tr: &HtmlElement, ctx: &mut WalkCtx) -> Option<R
     if cells.is_empty() {
         None
     } else {
-        Some((TableRow { cells }, span_info))
+        Some((
+            TableRow {
+                cells,
+                height_twips: None,
+                is_header: false,
+            },
+            span_info,
+        ))
     }
 }
 

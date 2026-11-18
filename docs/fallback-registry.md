@@ -141,16 +141,20 @@ not a deletion list.
   `DOCUMENTED_DIFFS` even then.
 - **Owner:** step-2 follow-up.
 
-### Drawn / vector figure bodies (rasterization)
-- **What:** a figure whose body is drawn content (shapes, CeTZ, lines)
-  is emitted as an empty paragraph plus a `figure-body-empty`
-  degradation. The legacy path rasterizes the frame to PNG
-  (`rasterize_html_frame` / `rasterize_frame`).
-- **Delete when:** the collector finds the figure's Paged frame by
-  location, rasterizes it to PNG (typst-render), and plumbs it through
-  `IrImage`. Affects `edge_figure_rasterized`.
-- **Owner:** step-2 follow-up (after the M4 grid work; vector figures are
-  the C2 SVG-embed ladder, Phase 2d).
+### Drawn / vector figure bodies — resolved (batch 9, L4 Phase 2d)
+- A figure whose realized body is a drawing canvas is matched to its
+  Paged frame by element `Location` hash (`attach_figure_canvases` in
+  `realize/patch.rs`) and emitted as an `IrImage` carrying both an SVG
+  part (`typst_svg` serialization of the laid-out frame) and a PNG
+  fallback (`typst_render` at 150 DPI). The writer embeds it through
+  `mc:AlternateContent` (`asvg:svgBlip` Choice + raster `a:blip`
+  Fallback); SVG `#image()` bodies keep their source bytes the same
+  way. Canvases attach only when the collected figure body holds no
+  image already, so a text/table figure can never steal one.
+  `edge_figure_rasterized` and `figure_kinds_no_steal` run on the IR
+  path again. C1 keeps the raster-only form plus the `vector-image`
+  degradation; a figure whose canvas cannot be matched still reports
+  `figure-body-empty`.
 
 ### Body-font misdetection on code-dominated documents
 - **What:** the body-font detector votes by glyph count, so a document
@@ -426,9 +430,6 @@ one when its gap is fixed and the test passes on the IR path.
   `superscript_citation_style_raises_the_marker`,
   `golden_bibliography_basic` (regenerating would bake the empty
   bibliography field into the snapshot).
-- Drawn/vector figure rasterization (gap above):
-  `drawing_figure_is_rasterized_not_leaked`,
-  `text_figure_does_not_steal_drawing_raster`.
 - Recovery passes the IR path skips: `edge_bordered_blocks_text_preserved`
   (`#rect()` text only; the `#block` assertions pass on the IR path),
   `grid_document_model_has_tab_inlines` and `grid_multi_column_has_tab_stops`
@@ -440,10 +441,6 @@ one when its gap is fixed and the test passes on the IR path.
   `issue_final_section_landscape_sections`,
   `section_break_document_model_has_section_break`,
   `section_break_produces_multiple_sect_pr`.
-- `#line` horizontal rules (M5 gap): `hrule_produces_paragraph_with_bottom_border`,
-  `imported_template_line_rule_recovered`,
-  `hrule_document_model_has_horizontal_rule_flag`,
-  `source_line_call_still_produces_a_rule`.
 - Fragment counter re-evaluation (gap above):
   `golden_edge_theorem_proof`.
 
@@ -568,8 +565,19 @@ pre-cleanup redundant size override).
   branch in `collect_fragment_inlines` for mid-paragraph shapes).
   Shapes become `IrBlock`/`IrInline::Shape` — C1 emits a `shape`
   degradation, all modes keep the body text (`#rect[Text]` survives).
-  `#line` is recovered the same way and deliberately still dropped —
-  the horizontal-rule recovery stays a legacy-only pass.
+  `#line` resolves the same way — its built-in show rule is
+  context-wrapped, so evaluating the `ContextElem` exposes the
+  `LineElem`, and `line_blocks` emits a horizontal-rule paragraph (the
+  former M5 `#line` gap against the legacy path is closed).
+- Content produced inside `context { … }` keeps the `ContextElem`'s
+  span, so the index returns the closure wrapper rather than the
+  displayed element. `collect_context_group` applies the public
+  `typst_library::foundations::CONTEXT_RULE` to the packed
+  `ContextElem` — the same rule realization runs — and collects the
+  displayed content recursively (timble's `#context rect(grid(…))`
+  resolves to a real grid this way). A context expression with no
+  location reports `context-content`; a layouter block whose span
+  cannot be traced back at all reports `layouter-body`.
 
 ### Citation sources
 - The IR path uses `extract_bibliography_sources` through its own
@@ -588,3 +596,32 @@ pre-cleanup redundant size override).
   correctness issue — the conversion is exhaustive and tested by the
   equivalence corpus — but it is duplication worth one cleanup change.
 - **Owner:** step-2 follow-up.
+
+### Grid planning (batch 9, M4 Phase 2a)
+- `GridElem` collection keeps every source row (empty time-slot rows
+  included) plus per-cell `x`/`colspan`/`rowspan`/fill/stroke, the
+  resolved `CellGrid` track sizing and h/v lines, header flags, and
+  row heights measured by laying the grid fragment out with
+  `typst_layout::layout_frame` at the page content width.
+  `typort-ir::grid_plan::plan_grid` is a pure planner: it derives a
+  lane/track occupancy grid from cell coordinates and spans — the
+  empty cells Typst materializes at positions no declared cell covers
+  (empty body, no fill) count as mergeable whitespace, while a stroke
+  on such a cell still pins the boundary it sits on — compresses runs
+  of uncut rows into one `w:tr` with `w:vMerge`-free exact
+  `w:trHeight`, merges adjacent lanes whose occupancy is identical
+  into `w:gridSpan` columns, and maps cell spans to
+  `gridSpan`/`vMerge`. Lanes covered by a span are planning
+  markers only (`PlannedCellKind::Filler`) — they never become extra
+  `w:tc` elements. Planned tables get fixed layout, per-column twip
+  widths resolved from `fr`/fixed/relative/auto tracks, zero cell
+  margins, and 1pt paragraph marks in empty cells so Word does not
+  inflate empty slots; grid h/v lines become `w:tcBorders` and cell
+  fills `w:shd`, propagated across span continuations.
+- **Remaining degradations:** a grid wider than `MAX_COLUMNS` (63)
+  lanes is split at lane boundaries into consecutive tables and
+  reports `grid-column-split`; `fr` row heights are measured from one
+  laid-out frame, so they are the renderer's heights, not Word's own line
+  layout, while `auto` rows are measured per row from their own cell
+  bodies; C1 still flattens grids to paragraphs with the
+  `grid-layout` degradation.

@@ -121,6 +121,7 @@ pub(super) fn generate_footnotes_xml(
         // (rId{k+1}), so the ordinal must not reset per footnote or a later
         // footnote's drawing would embed the first image again.
         let mut image_ordinal = 0_usize;
+        let mut rel_ordinal = 0_usize;
         for footnote in &doc.footnotes {
             let id_str = footnote.id.to_string();
             w.create_element("w:footnote")
@@ -162,9 +163,14 @@ pub(super) fn generate_footnotes_xml(
                         for inline in &footnote.content {
                             if let InlineElement::Image(img) = inline {
                                 image_ordinal += 1;
+                                rel_ordinal += 1;
                                 let n = footnote_image_base + image_ordinal;
-                                let rid = format!("rId{image_ordinal}");
-                                write_image_inline(p_w, img, n, &rid)?;
+                                let rid = format!("rId{rel_ordinal}");
+                                let svg_rid = img.svg.as_ref().map(|_| {
+                                    rel_ordinal += 1;
+                                    format!("rId{rel_ordinal}")
+                                });
+                                write_image_inline(p_w, img, n, &rid, svg_rid.as_deref())?;
                             } else {
                                 write_inline(p_w, inline, ctx)?;
                             }
@@ -195,18 +201,32 @@ pub(super) fn generate_footnote_rels(
             "http://schemas.openxmlformats.org/package/2006/relationships",
         ))
         .write_inner_content(|w| {
+            let mut rel = 0_usize;
             for (k, img) in footnote_images.iter().enumerate() {
                 let n = footnote_image_base + k + 1;
                 let ext = img.format.extension();
                 let target = format!("../media/image{n}.{ext}");
+                rel += 1;
                 w.create_element("Relationship")
-                    .with_attribute(("Id", format!("rId{}", k + 1).as_str()))
+                    .with_attribute(("Id", format!("rId{rel}").as_str()))
                     .with_attribute((
                         "Type",
                         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
                     ))
                     .with_attribute(("Target", target.as_str()))
                     .write_empty()?;
+                if img.svg.is_some() {
+                    rel += 1;
+                    let svg_target = format!("../media/image{n}.svg");
+                    w.create_element("Relationship")
+                        .with_attribute(("Id", format!("rId{rel}").as_str()))
+                        .with_attribute((
+                            "Type",
+                            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                        ))
+                        .with_attribute(("Target", svg_target.as_str()))
+                        .write_empty()?;
+                }
             }
             Ok(())
         })?;

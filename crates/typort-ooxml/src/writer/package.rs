@@ -4,7 +4,7 @@ use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesText, Event};
 
 use super::footnotes::write_footnote_pr;
-use super::image::image_rel_id;
+use super::image::{image_rel_id, svg_rel_id};
 use super::{DocParts, RelKind};
 use crate::document::{Document, DocumentStyle, ImageData, ImageFormat};
 
@@ -129,8 +129,10 @@ pub(super) fn generate_content_types(
                 .with_attribute(("Extension", "xml"))
                 .with_attribute(("ContentType", "application/xml"))
                 .write_empty()?;
-            for format in [ImageFormat::Png, ImageFormat::Jpeg] {
-                if images.iter().any(|image| image.format == format) {
+            for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Svg] {
+                if images.iter().any(|image| {
+                    image.format == format || (format == ImageFormat::Svg && image.svg.is_some())
+                }) {
                     w.create_element("Default")
                         .with_attribute(("Extension", format.extension()))
                         .with_attribute(("ContentType", format.content_type()))
@@ -241,7 +243,7 @@ pub(super) fn generate_document_rels(
 
             // Image relationships
             for (idx, img) in images.iter().enumerate() {
-                let rid = image_rel_id(idx + 1, parts);
+                let rid = image_rel_id(idx + 1, images, parts);
                 let ext = img.format.extension();
                 let target = format!("media/image{}.{ext}", idx + 1);
                 w.create_element("Relationship")
@@ -252,6 +254,18 @@ pub(super) fn generate_document_rels(
                     ))
                     .with_attribute(("Target", target.as_str()))
                     .write_empty()?;
+                if img.svg.is_some() {
+                    let svg_rid = svg_rel_id(idx + 1, images, parts);
+                    let svg_target = format!("media/image{}.svg", idx + 1);
+                    w.create_element("Relationship")
+                        .with_attribute(("Id", svg_rid.as_str()))
+                        .with_attribute((
+                            "Type",
+                            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                        ))
+                        .with_attribute(("Target", svg_target.as_str()))
+                        .write_empty()?;
+                }
             }
             Ok(())
         })?;

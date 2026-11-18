@@ -10,8 +10,9 @@ use typst_library::layout::{Frame, FrameItem};
 use typst_library::text::{FontStyle, TextItem};
 use typst_library::visualize::ImageKind;
 
+use super::collect::location_hash64;
 use super::style::{contains_cjk, lower_runs_match};
-use crate::convert::image::{collect_image_sizes, hash_bytes};
+use crate::convert::image::{collect_image_sizes, extract_figure_rasters, hash_bytes};
 use crate::convert::page::{effective_style, effective_weight, extract_non_black_color};
 
 pub fn patch_document(
@@ -23,7 +24,7 @@ pub fn patch_document(
 ) -> Vec<Degradation> {
     let mut degradations = Vec::new();
 
-    let entries = collect_footnote_entries(paged, style, &mut degradations);
+    let entries = collect_footnote_entries(paged, style);
     let ordered = &entries.in_order;
     let mut used: Vec<bool> = vec![false; ordered.len()];
     let mut footnotes = Vec::new();
@@ -37,16 +38,19 @@ pub fn patch_document(
                 Some(body.clone())
             }
             None => match entries.by_location.get(location) {
-                Some(body) => {
+                Some(entry) => {
                     if let Some(pos) = ordered.iter().position(|(loc, _)| loc == location) {
                         used[pos] = true;
                     }
-                    Some(body.clone())
+                    degradations.extend(entry.skipped.iter().cloned());
+                    Some(entry.paragraphs.clone())
                 }
                 None => {
                     if index < ordered.len() && !used[index] {
                         used[index] = true;
-                        Some(ordered[index].1.clone())
+                        let entry = &ordered[index].1;
+                        degradations.extend(entry.skipped.iter().cloned());
+                        Some(entry.paragraphs.clone())
                     } else {
                         None
                     }
@@ -79,37 +83,42 @@ pub fn patch_document(
         }
     }
 
+    let mut canvases: HashMap<u64, typort_ooxml::document::ImageData> =
+        extract_figure_rasters(paged)
+            .into_iter()
+            .map(|(loc, data)| (location_hash64(loc), data))
+            .collect();
+    attach_figure_canvases(&mut doc.body, &mut canvases);
+
     degradations
 }
 
-struct FootnoteEntries {
-    by_location: HashMap<Location, Vec<IrParagraph>>,
-    in_order: Vec<(Location, Vec<IrParagraph>)>,
+struct EntryBody {
+    paragraphs: Vec<IrParagraph>,
+    /// Images the frame walk could not materialize; reported only when this
+    /// frame body is actually used (a collected pair body embeds them).
+    skipped: Vec<Degradation>,
 }
 
-fn collect_footnote_entries(
-    paged: &PagedDocument,
-    style: &DocumentStyle,
-    degradations: &mut Vec<Degradation>,
-) -> FootnoteEntries {
+struct FootnoteEntries {
+    by_location: HashMap<Location, EntryBody>,
+    in_order: Vec<(Location, EntryBody)>,
+}
+
+fn collect_footnote_entries(paged: &PagedDocument, style: &DocumentStyle) -> FootnoteEntries {
     let mut entries = FootnoteEntries {
         by_location: HashMap::new(),
         in_order: Vec::new(),
     };
     for page in paged.pages() {
-        collect_entries_from_frame(&page.frame, style, degradations, &mut entries);
+        collect_entries_from_frame(&page.frame, style, &mut entries);
     }
     entries
 }
 
 /// Outline entries share the `"entry"` tag but have no parent, so they
 /// never match here.
-fn collect_entries_from_frame(
-    frame: &Frame,
-    style: &DocumentStyle,
-    degradations: &mut Vec<Degradation>,
-    entries: &mut FootnoteEntries,
-) {
+fn collect_entries_from_frame(frame: &Frame, style: &DocumentStyle, entries: &mut FootnoteEntries) {
     for (_, item) in frame.items() {
         if let FrameItem::Group(group) = item {
             if crate::convert::frames::is_footnote_entry_group(group)
@@ -119,19 +128,27 @@ fn collect_entries_from_frame(
                     style,
                     tag_stack: Vec::new(),
                     paragraph: IrParagraph::default(),
+                    skipped: Vec::new(),
                 };
-                walk_entry_frame(&group.frame, &mut walk, degradations);
+                walk_entry_frame(&group.frame, &mut walk);
                 let mut body = vec![walk.paragraph];
                 body.retain(|para| !para.inlines.is_empty());
-                if entries
-                    .by_location
-                    .insert(parent.location, body.clone())
-                    .is_none()
-                {
-                    entries.in_order.push((parent.location, body));
+                let entry = EntryBody {
+                    paragraphs: body,
+                    skipped: walk.skipped,
+                };
+                if !entries.by_location.contains_key(&parent.location) {
+                    entries.in_order.push((
+                        parent.location,
+                        EntryBody {
+                            paragraphs: entry.paragraphs.clone(),
+                            skipped: entry.skipped.clone(),
+                        },
+                    ));
                 }
+                entries.by_location.insert(parent.location, entry);
             }
-            collect_entries_from_frame(&group.frame, style, degradations, entries);
+            collect_entries_from_frame(&group.frame, style, entries);
         }
     }
 }
@@ -140,9 +157,10 @@ struct EntryWalk<'a> {
     style: &'a DocumentStyle,
     tag_stack: Vec<(&'static str, Location)>,
     paragraph: IrParagraph,
+    skipped: Vec<Degradation>,
 }
 
-fn walk_entry_frame(frame: &Frame, walk: &mut EntryWalk<'_>, degradations: &mut Vec<Degradation>) {
+fn walk_entry_frame(frame: &Frame, walk: &mut EntryWalk<'_>) {
     for (_, item) in frame.items() {
         match item {
             FrameItem::Tag(tag) => match tag {
@@ -176,13 +194,13 @@ fn walk_entry_frame(frame: &Frame, walk: &mut EntryWalk<'_>, degradations: &mut 
                 push_merged(&mut walk.paragraph, run);
             }
             FrameItem::Group(group) => {
-                walk_entry_frame(&group.frame, walk, degradations);
+                walk_entry_frame(&group.frame, walk);
             }
             FrameItem::Image(image, size, _) => {
                 if !in_entry(walk) {
                     continue;
                 }
-                push_frame_image(image, size, walk, degradations);
+                push_frame_image(image, size, walk);
             }
             FrameItem::Shape(..) | FrameItem::Link(..) => {}
         }
@@ -236,15 +254,15 @@ fn push_frame_image(
     image: &typst_library::visualize::Image,
     size: &typst_library::layout::Size,
     walk: &mut EntryWalk<'_>,
-    degradations: &mut Vec<Degradation>,
 ) {
     let ImageKind::Raster(raster) = image.kind() else {
-        degradations.push(Degradation {
+        walk.skipped.push(Degradation {
             span: None,
             construct: "footnote-svg-image",
             action: DegradationAction::Skipped,
-            message: "an SVG/PDF image inside a footnote has no raster form in the patch; skipped"
-                .to_string(),
+            message:
+                "an SVG/PDF image inside a footnote has no raster form in the paged frame; skipped"
+                    .to_string(),
         });
         return;
     };
@@ -254,7 +272,7 @@ fn push_frame_image(
     } else if is_jpeg(&bytes) {
         Some("image/jpeg".to_string())
     } else {
-        degradations.push(Degradation {
+        walk.skipped.push(Degradation {
             span: None,
             construct: "footnote-image-format",
             action: DegradationAction::Skipped,
@@ -272,6 +290,7 @@ fn push_frame_image(
         vector: false,
         non_cover_fit: false,
         alt: None,
+        svg: None,
     }));
 }
 
@@ -336,6 +355,83 @@ fn patch_block_images(blocks: &mut [IrBlock], sizes: &HashMap<u64, (u64, u64)>) 
             IrBlock::Equation(_) | IrBlock::Raw(_) | IrBlock::PageBreak { .. } => {}
         }
     }
+}
+
+fn attach_figure_canvases(
+    blocks: &mut [IrBlock],
+    canvases: &mut HashMap<u64, typort_ooxml::document::ImageData>,
+) {
+    for block in blocks {
+        match block {
+            IrBlock::Figure {
+                body,
+                location_hash,
+                ..
+            } => {
+                if let Some(data) = location_hash.and_then(|hash| canvases.remove(&hash))
+                    && !blocks_have_image(body)
+                {
+                    body.insert(
+                        0,
+                        IrBlock::Paragraph(IrParagraph {
+                            inlines: vec![IrInline::Image(IrImage {
+                                source_hash: hash_bytes(&data.bytes),
+                                bytes: data.bytes,
+                                width_emu: data.width_emu,
+                                height_emu: data.height_emu,
+                                mime: Some("image/png".to_string()),
+                                span: None,
+                                vector: true,
+                                non_cover_fit: false,
+                                alt: None,
+                                svg: data.svg,
+                            })],
+                            ..IrParagraph::default()
+                        }),
+                    );
+                }
+                attach_figure_canvases(body, canvases);
+            }
+            IrBlock::Table(table) => {
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        attach_figure_canvases(&mut cell.body, canvases);
+                    }
+                }
+            }
+            IrBlock::Grid(grid) => {
+                for row in &mut grid.rows {
+                    for cell in &mut row.cells {
+                        attach_figure_canvases(&mut cell.body, canvases);
+                    }
+                }
+            }
+            IrBlock::List(list) => {
+                for item in &mut list.items {
+                    attach_figure_canvases(&mut item.body, canvases);
+                }
+            }
+            IrBlock::Enum(enumer) => {
+                for item in &mut enumer.items {
+                    attach_figure_canvases(&mut item.body, canvases);
+                }
+            }
+            IrBlock::Quote { body } | IrBlock::Place { body, .. } | IrBlock::Shape { body, .. } => {
+                attach_figure_canvases(body, canvases);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn blocks_have_image(blocks: &[IrBlock]) -> bool {
+    blocks.iter().any(|block| match block {
+        IrBlock::Paragraph(para) => para
+            .inlines
+            .iter()
+            .any(|inline| matches!(inline, IrInline::Image(_))),
+        _ => false,
+    })
 }
 
 fn patch_inline_images(inlines: &mut [IrInline], sizes: &HashMap<u64, (u64, u64)>) {

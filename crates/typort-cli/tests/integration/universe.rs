@@ -101,9 +101,10 @@ fn v07_shapes_and_dividers() {
     assert_has(&constructs, "shape");
     let xml = fixture_doc_xml("universe_shapes");
     assert!(xml.contains("Body text"));
+    assert!(!xml.contains("Divider"), "#divider stays invisible");
     assert!(
-        !xml.contains("Divider") && !xml.contains("<w:pBdr"),
-        "divider/line produce no visible output in the realize path"
+        xml.contains("<w:pBdr"),
+        "#line resolves through its context wrapper to a paragraph rule"
     );
 }
 

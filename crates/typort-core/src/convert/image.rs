@@ -101,6 +101,7 @@ pub(super) fn image_data_from_src(
             Some(ImageData {
                 bytes,
                 format,
+                svg: None,
                 width_emu: w,
                 height_emu: h,
             })
@@ -119,6 +120,7 @@ pub(super) fn image_data_from_src(
             Some(ImageData {
                 bytes: png,
                 format: ImageFormat::Png,
+                svg: None,
                 width_emu: w,
                 height_emu: h,
             })
@@ -142,6 +144,7 @@ pub(super) fn image_data_from_src(
             Some(ImageData {
                 bytes: png,
                 format: ImageFormat::Png,
+                svg: Some(bytes),
                 width_emu: w,
                 height_emu: h,
             })
@@ -310,10 +313,19 @@ fn rasterize_frame(frame: &Frame) -> Option<ImageData> {
     };
     let pixmap = typst_render::render(&page, &opts);
     let bytes = pixmap.encode_png().ok()?;
+    let svg = Some(frame_svg(&page));
     Some(ImageData {
         bytes,
         format: ImageFormat::Png,
+        svg,
         width_emu: (width_pt * 12700.0) as u64,
         height_emu: (height_pt * 12700.0) as u64,
     })
+}
+
+/// Serialize a drawing frame to SVG — the vector-preserving companion to the
+/// PNG rasterization.
+fn frame_svg(page: &typst_layout::Page) -> Vec<u8> {
+    let opts = typst_svg::SvgOptions::default();
+    typst_svg::svg(page, &opts).into_bytes()
 }

@@ -2,26 +2,28 @@ use std::collections::HashMap;
 
 use codex::numeral_systems::NamedNumeralSystem;
 use typort_ir::{
-    Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrDocument, IrDocumentInfo,
-    IrEnum, IrEnumItem, IrEquation, IrFigureKind, IrGrid, IrHeadingNumbering, IrInline, IrList,
-    IrListItem, IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrRaw,
-    IrSection, IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge,
+    Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrBorder,
+    IrCellBorderFlags, IrCellBorders, IrDocument, IrDocumentInfo, IrEnum, IrEnumItem, IrEquation,
+    IrFigureKind, IrGrid, IrGridLine, IrHeadingNumbering, IrInline, IrList, IrListItem,
+    IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrRaw, IrSection,
+    IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrTrackSize, IrVMerge,
     PageSettings, TableBorders, TableCellMargins,
 };
 use typort_ooxml::document::{Alignment, Run, VerticalAlign};
 use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
 use typst_library::foundations::{
-    Content, Datetime, Element, LocatableSelector, NativeElement, Packed, SequenceElem, Smart,
-    StyleChain, StyledElem, Value,
+    Content, ContextElem, Datetime, Element, LocatableSelector, NativeElement, Packed,
+    SequenceElem, Smart, StyleChain, StyledElem, Value,
 };
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::grid::Celled;
+use typst_library::layout::grid::GridCell;
 use typst_library::layout::grid::resolve::{Cell, CellGrid, Entry, Line};
 use typst_library::layout::{
-    Abs, Angle, BlockBody, BlockElem, ColbreakElem, ColumnsElem, GridElem, HAlignment, HideElem,
-    Length, Margin, MoveElem, PadElem, PageElem, PagebreakElem, Parity, PlaceElem, Rel, RotateElem,
-    ScaleElem, SkewElem, Spacing, VAlignment, VElem,
+    Abs, Angle, Axes, BlockBody, BlockElem, ColbreakElem, ColumnsElem, GridElem, HAlignment,
+    HideElem, Length, Margin, MoveElem, PadElem, PageElem, PagebreakElem, Parity, PlaceElem,
+    Region, Rel, RotateElem, ScaleElem, Sides, Size, Sizing, SkewElem, Spacing, VAlignment, VElem,
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
@@ -264,6 +266,7 @@ struct FigureMeta {
     label: Option<String>,
     custom_placement: bool,
     gap_twips: Option<u32>,
+    location_hash: Option<u64>,
 }
 
 impl Collector<'_> {
@@ -424,6 +427,9 @@ impl Collector<'_> {
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<Vec<IrBlock>> {
+        if inner.to_packed::<ContextElem>().is_some() {
+            return self.collect_context_group(inner, styles, engine, locator);
+        }
         if let Some(heading) = inner.to_packed::<HeadingElem>() {
             return Ok(vec![self.collect_heading(
                 heading, inner, group, styles, engine, locator,
@@ -492,7 +498,51 @@ impl Collector<'_> {
             let para = collect_paragraph(&par.body, styles, engine, locator, &mut ctx)?;
             return Ok(vec![IrBlock::Paragraph(para)]);
         }
+        if let Some((kind, shape_body)) = shape_parts(inner) {
+            let body = match shape_body {
+                Some(shape_content) => {
+                    self.collect_content_blocks(&shape_content, styles, engine, locator)?
+                }
+                None => Vec::new(),
+            };
+            return Ok(vec![IrBlock::Shape {
+                kind,
+                span: {
+                    let span = inner.span();
+                    span.id().map(|_| span)
+                },
+                body,
+            }]);
+        }
         self.collect_blocks(group, engine, locator, false)
+    }
+
+    /// Content lifted out of `context { … }` reaches the pairs only as an
+    /// opaque layouter block tagged with the `ContextElem` itself. Applying
+    /// `CONTEXT_RULE` evaluates the closure the way realization does, exposing
+    /// the elements it displayed (timble's rect-wrapped grid).
+    fn collect_context_group(
+        &mut self,
+        content: &Content,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrBlock>> {
+        let Some(ctx) = content.to_packed::<ContextElem>() else {
+            return Ok(Vec::new());
+        };
+        if ctx.location().is_none() {
+            self.degradations.push(Degradation {
+                span: Some(content.span()),
+                construct: "context-content",
+                action: DegradationAction::Skipped,
+                message: "a `context` expression has no location and cannot be evaluated; its content is dropped"
+                    .to_string(),
+            });
+            return Ok(Vec::new());
+        }
+        let displayed = typst_library::foundations::CONTEXT_RULE(ctx, engine, styles)?;
+        self.collect_content_blocks(&displayed, styles, engine, locator)
     }
 
     fn image_paragraph(
@@ -611,7 +661,25 @@ impl Collector<'_> {
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<Vec<IrBlock>> {
-        let Some(original) = self.layouter_index.get(&content.span()).cloned() else {
+        let mut original = self.layouter_index.get(&content.span()).cloned();
+        if let Some(ctx) = original.as_ref()
+            && ctx.to_packed::<ContextElem>().is_some()
+        {
+            let blocks = self.collect_context_group(ctx, styles, engine, locator)?;
+            if !blocks.is_empty() {
+                return Ok(blocks);
+            }
+            original = None;
+        }
+        let Some(original) = original else {
+            self.degradations.push(Degradation {
+                span: Some(content.span()),
+                construct: "layouter-body",
+                action: DegradationAction::Skipped,
+                message:
+                    "a layout callback's content could not be traced back to its element; dropped"
+                        .to_string(),
+            });
             return Ok(Vec::new());
         };
         if let Some(pad) = original.to_packed::<PadElem>() {
@@ -635,6 +703,16 @@ impl Collector<'_> {
                 body,
             }]);
         }
+        if is_block_element(&original) {
+            return self.collect_content_element(&original, styles, engine, locator);
+        }
+        self.degradations.push(Degradation {
+            span: Some(content.span()),
+            construct: "layouter-body",
+            action: DegradationAction::Skipped,
+            message: "a layout callback's content could not be traced back to its element; dropped"
+                .to_string(),
+        });
         Ok(Vec::new())
     }
 
@@ -648,6 +726,10 @@ impl Collector<'_> {
         self.collect_body_blocks(content, &ListCtx::default(), styles, engine, locator)
     }
 
+    /// Collect one content node's block-level children. Root
+    /// `StyledElem`/`ParElem`/`BlockElem` wrappers are descended here — not
+    /// in `content_children` — so a `StyledElem`'s `styles` stay chained for
+    /// everything below it (a `#text(size: …)[…]` cell keeps its size).
     fn collect_body_blocks(
         &mut self,
         content: &Content,
@@ -656,7 +738,41 @@ impl Collector<'_> {
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<Vec<IrBlock>> {
+        if let Some(styled) = content.to_packed::<StyledElem>() {
+            return self.collect_body_blocks(
+                &styled.child,
+                list_ctx,
+                styles.chain(&styled.styles),
+                engine,
+                locator,
+            );
+        }
+        if let Some(par) = content.to_packed::<ParElem>() {
+            return self.collect_body_blocks(&par.body, list_ctx, styles, engine, locator);
+        }
+        if let Some(block) = content.to_packed::<BlockElem>() {
+            return match block.body.as_option() {
+                Some(Some(BlockBody::Content(body))) => {
+                    self.collect_body_blocks(body, list_ctx, styles, engine, locator)
+                }
+                _ => Ok(Vec::new()),
+            };
+        }
         let children = flatten_sequences(content_children(content));
+        self.collect_body_children(&children, list_ctx, styles, engine, locator)
+    }
+
+    /// Walk one level of block children: block elements flush the pending
+    /// inline run and collect directly, inline elements accumulate into the
+    /// next paragraph, `v`/`pad` attach spacing to the following block.
+    fn collect_body_children(
+        &mut self,
+        children: &[&Content],
+        list_ctx: &ListCtx,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrBlock>> {
         let mut out = Vec::new();
         let mut pending: Vec<Content> = Vec::new();
         let mut pending_vspace: Option<u32> = None;
@@ -680,7 +796,7 @@ impl Collector<'_> {
                 )?);
                 i += 1;
             } else if let Some((blocks, next)) =
-                self.collect_bare_items(&children, i, list_ctx, styles, engine, locator)?
+                self.collect_bare_items(children, i, list_ctx, styles, engine, locator)?
             {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
                 out.extend(blocks);
@@ -723,7 +839,7 @@ impl Collector<'_> {
                     message: "`hide()` reserves space with no content; the placeholder is dropped"
                         .to_string(),
                 });
-                i = skip_tag_children(&children, i + 1, inner.location());
+                i = skip_tag_children(children, i + 1, inner.location());
             } else if is_block_element(child) {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
                 out.extend(self.collect_content_element(child, styles, engine, locator)?);
@@ -1197,6 +1313,7 @@ impl Collector<'_> {
             label: inner.label().map(|l| l.resolve().to_string()),
             custom_placement: figure_custom_placement(figure),
             gap_twips: figure_gap_twips(figure, styles, self.em_pt()),
+            location_hash: inner.location().map(location_hash64),
         };
         for (content, pair_styles) in group {
             let rendered = if let Some(block) = content.to_packed::<BlockElem>() {
@@ -1234,6 +1351,7 @@ impl Collector<'_> {
             label: inner.label().map(|l| l.resolve().to_string()),
             custom_placement: figure_custom_placement(figure),
             gap_twips: figure_gap_twips(figure, styles, self.em_pt()),
+            location_hash: inner.location().map(location_hash64),
         };
         with_fragment(engine, locator, inner, styles, |engine, locator, pairs| {
             self.collect_figure_pairs(pairs, &meta, engine, locator)
@@ -1328,6 +1446,7 @@ impl Collector<'_> {
             caption_first,
             custom_placement: meta.custom_placement,
             gap_twips: meta.gap_twips,
+            location_hash: meta.location_hash,
         })
     }
 
@@ -1662,14 +1781,18 @@ impl Collector<'_> {
                 rows: Vec::new(),
                 column_widths_pct: None,
                 borders: Some(TableBorders::default()),
+                row_sizes: Vec::new(),
+                col_sizes: Vec::new(),
+                hlines: Vec::new(),
+                vlines: Vec::new(),
             }));
         };
         if let Some(cell_grid) = grid.grid.as_ref()
             && !cell_grid.entries.is_empty()
         {
-            return Ok(IrBlock::Grid(
-                self.cell_grid_to_grid(cell_grid, grid, styles, engine, locator)?,
-            ));
+            return Ok(IrBlock::Grid(self.cell_grid_to_grid(
+                cell_grid, grid, content, styles, engine, locator,
+            )?));
         }
         let mut found: Option<IrBlock> = None;
         with_fragment(
@@ -1688,6 +1811,7 @@ impl Collector<'_> {
                         found = Some(IrBlock::Grid(self.cell_grid_to_grid(
                             frag_cell_grid,
                             frag_grid,
+                            inner,
                             *frag_styles,
                             engine,
                             locator,
@@ -1711,6 +1835,10 @@ impl Collector<'_> {
             rows: Vec::new(),
             column_widths_pct: None,
             borders: Some(TableBorders::default()),
+            row_sizes: Vec::new(),
+            col_sizes: Vec::new(),
+            hlines: Vec::new(),
+            vlines: Vec::new(),
         }))
     }
 
@@ -1722,7 +1850,7 @@ impl Collector<'_> {
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrTable> {
-        let (rows, col_count) = self.cell_grid_rows(grid, styles, engine, locator)?;
+        let (rows, col_count) = self.cell_grid_rows(grid, false, styles, engine, locator)?;
         let column_widths_pct = self.table_column_widths(table, col_count, styles);
         Ok(IrTable {
             rows,
@@ -1737,22 +1865,46 @@ impl Collector<'_> {
         &mut self,
         grid: &CellGrid,
         grid_elem: &GridElem,
+        content: &Content,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrGrid> {
-        let (rows, col_count) = self.cell_grid_rows(grid, styles, engine, locator)?;
+        let heights = measure_grid_row_heights(grid, content, styles, engine, locator);
+        let (mut rows, col_count) = self.cell_grid_rows(grid, true, styles, engine, locator)?;
+        if let Some(heights) = heights {
+            for (row, twips) in rows.iter_mut().zip(heights.iter()) {
+                row.height_twips = *twips;
+            }
+        }
         let column_widths_pct = self.grid_column_widths(grid_elem, col_count, styles);
+        let n_col_tracks = non_gutter_sizes(&grid.cols, grid.has_gutter).len();
+        let n_row_tracks = non_gutter_sizes(&grid.rows, grid.has_gutter).len();
         Ok(IrGrid {
             rows,
             column_widths_pct,
             borders: table_borders_from_grid(grid),
+            row_sizes: non_gutter_sizes(&grid.rows, grid.has_gutter),
+            col_sizes: non_gutter_sizes(&grid.cols, grid.has_gutter),
+            hlines: grid
+                .hlines
+                .iter()
+                .flatten()
+                .filter_map(|line| ir_grid_line(line, n_col_tracks))
+                .collect(),
+            vlines: grid
+                .vlines
+                .iter()
+                .flatten()
+                .filter_map(|line| ir_grid_line(line, n_row_tracks))
+                .collect(),
         })
     }
 
     fn cell_grid_rows(
         &mut self,
         grid: &CellGrid,
+        keep_empty: bool,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
@@ -1760,6 +1912,9 @@ impl Collector<'_> {
         let col_count = grid.non_gutter_column_count();
         let mut rows = Vec::new();
         for y in 0..grid.rows.len() {
+            if grid.has_gutter && y % 2 == 1 {
+                continue;
+            }
             let is_header = grid
                 .headers
                 .iter()
@@ -1767,23 +1922,31 @@ impl Collector<'_> {
             let mut cells = Vec::new();
             let mut x = 0;
             while x < grid.cols.len() {
+                if grid.has_gutter && x % 2 == 1 {
+                    x += 1;
+                    continue;
+                }
+                let cell_x = if grid.has_gutter { x / 2 } else { x };
                 match grid.entry(x, y) {
                     Some(Entry::Cell(cell)) => {
-                        cells.push(
-                            self.resolved_cell_to_ir(cell, is_header, styles, engine, locator)?,
-                        );
+                        cells.push(self.resolved_cell_to_ir(
+                            cell, cell_x, is_header, styles, engine, locator,
+                        )?);
                     }
                     Some(Entry::Merged { parent }) => {
                         let parent_row = parent.checked_div(col_count).unwrap_or(rows.len());
                         if parent_row < rows.len() {
                             cells.push(IrTableCell {
                                 body: Vec::new(),
+                                x: cell_x,
                                 colspan: 1,
                                 rowspan: 1,
                                 vmerge: IrVMerge::Continue,
                                 fill_hex: None,
                                 vertical_align: None,
                                 inset_twips: None,
+                                borders: typort_ir::IrCellBorders::default(),
+                                borders_declared: typort_ir::IrCellBorderFlags::default(),
                             });
                         }
                     }
@@ -1791,8 +1954,12 @@ impl Collector<'_> {
                 }
                 x += 1;
             }
-            if !cells.is_empty() {
-                rows.push(IrTableRow { cells });
+            if keep_empty || !cells.is_empty() {
+                rows.push(IrTableRow {
+                    cells,
+                    height_twips: None,
+                    is_header,
+                });
             }
         }
         Ok((rows, col_count))
@@ -1801,56 +1968,34 @@ impl Collector<'_> {
     fn resolved_cell_to_ir(
         &mut self,
         cell: &Cell,
+        cell_x: usize,
         is_header: bool,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrTableCell> {
         let table_cell = cell.body.to_packed::<TableCell>();
-        let fill_hex = cell.fill.as_ref().and_then(paint_to_shd_hex).or_else(|| {
-            table_cell.and_then(|tc| match tc.fill.get_cloned(styles) {
-                Smart::Custom(Some(paint)) => paint_to_shd_hex(&paint),
-                _ => None,
-            })
-        });
-        let vertical_align = table_cell
-            .and_then(|tc| match tc.align.get_cloned(styles) {
-                Smart::Custom(align) => align.y(),
-                Smart::Auto => None,
-            })
-            .map(|v| match v {
-                VAlignment::Top => VerticalAlign::Top,
-                VAlignment::Horizon => VerticalAlign::Center,
-                VAlignment::Bottom => VerticalAlign::Bottom,
-            });
-        let horizontal_align = table_cell
-            .and_then(|tc| match tc.align.get_cloned(styles) {
-                Smart::Custom(align) => align.x(),
-                Smart::Auto => None,
-            })
-            .map(|h| match h {
-                HAlignment::Left | HAlignment::Start => Alignment::Left,
-                HAlignment::Center => Alignment::Center,
-                HAlignment::Right | HAlignment::End => Alignment::Right,
-            });
-        let inset_twips = table_cell
-            .and_then(|tc| match tc.inset.get_cloned(styles) {
-                Smart::Custom(sides) => sides
-                    .left
-                    .map(|rel| rel.abs.at(Abs::pt(11.0)).to_pt() * 20.0),
-                Smart::Auto => None,
-            })
-            .map(|pt| {
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    reason = "insets are small non-negative lengths"
-                )]
-                let twips = pt.round().max(0.0) as u32;
-                twips
-            });
-        let body_content = table_cell.map_or_else(|| cell.body.clone(), |tc| tc.body.clone());
-        let mut body = self.collect_content_blocks(&body_content, styles, engine, locator)?;
+        let grid_cell = cell.body.to_packed::<GridCell>();
+        let (fill_hex, vertical_align, horizontal_align, inset_twips) =
+            cell_style_props(cell, table_cell, grid_cell, styles);
+        let raw_body = table_cell.map_or_else(
+            || grid_cell.map_or_else(|| cell.body.clone(), |gc| gc.body.clone()),
+            |tc| tc.body.clone(),
+        );
+        let mut body = if table_cell.is_some() || grid_cell.is_some() {
+            with_fragment(
+                engine,
+                locator,
+                &cell.body,
+                styles,
+                |engine, locator, pairs| {
+                    let eff_styles = pairs.first().map_or(styles, |(_, s)| *s);
+                    self.collect_content_blocks(&raw_body, eff_styles, engine, locator)
+                },
+            )?
+        } else {
+            self.collect_content_blocks(&raw_body, styles, engine, locator)?
+        };
         if let Some(align) = horizontal_align {
             for block in &mut body {
                 if let IrBlock::Paragraph(para) = block {
@@ -1863,6 +2008,7 @@ impl Collector<'_> {
         }
         Ok(IrTableCell {
             body,
+            x: cell_x,
             colspan: u32::try_from(cell.colspan.get()).unwrap_or(u32::MAX),
             rowspan: u32::try_from(cell.rowspan.get()).unwrap_or(u32::MAX),
             vmerge: if cell.rowspan.get() > 1 {
@@ -1873,6 +2019,13 @@ impl Collector<'_> {
             fill_hex,
             vertical_align,
             inset_twips,
+            borders: cell_borders_from_stroke(&cell.stroke),
+            borders_declared: typort_ir::IrCellBorderFlags {
+                top: cell.stroke_overridden.top,
+                right: cell.stroke_overridden.right,
+                bottom: cell.stroke_overridden.bottom,
+                left: cell.stroke_overridden.left,
+            },
         })
     }
 
@@ -1945,6 +2098,8 @@ impl Collector<'_> {
                         col_count = col_count.max(current.len());
                         rows.push(IrTableRow {
                             cells: std::mem::take(&mut current),
+                            height_twips: None,
+                            is_header: true,
                         });
                     }
                 }
@@ -1958,7 +2113,11 @@ impl Collector<'_> {
         }
         if !current.is_empty() {
             col_count = col_count.max(current.len());
-            rows.push(IrTableRow { cells: current });
+            rows.push(IrTableRow {
+                cells: current,
+                height_twips: None,
+                is_header: false,
+            });
         }
         let column_widths_pct = self.table_column_widths(table, col_count, styles);
         Ok(IrTable {
@@ -1984,12 +2143,15 @@ impl Collector<'_> {
         let body = self.collect_content_blocks(&cell.body, styles, engine, locator)?;
         Ok(IrTableCell {
             body,
+            x: 0,
             colspan: u32::try_from(cell.colspan.get(styles).get()).unwrap_or(u32::MAX),
             rowspan: u32::try_from(cell.rowspan.get(styles).get()).unwrap_or(u32::MAX),
             vmerge: IrVMerge::None,
             fill_hex,
             vertical_align: None,
             inset_twips: None,
+            borders: IrCellBorders::default(),
+            borders_declared: IrCellBorderFlags::default(),
         })
     }
 
@@ -3349,4 +3511,376 @@ fn find_pdf_marker<'a>(
         }
     }
     None
+}
+
+/// Non-gutter track sizings for the IR: `CellGrid` keeps gutter tracks
+/// interleaved at odd indices when `has_gutter`.
+fn non_gutter_sizes(sizes: &[Sizing], has_gutter: bool) -> Vec<IrTrackSize> {
+    sizes
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !has_gutter || index % 2 == 0)
+        .map(|(_, sizing)| ir_track_size(sizing))
+        .collect()
+}
+
+fn ir_track_size(sizing: &Sizing) -> IrTrackSize {
+    match sizing {
+        Sizing::Auto => IrTrackSize::Auto,
+        Sizing::Fr(fr) => IrTrackSize::Fr(fr.get()),
+        Sizing::Rel(rel) => {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "track sizes are small non-negative lengths"
+            )]
+            let abs_twips = (rel.abs.abs.to_pt() * 20.0).round().max(0.0) as u32;
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "ratios are non-negative"
+            )]
+            let permille = (rel.rel.get() * 1000.0).round().max(0.0) as u32;
+            if permille == 0 {
+                IrTrackSize::Fixed(abs_twips)
+            } else if abs_twips == 0 {
+                IrTrackSize::Rel {
+                    abs_twips: 0,
+                    permille,
+                }
+            } else {
+                IrTrackSize::Rel {
+                    abs_twips,
+                    permille,
+                }
+            }
+        }
+    }
+}
+
+/// A resolved cell's own fill/alignment/inset properties, read from the
+/// `table.cell`/`grid.cell` element it was resolved from (falling back to
+/// the `Cell`'s resolved fill).
+fn cell_style_props(
+    cell: &Cell,
+    table_cell: Option<&Packed<TableCell>>,
+    grid_cell: Option<&Packed<GridCell>>,
+    styles: StyleChain<'_>,
+) -> (
+    Option<String>,
+    Option<VerticalAlign>,
+    Option<Alignment>,
+    Option<u32>,
+) {
+    let fill_hex = cell.fill.as_ref().and_then(paint_to_shd_hex).or_else(|| {
+        table_cell
+            .and_then(|tc| match tc.fill.get_cloned(styles) {
+                Smart::Custom(Some(paint)) => paint_to_shd_hex(&paint),
+                _ => None,
+            })
+            .or_else(|| {
+                grid_cell.and_then(|gc| match gc.fill.get_cloned(styles) {
+                    Smart::Custom(Some(paint)) => paint_to_shd_hex(&paint),
+                    _ => None,
+                })
+            })
+    });
+    let cell_align = table_cell
+        .map(|tc| tc.align.get_cloned(styles))
+        .or_else(|| grid_cell.map(|gc| gc.align.get_cloned(styles)));
+    let vertical_align = cell_align
+        .and_then(|a| match a {
+            Smart::Custom(align) => align.y(),
+            Smart::Auto => None,
+        })
+        .map(|v| match v {
+            VAlignment::Top => VerticalAlign::Top,
+            VAlignment::Horizon => VerticalAlign::Center,
+            VAlignment::Bottom => VerticalAlign::Bottom,
+        });
+    let horizontal_align = cell_align
+        .and_then(|a| match a {
+            Smart::Custom(align) => align.x(),
+            Smart::Auto => None,
+        })
+        .map(|h| match h {
+            HAlignment::Left | HAlignment::Start => Alignment::Left,
+            HAlignment::Center => Alignment::Center,
+            HAlignment::Right | HAlignment::End => Alignment::Right,
+        });
+    let inset_twips = table_cell
+        .and_then(|tc| match tc.inset.get_cloned(styles) {
+            Smart::Custom(sides) => sides
+                .left
+                .map(|rel| rel.abs.at(Abs::pt(11.0)).to_pt() * 20.0),
+            Smart::Auto => None,
+        })
+        .map(|pt| {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "insets are small non-negative lengths"
+            )]
+            let twips = pt.round().max(0.0) as u32;
+            twips
+        });
+    (fill_hex, vertical_align, horizontal_align, inset_twips)
+}
+
+fn ir_border(stroke: &typst_library::visualize::Stroke<Abs>) -> Option<IrBorder> {
+    let pt = stroke.thickness.custom().map_or(1.0, Abs::to_pt);
+    if pt <= 0.0 {
+        return None;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "stroke thickness is positive"
+    )]
+    let sz_eighths = (pt * 8.0).round().max(1.0) as u32;
+    Some(IrBorder {
+        sz_eighths,
+        color_hex: match &stroke.paint {
+            Smart::Custom(paint) => paint_to_shd_hex(paint),
+            Smart::Auto => None,
+        },
+        dashed: matches!(&stroke.dash, Smart::Custom(Some(_))),
+    })
+}
+
+fn cell_borders_from_stroke(
+    stroke: &Sides<Option<std::sync::Arc<typst_library::visualize::Stroke<Abs>>>>,
+) -> IrCellBorders {
+    IrCellBorders {
+        top: stroke.top.as_ref().and_then(|s| ir_border(s)),
+        right: stroke.right.as_ref().and_then(|s| ir_border(s)),
+        bottom: stroke.bottom.as_ref().and_then(|s| ir_border(s)),
+        left: stroke.left.as_ref().and_then(|s| ir_border(s)),
+    }
+}
+
+fn ir_grid_line(line: &Line, track_count: usize) -> Option<IrGridLine> {
+    let border = line.stroke.as_ref().and_then(|s| ir_border(s))?;
+    Some(IrGridLine {
+        index: line.index,
+        start: line.start,
+        end: line.end.map_or(track_count, std::num::NonZero::get),
+        border,
+    })
+}
+
+/// Lay the grid out once against the page content area and derive row
+/// heights from the declared track sizings plus the laid-out frame's total
+/// height: `fixed`/`rel` tracks keep their declared size, `fr` tracks share
+/// whatever remains, and `auto` tracks keep their own measured content
+/// height — a tall auto row (like a timetable title) would otherwise
+/// collapse to the fr share and inflate every slot by the difference. Rows
+/// whose height can't be measured fall back to a weight-1 share. Heights
+/// floor to whole twips so slots never inflate.
+fn measure_grid_row_heights(
+    grid: &CellGrid,
+    content: &Content,
+    styles: StyleChain<'_>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+) -> Option<Vec<Option<u32>>> {
+    if grid.rows.is_empty() {
+        return None;
+    }
+    let sizes = non_gutter_sizes(&grid.rows, grid.has_gutter);
+    if sizes.is_empty() {
+        return None;
+    }
+    let width_pt = page_content_width_pt(styles);
+    let height_pt = page_content_height_pt(styles);
+    if !(width_pt.is_finite() && height_pt.is_finite() && width_pt > 0.0 && height_pt > 0.0) {
+        return None;
+    }
+    let region = Region::new(
+        Size::new(Abs::pt(width_pt), Abs::pt(height_pt)),
+        Axes::splat(true),
+    );
+    let frame = typst_layout::layout_frame(
+        engine,
+        content,
+        locator.next(&content.span()),
+        styles,
+        region,
+    )
+    .ok()?;
+    let total_pt = frame.size().y.to_pt();
+    let mut declared: Vec<Option<f64>> = Vec::with_capacity(sizes.len());
+    let mut fixed_total = 0.0;
+    for sizing in &sizes {
+        let pt = match sizing {
+            IrTrackSize::Fixed(t) => Some(f64::from(*t) / 20.0),
+            IrTrackSize::Rel {
+                abs_twips,
+                permille,
+            } => Some(f64::from(*abs_twips) / 20.0 + height_pt * f64::from(*permille) / 1000.0),
+            _ => None,
+        };
+        declared.push(pt);
+        fixed_total += pt.unwrap_or(0.0);
+    }
+    let mut measured_auto: Vec<Option<f64>> = vec![None; sizes.len()];
+    let mut fr_total = 0.0;
+    let col_widths = grid_col_widths_pt(grid, width_pt);
+    for (index, sizing) in sizes.iter().enumerate() {
+        match sizing {
+            IrTrackSize::Auto => {
+                let y = if grid.has_gutter { index * 2 } else { index };
+                measured_auto[index] =
+                    measure_auto_row_pt(grid, y, &col_widths, styles, engine, locator);
+                fr_total += f64::from(u8::from(measured_auto[index].is_none()));
+            }
+            IrTrackSize::Fr(w) => fr_total += *w,
+            _ => {}
+        }
+    }
+    let remaining = (total_pt - fixed_total - measured_auto.iter().flatten().sum::<f64>()).max(0.0);
+    let mut heights = Vec::with_capacity(sizes.len());
+    for (index, sizing) in sizes.iter().enumerate() {
+        let pt = match sizing {
+            IrTrackSize::Fr(w) if fr_total > 0.0 => Some(remaining * w / fr_total),
+            IrTrackSize::Auto => {
+                measured_auto[index].or_else(|| (fr_total > 0.0).then_some(remaining / fr_total))
+            }
+            IrTrackSize::Fr(_) => None,
+            _ => declared[index],
+        };
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "row heights floor to non-negative twips"
+        )]
+        let twips = pt.map(|p| (p.max(0.0) * 20.0).floor() as u32);
+        heights.push(twips);
+    }
+    Some(heights)
+}
+
+/// Resolved widths in points for the grid's non-gutter columns: `fr` tracks
+/// share what the fixed and relative tracks leave, `auto` tracks are
+/// content-sized and can't be resolved here.
+fn grid_col_widths_pt(grid: &CellGrid, width_pt: f64) -> Vec<Option<f64>> {
+    let sizings: Vec<&Sizing> = grid
+        .cols
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !grid.has_gutter || index % 2 == 0)
+        .map(|(_, sizing)| sizing)
+        .collect();
+    let fixed: f64 = sizings
+        .iter()
+        .map(|sizing| match sizing {
+            Sizing::Rel(rel) => rel.abs.abs.to_pt(),
+            _ => 0.0,
+        })
+        .sum();
+    let rel_share: f64 = sizings
+        .iter()
+        .map(|sizing| match sizing {
+            Sizing::Rel(rel) => rel.rel.get() * width_pt,
+            _ => 0.0,
+        })
+        .sum();
+    let fr_total: f64 = sizings
+        .iter()
+        .map(|sizing| match sizing {
+            Sizing::Fr(fr) => fr.get(),
+            _ => 0.0,
+        })
+        .sum();
+    let remaining = (width_pt - fixed - rel_share).max(0.0);
+    sizings
+        .iter()
+        .map(|sizing| match sizing {
+            Sizing::Auto => None,
+            Sizing::Rel(rel) => Some(rel.abs.abs.to_pt() + rel.rel.get() * width_pt),
+            Sizing::Fr(fr) if fr_total > 0.0 => Some(remaining * fr.get() / fr_total),
+            Sizing::Fr(_) => Some(0.0),
+        })
+        .collect()
+}
+
+/// One `auto` row's natural height in points: the tallest laid-out body
+/// among its cells plus the cell's own top/bottom insets. `None` when a
+/// `rowspan > 1` cell starts here (its content would measure against one row
+/// instead of spreading over the span) or when a spanned column's width is
+/// content-sized and unresolvable — the caller keeps the share fallback.
+fn measure_auto_row_pt(
+    grid: &CellGrid,
+    y: usize,
+    col_widths: &[Option<f64>],
+    styles: StyleChain<'_>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+) -> Option<f64> {
+    let mut height = 0.0_f64;
+    for x in 0..grid.cols.len() {
+        let Some(Entry::Cell(cell)) = grid.entry(x, y) else {
+            continue;
+        };
+        if cell.rowspan.get() > 1 {
+            return None;
+        }
+        let col = if grid.has_gutter { x / 2 } else { x };
+        let end = (col + cell.colspan.get()).min(col_widths.len());
+        let mut width_pt = 0.0;
+        for c in col..end {
+            width_pt += col_widths.get(c).copied().flatten()?;
+        }
+        let grid_cell = cell.body.to_packed::<GridCell>();
+        let table_cell = cell.body.to_packed::<TableCell>();
+        let body = table_cell.map_or_else(
+            || grid_cell.map_or_else(|| cell.body.clone(), |gc| gc.body.clone()),
+            |tc| tc.body.clone(),
+        );
+        let region = Region::new(
+            Size::new(Abs::pt(width_pt.max(1.0)), Abs::pt(96_000.0)),
+            Axes::new(true, false),
+        );
+        let frame =
+            typst_layout::layout_frame(engine, &body, locator.next(&body.span()), styles, region)
+                .ok()?;
+        let inset_pt = cell_vertical_inset_pt(table_cell, grid_cell, styles);
+        height = height.max(frame.size().y.to_pt() + inset_pt);
+    }
+    Some(height)
+}
+
+/// A cell's top plus bottom insets in points, read from the cell element's
+/// own `inset` property; default/auto insets contribute nothing.
+fn cell_vertical_inset_pt(
+    table_cell: Option<&Packed<TableCell>>,
+    grid_cell: Option<&Packed<GridCell>>,
+    styles: StyleChain<'_>,
+) -> f64 {
+    let sides = table_cell
+        .map(|tc| tc.inset.get_cloned(styles))
+        .or_else(|| grid_cell.map(|gc| gc.inset.get_cloned(styles)));
+    let Some(Smart::Custom(sides)) = sides else {
+        return 0.0;
+    };
+    let em = styles.resolve(TextElem::size);
+    let side = |side: Option<Rel<Length>>| side.map_or(0.0, |rel| rel.abs.at(em).to_pt());
+    side(sides.top) + side(sides.bottom)
+}
+
+/// The realize and Paged compilations run in the same process, where
+/// `Location::hash` is deterministic — the paged frame's figure brackets and
+/// the collected `IrBlock::Figure` meet through this hash.
+pub(crate) fn location_hash64(location: Location) -> u64 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "hash key truncates the 128-bit location hash"
+    )]
+    let hash = location.hash() as u64;
+    hash
+}
+
+fn page_content_height_pt(styles: StyleChain<'_>) -> f64 {
+    let snapshot = PageSnapshot::resolve(styles);
+    (snapshot.height_pt - snapshot.top_pt - snapshot.bottom_pt).max(0.0)
 }
