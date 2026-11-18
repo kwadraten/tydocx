@@ -627,7 +627,7 @@ fn declared_page_numbering_format_wins_over_glyphs() {
         "declared numbering \"1\" must drive pgNumType despite the \"i\" glyph"
     );
     assert!(
-        !doc.page_number_footer,
+        !doc.page_number_footers.default,
         "a static footer glyph must not become a generated page-number footer"
     );
 }
@@ -644,7 +644,7 @@ fn declared_page_numbering_does_not_conjure_footer() {
         "declared numbering \"i\" must drive pgNumType"
     );
     assert!(
-        !doc.page_number_footer,
+        !doc.page_number_footers.default,
         "a declaration alone must not conjure a generated footer"
     );
 

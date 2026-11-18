@@ -9,15 +9,39 @@ pub use typort_ooxml::document::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrDocument {
     pub info: IrDocumentInfo,
+    /// Page settings of the first section (and the only section when
+    /// `sections` is empty).
     pub page: PageSettings,
     pub style: DocumentStyle,
     pub body: Vec<IrBlock>,
+    /// Sections after the first, in body order. Each starts at
+    /// `start_block` in `body`; the section's own settings end the body
+    /// (`w:sectPr`), while earlier sections close via a section break on the
+    /// last paragraph before `start_block`.
+    pub sections: Vec<IrSection>,
+    /// `w:pgNumType w:fmt` declared for the first section; only set when
+    /// `sections` is non-empty (single-section documents use
+    /// `GeometryInput::page_numbering`).
+    pub first_numbering: Option<PageNumberFormat>,
     pub footnotes: Vec<IrFootnote>,
     pub citation_sources: Vec<CitationSource>,
     /// Text declared in `#set page(foreground:)` / `background:`. Rendered on
     /// every page by Typst but dropped by Word conversion; C1 literalizes it
     /// into the body with a `page-foreground` degradation.
     pub page_furniture: Vec<String>,
+}
+
+/// A Typst section after the first (a mid-document page-settings change).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrSection {
+    /// Index into `IrDocument::body` where the section's first block sits.
+    pub start_block: usize,
+    /// The section's resolved page settings (`w:pgSz`/`w:pgMar`/`w:cols`).
+    pub settings: PageSettings,
+    /// `w:pgNumType w:fmt` for the section (`None` = continue previous).
+    pub numbering: Option<PageNumberFormat>,
+    /// `w:pgNumType w:start` restart (`None` = continue numbering).
+    pub numbering_start: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

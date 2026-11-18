@@ -54,7 +54,11 @@ pub(super) fn write_inline<W: Write>(
             bookmark_name,
             display_text,
         } => write_field_pageref(writer, bookmark_name, display_text),
-        InlineElement::FieldPage { display_text } => write_field_page(writer, display_text),
+        InlineElement::FieldPage {
+            display_text,
+            bold,
+            size_half_pt,
+        } => write_field_page(writer, display_text, *bold, *size_half_pt),
         InlineElement::Hyperlink { url, runs } => write_hyperlink(writer, url, runs, ctx.doc_style),
         InlineElement::InternalLink { anchor, runs } => {
             writer

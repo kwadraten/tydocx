@@ -240,11 +240,16 @@ covered by the C1 degradation named below (integration tests live in
 `sections.rs` / `structure.rs` / `tables.rs` / `footnotes.rs`).
 
 ### Odd/even running headers (M7, T-01)
-- **Current:** the first page's margin-zone header is emitted; a differing
-  later header reports `header-footer-variant` (all modes).
-- **C2 target:** `w:headerReference w:type="even"`/`"default"` parts plus
-  `w:evenAndOddHeaders` in settings; title-page suppression maps to
-  `w:titlePg`.
+- **Done (batch 8):** margin-zone extraction classifies each zone into
+  default/even/first slots (`ZoneParts`); the writer emits
+  `w:headerReference`/`w:footerReference` for `default`, `even`, and `first`
+  types, `w:evenAndOddHeaders` in `settings.xml`, and `w:titlePg` for
+  first-page suppression (the first-page part is only emitted when it has
+  content of its own — a suppressed slot stays empty).
+- **Remaining degradation:** a zone that changes mid-document in a way the
+  three OOXML slots cannot express (e.g. a new header starting on page 3)
+  still reports `header-footer-variant`; C1 keeps page 1's zone and reports
+  any variant.
 
 ### Page `foreground:`/`background:` (U13, T-02)
 - **Current:** `page_furniture` is detected from the source AST; margin-zone
@@ -267,11 +272,41 @@ covered by the C1 degradation named below (integration tests live in
   VML/DrawingML rectangle; body text in the shaded paragraph.
 
 ### Mid-document margin/column changes (M6, T-06)
-- **Current:** single section; C1 reports `section-break` from
-  `detect_page_setting_change`. `margin_amount` still reads a `0pt` margin
-  as unset (explicit zero margins are undetectable).
-- **C2 target:** one `w:sectPr` per Typst section carrying its real
-  `w:pgMar`; `margin_amount` must treat `0pt` as a declared zero.
+- **Done (batch 8):** the collector resolves a `PageSnapshot` (page size,
+  all four margins, columns, header/footer distances, numbering)
+  from each top-level pair's `StyleChain` and pushes an `IrSection` per
+  transition; synthesized `PagebreakElem` pairs are skipped since their
+  chains may not carry top-level `set page` rules. The lowering attaches the
+  ending `w:sectPr` to the previous section's last paragraph — or, when the
+  section ends on a non-paragraph block (table, image, equation), to an
+  empty marker paragraph appended after it (1pt paragraph mark, zeroed
+  spacing and an exact-zero line box so it almost never spills to a blank
+  page at the page-bottom edge) — and the writer emits each
+  section's real `w:pgSz`/`w:pgMar`/`w:cols`. `margin_amount` maps `0pt` to
+  `Some(0)` — a declared zero distinct from unset.
+- **Remaining degradation:** C1 still collapses to a single section and
+  reports `section-break` from `detect_page_setting_change`; the legacy
+  path likewise keeps one section (the divergence is pinned in
+  `ir_path.rs`). The section-break marker paragraph cannot go below the
+  renderer's minimum line box for a paragraph mark: a table ending within
+  ~0.3mm of the page bottom before a section break (e.g. the 21mm-bottom
+  stress shape) still yields a blank page in LibreOffice — a format floor,
+  not a fixable gap; Word's exact floor for this encoding is unverified.
+  In LibreOffice the bare marker's height is ~0.4mm and bare and
+  collapsed markers flip at the same bottom-margin boundary, so the
+  collapse is unobservable there: the ignored
+  `visual::visual_table_section_marker_no_blank_page` passes pre-fix in
+  that renderer and is a weak guard only — it would catch a regression
+  that makes the marker grossly taller (e.g. a run with text) but cannot
+  catch the loss of the 1pt mark itself. The mark's outcome pin is
+  Word-only (a 1pt paragraph mark is standard Word practice — Word
+  renders empty paragraphs at the mark's font size — but unverified
+  here); the XML-level test is the pin in this environment.
+  A `#counter(page).update(n)` restart with no format change
+  is not yet detected in either path and gets no `w:start` — there is no
+  page-settings transition to split a section on; realizing it needs a
+  synthesized split keyed on the counter update, deferred as pre-existing
+  in both paths.
 
 ### `inside:`/`outside:` margins (U31, T-07)
 - **Current:** keys parse to `margins_mirrored`; C1 reports
@@ -280,16 +315,23 @@ covered by the C1 degradation named below (integration tests live in
   left=inside, right=outside (Word swaps on even pages).
 
 ### Page-numbering format change + restart (U30, T-08)
-- **Current:** a second distinct `numbering:` declaration sets
-  `numbering_changed`; C1 reports `page-numbering-change`, no `pgNumType`.
-- **C2 target:** per-section `w:pgNumType` (`fmt="lowerRoman"`/`"decimal"`,
-  `w:start` on restart). Depends on M6 multi-section output.
+- **Done (batch 8):** `numbering_page_format` maps the resolved
+  `Numbering::Pattern` (arabic/lower-roman/upper-roman/lower-latin/
+  upper-latin) to `w:pgNumType w:fmt` per section;
+  `assign_numbering_starts` compares the rendered page numbers across the
+  format change and emits `w:start` only when the counter actually
+  restarted. `detect_multi_format_page_numbering` keeps the footer `PAGE`
+  field across a format change.
+- **Remaining degradation:** decorated/multi-piece numbering patterns and
+  function numberings still return `None` (no `w:fmt`); C1 reports
+  `page-numbering-change` and emits no `pgNumType`.
 
 ### Header/footer run weight (L3, T-22)
-- **Current:** margin-zone extraction keeps per-run size (`w:sz`) but
-  flattens weight; `header-footer-style` reports it when a bold weight
-  (>=600) is flattened.
-- **C2 target:** per-run `<w:b/>` in header/footer parts.
+- **Done (batch 8):** margin-zone extraction keeps per-run weight
+  (`Run.bold` from the glyph's effective weight) alongside size; header,
+  footer, and styled `PAGE`-field runs emit `<w:b/>`. The
+  `header-footer-style` degradation is removed — size and weight both
+  round-trip now.
 
 ### Function footnote numbering `(n)` (U26, T-09)
 - **Current:** `footnote-numbering` degradation (literalized); markers fall

@@ -38,8 +38,8 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use typort_ooxml::document::{
-    Alignment, BlockElement, CellContent, Document, HangingIndent, ImageData, InlineElement,
-    ListInfo, Paragraph, ParagraphStyle, Run, Table, TableCell, TableRow, VMerge,
+    Alignment, BlockElement, CellContent, Document, HangingIndent, HeaderFooter, ImageData,
+    InlineElement, ListInfo, Paragraph, ParagraphStyle, Run, Table, TableCell, TableRow, VMerge,
 };
 use typst::comemo::Track;
 use typst::diag::SourceDiagnostic;
@@ -343,37 +343,110 @@ fn apply_headers_and_footers(
         // The declared page-numbering format (from `#set page(numbering:)`,
         // consumed in `apply_source_overrides`) wins over glyph guessing.
         let declared = doc.page_numbering;
+        let top = page::extract_zone_parts(paged, page::MarginZone::Top, margins, declared);
+        let header_first_differs = top.title_page;
+        let header_even_differs = top.even_and_odd;
+        doc.even_and_odd_headers |= top.even_and_odd;
+        doc.title_page |= top.title_page;
+        report_zone_unrepresentable(&top, "header", compat, degradations);
         if doc.header.is_none() {
-            doc.header = page::extract_header(paged, margins, declared);
+            doc.header.clone_from(&top.default);
         }
+        doc.header_even.clone_from(&top.even);
+        doc.header_first.clone_from(&top.first);
         // Detect page numbering before extracting footer. If the footer is just
         // a page number, the writer generates a PAGE field footer instead.
-        if let Some(fmt) = page::detect_page_numbering(paged, margins) {
-            doc.page_number_footer = true;
+        let numbering = page::detect_page_numbering(paged, margins)
+            .or_else(|| page::detect_multi_format_page_numbering(paged, margins));
+        let mut footer_first_differs = false;
+        let mut footer_even_differs = false;
+        let mut bottom: Option<page::ZoneParts> = None;
+        if let Some(fmt) = numbering {
+            doc.page_number_footers.default = true;
             if declared.is_none() {
                 doc.page_numbering = Some(fmt);
             }
             // Don't set doc.footer — the writer will generate a PAGE field footer
         } else if doc.footer.is_none() {
-            doc.footer = page::extract_footer(paged, margins, declared);
+            let parts =
+                page::extract_zone_parts(paged, page::MarginZone::Bottom, margins, declared);
+            footer_first_differs = parts.title_page;
+            footer_even_differs = parts.even_and_odd;
+            doc.even_and_odd_headers |= parts.even_and_odd;
+            doc.title_page |= parts.title_page;
+            report_zone_unrepresentable(&parts, "footer", compat, degradations);
+            doc.footer.clone_from(&parts.default);
+            doc.footer_even.clone_from(&parts.even);
+            doc.footer_first.clone_from(&parts.first);
+            bottom = Some(parts);
+        }
+        if doc.title_page {
+            if !header_first_differs && doc.header_first.is_none() && doc.header.is_some() {
+                doc.header_first = doc.header.clone();
+            }
+            if !footer_first_differs && doc.footer_first.is_none() && doc.footer.is_some() {
+                doc.footer_first = doc.footer.clone();
+            }
+            doc.page_number_footers.first =
+                doc.page_number_footers.default && !footer_first_differs;
+        }
+        if doc.even_and_odd_headers {
+            if !header_even_differs && doc.header_even.is_none() && doc.header.is_some() {
+                doc.header_even = doc.header.clone();
+            }
+            if !footer_even_differs && doc.footer_even.is_none() && doc.footer.is_some() {
+                doc.footer_even = doc.footer.clone();
+            }
+            doc.page_number_footers.even = doc.page_number_footers.default && !footer_even_differs;
         }
         if compat == CompatMode::C1 {
-            // M7: only the first page's header/footer survives; warn when a
-            // later page's differs (page numbers are normalized away).
             if let Some(degradation) = page::header_footer_variant(paged, margins) {
                 degradations.push(degradation);
             }
-            // L3: the margin-zone extraction keeps run size but not weight;
-            // warn when a bold weight is flattened away.
-            if page::header_footer_style_lost(paged, margins) {
-                degradations.push(Degradation::new(
-                    None,
-                    "header-footer-style",
-                    DegradationAction::Skipped,
-                    "header/footer bold styling is flattened to plain text",
-                ));
-            }
+            let page_one = |parts: &page::ZoneParts, default: Option<HeaderFooter>| {
+                if parts.title_page && parts.first.is_none() {
+                    None
+                } else {
+                    parts.first.clone().or(default)
+                }
+            };
+            doc.header = page_one(&top, doc.header.take());
+            doc.footer = bottom.as_ref().map_or(doc.footer.take(), |parts| {
+                page_one(parts, doc.footer.take())
+            });
+            doc.header_even = None;
+            doc.header_first = None;
+            doc.footer_even = None;
+            doc.footer_first = None;
+            doc.title_page = false;
+            doc.even_and_odd_headers = false;
+            doc.page_number_footers.even = false;
+            doc.page_number_footers.first = false;
         }
+    }
+}
+
+/// In C2/C3 a first-page or odd/even zone variant is representable, so only a
+/// shape that covers none of those (an arbitrary mid-document content change)
+/// reports `header-footer-variant`.
+fn report_zone_unrepresentable(
+    parts: &page::ZoneParts,
+    zone_name: &str,
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
+) {
+    if compat == CompatMode::C1 {
+        return;
+    }
+    if let Some(page_index) = parts.unrepresentable_page {
+        degradations.push(Degradation::new(
+            None,
+            "header-footer-variant",
+            DegradationAction::Skipped,
+            format!(
+                "page {page_index} {zone_name} differs from page 1; only the first page's {zone_name} is kept"
+            ),
+        ));
     }
 }
 

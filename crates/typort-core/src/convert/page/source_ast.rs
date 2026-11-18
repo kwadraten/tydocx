@@ -978,15 +978,18 @@ fn parse_footnote_entry_args(args: typst_syntax::ast::Args<'_>, ovr: &mut Source
 }
 
 /// A `#set page(margin: …)` value as declared: absolute twips, or em to
-/// resolve later against the body size. Zero converts to neither (a zero
-/// margin is treated as unset, like the absolute path below).
+/// resolve later against the body size. An explicit zero is a declared value
+/// (`0pt` → `Some(0)`), distinct from an unsupported relative unit (`%`,
+/// `fr`), which stays unset.
 fn margin_amount(n: typst_syntax::ast::Numeric<'_>) -> (Option<u32>, Option<f64>) {
     let (value, unit) = n.get();
-    if unit == typst_syntax::ast::Unit::Em {
-        (None, if value == 0.0 { None } else { Some(value) })
-    } else {
-        let twips = numeric_to_twips(n);
-        (if twips > 0 { Some(twips) } else { None }, None)
+    match unit {
+        typst_syntax::ast::Unit::Em => (None, Some(value)),
+        typst_syntax::ast::Unit::Pt
+        | typst_syntax::ast::Unit::Cm
+        | typst_syntax::ast::Unit::Mm
+        | typst_syntax::ast::Unit::In => (Some(numeric_to_twips(n)), None),
+        _ => (None, None),
     }
 }
 

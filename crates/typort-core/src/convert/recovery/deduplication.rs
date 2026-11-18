@@ -224,13 +224,8 @@ fn line_cjk_is_already_emitted(line: &FrameLine, full_doc_text: &str, doc_cjk: &
 
 fn extract_header_footer_text(doc: &Document) -> String {
     let mut text = String::new();
-    if let Some(header) = &doc.header {
-        for para in &header.paragraphs {
-            text.push_str(&para.text_content());
-        }
-    }
-    if let Some(footer) = &doc.footer {
-        for para in &footer.paragraphs {
+    for hf in doc.header_footers() {
+        for para in &hf.paragraphs {
             text.push_str(&para.text_content());
         }
     }

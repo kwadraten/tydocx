@@ -25,6 +25,10 @@ const IDENTICAL: &[&str] = &[
     "style_columns",
     "header_footer_test",
     "page_numbering",
+    "issue_margin_zero",
+    "issue_odd_even_headers",
+    "issue_first_page_header",
+    "issue_c1_header_style",
 ];
 
 const DOCUMENTED: &[&str] = &[
@@ -52,6 +56,11 @@ const DOCUMENTED: &[&str] = &[
     "edge_complex_table",
     "footnote_in_table",
     "figure_caption",
+    "issue_header_run_styles",
+    "issue_margin_change_section",
+    "issue_page_numbering_change",
+    "issue_table_first_section",
+    "issue_table_cascade_sections",
 ];
 
 fn convert_both(fixture: &str) -> (String, String) {
@@ -370,6 +379,49 @@ fn ir_path_documented_diffs() {
             without_lines(&legacy_xml, &[]),
             "{fixture}: cell margins are the only diff"
         );
+    }
+
+    {
+        // M6: the IR path emits a mid-body `w:sectPr` per section with real
+        // `w:pgMar`; the legacy path emits a bare page break and folds the
+        // last section's margins into the single trailing sectPr.
+        let (new_xml, legacy_xml) = convert_both("issue_margin_change_section");
+        assert_eq!(count(&new_xml, "<w:sectPr"), 2);
+        assert_eq!(count(&legacy_xml, "<w:sectPr"), 1);
+        assert!(new_xml.contains(r#"w:left="2268""#));
+        assert!(!legacy_xml.contains(r#"w:type="nextPage""#));
+    }
+
+    {
+        // U30: the IR path emits per-section `w:pgNumType` with `w:start`
+        // on a restart; the legacy path has neither the section boundary
+        // nor the restart.
+        let (new_xml, legacy_xml) = convert_both("issue_page_numbering_change");
+        assert_eq!(count(&new_xml, "<w:sectPr"), 2);
+        assert_eq!(count(&legacy_xml, "<w:sectPr"), 1);
+        assert!(new_xml.contains(r#"<w:pgNumType w:fmt="decimal"/>"#));
+        assert!(new_xml.contains(r#"w:start="1""#));
+        assert!(!legacy_xml.contains("w:start"));
+    }
+
+    for fixture in ["issue_table_first_section", "issue_table_cascade_sections"] {
+        // P1: a table-only first section still ends with a `w:sectPr` in the
+        // IR path (empty marker paragraph); the legacy path drops the
+        // boundary entirely. `w:tblCellMar` is the other known table diff.
+        let (new_xml, legacy_xml) = convert_both(fixture);
+        assert_eq!(count(&legacy_xml, "<w:sectPr"), 1);
+        assert!(
+            count(&new_xml, "<w:sectPr") > 1,
+            "{fixture}: IR path keeps every section boundary"
+        );
+    }
+
+    {
+        // Legacy emits a stray rPr-only run in the body that the IR path
+        // does not produce.
+        let (new_xml, legacy_xml) = convert_both("issue_header_run_styles");
+        assert!(legacy_xml.contains(r#"<w:sz w:val="22"/>"#));
+        assert!(!new_xml.contains(r#"<w:sz w:val="22"/>"#));
     }
 
     {

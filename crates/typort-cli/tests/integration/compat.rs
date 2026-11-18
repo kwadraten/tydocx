@@ -384,10 +384,18 @@ fn c1_header_variant_kept_first() {
 }
 
 #[test]
-fn c1_header_style_flattened() {
-    let constructs = c1_constructs("issue_c1_header_style");
-    assert_has(&constructs, "header-footer-style");
+fn c1_header_weight_kept() {
     assert_clean("issue_c1_header_style");
+    let header = fixture_package_with_options(
+        "issue_c1_header_style",
+        &ConvertOptions::new(CompatMode::C1),
+    )
+    .part_text("word/header1.xml")
+    .to_owned();
+    assert!(
+        header.contains("<w:b/>"),
+        "the bold header run emits w:b, header was: {header}"
+    );
 }
 
 #[test]

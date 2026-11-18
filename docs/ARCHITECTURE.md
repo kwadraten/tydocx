@@ -309,7 +309,8 @@ Rules the equivalence round established (see
 The lowering (`typort_ir::lower(ir, geometry, compat) -> (Document,
 Vec<Degradation>)`) is a **pure function**: no `World`, no `Engine`, no
 `PagedDocument` — geometry arrives as the explicit `GeometryInput {
-page_size, page_numbering, supplement, header, footer }` struct. That
+page_size, page_numbering, supplement, header (_even/_first), footer
+(_even/_first), even_and_odd_headers, title_page }` struct. That
 purity is what makes the lowering unit-testable (`crates/typort-ir` has
 its own lib tests) and what lets the two conversion paths share the
 writer without sharing a walk.

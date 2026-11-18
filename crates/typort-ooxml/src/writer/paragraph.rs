@@ -58,6 +58,7 @@ pub(super) fn write_paragraph<W: Write>(
             || has_tab_stops
             || has_spacing
             || has_keep
+            || para.mark_size_half_pt.is_some()
         {
             w.create_element("w:pPr").write_inner_content(|ppr| {
                 // Horizontal rule: emit bottom border
@@ -207,8 +208,15 @@ pub(super) fn write_paragraph<W: Write>(
                     let el = ppr
                         .create_element("w:spacing")
                         .with_attribute(("w:before", before_str.as_str()));
-                    if let Some(after) = after_str.as_deref() {
-                        el.with_attribute(("w:after", after)).write_empty()?;
+                    let el = if let Some(after) = after_str.as_deref() {
+                        el.with_attribute(("w:after", after))
+                    } else {
+                        el
+                    };
+                    if para.mark_size_half_pt.is_some() {
+                        el.with_attribute(("w:line", "0"))
+                            .with_attribute(("w:lineRule", "exact"))
+                            .write_empty()?;
                     } else {
                         el.write_empty()?;
                     }
@@ -224,9 +232,21 @@ pub(super) fn write_paragraph<W: Write>(
                         .with_attribute(("w:val", alignment.ooxml_value()))
                         .write_empty()?;
                 }
+                if let Some(sz) = para.mark_size_half_pt {
+                    let sz_str = sz.to_string();
+                    ppr.create_element("w:rPr").write_inner_content(|rpr| {
+                        rpr.create_element("w:sz")
+                            .with_attribute(("w:val", sz_str.as_str()))
+                            .write_empty()?;
+                        rpr.create_element("w:szCs")
+                            .with_attribute(("w:val", sz_str.as_str()))
+                            .write_empty()?;
+                        Ok(())
+                    })?;
+                }
                 // Emit section break (w:sectPr inside w:pPr)
                 if let Some(section) = &para.section_break {
-                    write_section_break(ppr, section)?;
+                    write_section_break(ppr, section, ctx.parts)?;
                 }
                 Ok(())
             })?;

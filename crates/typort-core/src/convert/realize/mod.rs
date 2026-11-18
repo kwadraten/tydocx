@@ -422,8 +422,18 @@ pub fn export_ir(
     let mut tmp = Document::new();
     apply_page_and_style(world, paged_doc, &mut tmp, &mut degradations);
     apply_headers_and_footers(paged_doc, &mut tmp, options.compat, &mut degradations);
-    ir.page = tmp.page_settings.clone();
+    if options.compat == CompatMode::C1 {
+        ir.sections.clear();
+    }
+    if ir.sections.is_empty() {
+        ir.page = tmp.page_settings.clone();
+    }
     ir.style = tmp.style.clone();
+    if !ir.sections.is_empty()
+        && let Some(paged) = paged_doc
+    {
+        assign_numbering_starts(&mut ir.sections, ir.first_numbering, paged);
+    }
 
     if docx_doc.footnote_circled {
         ir.style.footnote_format = FootnoteFormat::CircledNumber;
@@ -443,10 +453,17 @@ pub fn export_ir(
             tmp.page_settings.height_twips,
         ),
         page_numbering: tmp.page_numbering,
+        page_number_start: tmp.page_number_start,
         supplement: None,
         header: tmp.header.clone(),
+        header_even: tmp.header_even.clone(),
+        header_first: tmp.header_first.clone(),
         footer: tmp.footer.clone(),
-        page_number_footer: tmp.page_number_footer,
+        footer_even: tmp.footer_even.clone(),
+        footer_first: tmp.footer_first.clone(),
+        page_number_footers: tmp.page_number_footers.clone(),
+        even_and_odd_headers: tmp.even_and_odd_headers,
+        title_page: tmp.title_page,
     };
 
     if let Some(paged) = paged_doc {
@@ -481,6 +498,37 @@ pub fn export_ir(
     }
 
     ConvertOutcome::new(doc, degradations)
+}
+
+fn assign_numbering_starts(
+    sections: &mut [typort_ir::IrSection],
+    first_numbering: Option<typort_ooxml::document::PageNumberFormat>,
+    paged: &PagedDocument,
+) {
+    let rendered = paged.pages();
+    if rendered.len() < 2 {
+        return;
+    }
+    let fmts: Vec<Option<typort_ooxml::document::PageNumberFormat>> = rendered
+        .iter()
+        .map(|p| page::numbering_page_format(p.numbering.as_ref()))
+        .collect();
+    let mut prev_fmt = first_numbering;
+    let mut scan_from = 1_usize;
+    for section in sections.iter_mut() {
+        if let Some(fmt) = section.numbering
+            && Some(fmt) != prev_fmt
+            && let Some(index) = (scan_from..rendered.len()).find(|&i| fmts[i] == Some(fmt))
+        {
+            let number = rendered[index].number;
+            let prev_number = rendered[index - 1].number;
+            if number != prev_number + 1 {
+                section.numbering_start = u32::try_from(number).ok();
+            }
+            scan_from = index + 1;
+        }
+        prev_fmt = section.numbering.or(prev_fmt);
+    }
 }
 
 fn ir_compat(mode: CompatMode) -> IrCompatMode {

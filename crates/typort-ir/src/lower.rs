@@ -91,9 +91,16 @@ pub fn lower(
     }
     doc.citation_sources.clone_from(&ir.citation_sources);
     doc.header.clone_from(&geometry.header);
+    doc.header_even.clone_from(&geometry.header_even);
+    doc.header_first.clone_from(&geometry.header_first);
     doc.footer.clone_from(&geometry.footer);
+    doc.footer_even.clone_from(&geometry.footer_even);
+    doc.footer_first.clone_from(&geometry.footer_first);
     doc.page_numbering = geometry.page_numbering;
-    doc.page_number_footer = geometry.page_number_footer;
+    doc.page_number_start = geometry.page_number_start;
+    doc.page_number_footers = geometry.page_number_footers.clone();
+    doc.even_and_odd_headers = geometry.even_and_odd_headers;
+    doc.title_page = geometry.title_page;
 
     let mut ctx = LowerCtx {
         compat,
@@ -122,10 +129,7 @@ pub fn lower(
         ctx.footnote_ids.insert(footnote.ordinal, id);
     }
 
-    for block in &ir.body {
-        let lowered = lower_block(block, &mut doc, &mut ctx);
-        doc.body.elements.extend(lowered);
-    }
+    lower_body(ir, geometry, &mut doc, &mut ctx);
 
     if compat.is_c1() && !ir.page_furniture.is_empty() {
         ctx.degrade(
@@ -151,6 +155,67 @@ pub fn lower(
     doc.bookmark_counter = ctx.next_bookmark_id;
     let degradations = ctx.degradations;
     (doc, degradations)
+}
+
+/// Sections after the first end the previous section with a `w:sectPr` on
+/// its last paragraph; the final section's settings close the body.
+fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx: &mut LowerCtx) {
+    let mut sections = ir.sections.iter().peekable();
+    let mut current_settings = ir.page.clone();
+    let mut current_numbering = if ir.sections.is_empty() {
+        geometry.page_numbering
+    } else {
+        ir.first_numbering.or(geometry.page_numbering)
+    };
+    let mut current_start = geometry.page_number_start;
+    let mut first_break_emitted = false;
+    for (index, block) in ir.body.iter().enumerate() {
+        while let Some(next) = sections.next_if(|s| s.start_block == index) {
+            if !doc.body.elements.is_empty() {
+                attach_section_break(
+                    &mut doc.body.elements,
+                    SectionBreak {
+                        break_type: SectionBreakType::NextPage,
+                        page_settings: Some(current_settings.clone()),
+                        title_page: !first_break_emitted && geometry.title_page,
+                        page_numbering: current_numbering,
+                        page_number_start: current_start,
+                    },
+                );
+                first_break_emitted = true;
+            }
+            current_settings = next.settings.clone();
+            current_numbering = next.numbering.or(current_numbering);
+            current_start = next.numbering_start;
+        }
+        let lowered = lower_block(block, doc, ctx);
+        doc.body.elements.extend(lowered);
+    }
+    if !ir.sections.is_empty() {
+        doc.page_settings = current_settings;
+        doc.page_numbering = current_numbering;
+        doc.page_number_start = current_start;
+    }
+}
+
+/// Attach the section-break `w:sectPr` that ends a section to the last
+/// element emitted so far. A trailing paragraph takes the break in its
+/// `w:pPr`; any other trailing element (table, image) leaves the section
+/// boundary itself unmarked, so an empty marker paragraph carries it.
+fn attach_section_break(elements: &mut Vec<BlockElement>, section: SectionBreak) {
+    if let Some(BlockElement::Paragraph(para)) = elements.last_mut() {
+        while matches!(para.inlines.last(), Some(InlineElement::PageBreak)) {
+            para.inlines.pop();
+        }
+        para.section_break = Some(section);
+    } else {
+        let mut para = Paragraph::new();
+        para.section_break = Some(section);
+        para.mark_size_half_pt = Some(2);
+        para.spacing_before = Some(0);
+        para.spacing_after = Some(0);
+        elements.push(BlockElement::Paragraph(para));
+    }
 }
 
 fn lower_footnote_body(footnote: &IrFootnote, ctx: &mut LowerCtx) -> Vec<InlineElement> {
@@ -531,6 +596,9 @@ fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockEleme
         para.section_break = Some(SectionBreak {
             break_type,
             page_settings: None,
+            title_page: false,
+            page_numbering: None,
+            page_number_start: None,
         });
         vec![BlockElement::Paragraph(para)]
     } else {
@@ -752,6 +820,8 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
             IrInline::PageField { display_text } => {
                 out.push(InlineElement::FieldPage {
                     display_text: display_text.clone(),
+                    bold: false,
+                    size_half_pt: None,
                 });
             }
             IrInline::Shape { kind, span, body } => {
@@ -1397,6 +1467,8 @@ mod tests {
             page: PageSettings::default(),
             style: DocumentStyle::default(),
             body: Vec::new(),
+            sections: Vec::new(),
+            first_numbering: None,
             footnotes: Vec::new(),
             citation_sources: Vec::new(),
             page_furniture: Vec::new(),

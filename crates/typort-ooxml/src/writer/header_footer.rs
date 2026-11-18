@@ -103,8 +103,12 @@ fn write_header_footer_paragraph<W: Write>(
         for inline in &para.inlines {
             match inline {
                 InlineElement::Text(run) => write_run(w, run, doc_style)?,
-                InlineElement::FieldPage { display_text } => {
-                    write_field_page(w, display_text)?;
+                InlineElement::FieldPage {
+                    display_text,
+                    bold,
+                    size_half_pt,
+                } => {
+                    write_field_page(w, display_text, *bold, *size_half_pt)?;
                 }
                 _ => {}
             }
