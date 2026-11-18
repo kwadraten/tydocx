@@ -44,7 +44,9 @@ pub(super) fn write_paragraph<W: Write>(
         let has_hanging = para.hanging_indent.is_some();
         let has_hrule = para.horizontal_rule;
         let has_tab_stops = !para.tab_stops.is_empty();
-        let has_spacing = para.spacing_before.is_some() || para.spacing_after.is_some();
+        let has_spacing = para.spacing_before.is_some()
+            || para.spacing_after.is_some()
+            || para.line_twips.is_some();
         if has_style
             || has_num
             || has_alignment
@@ -213,7 +215,12 @@ pub(super) fn write_paragraph<W: Write>(
                     } else {
                         el
                     };
-                    if para.mark_size_half_pt.is_some() {
+                    if let Some(line) = para.line_twips {
+                        let line_str = line.to_string();
+                        el.with_attribute(("w:line", line_str.as_str()))
+                            .with_attribute(("w:lineRule", "exact"))
+                            .write_empty()?;
+                    } else if para.mark_size_half_pt.is_some() {
                         el.with_attribute(("w:line", "0"))
                             .with_attribute(("w:lineRule", "exact"))
                             .write_empty()?;
@@ -224,6 +231,12 @@ pub(super) fn write_paragraph<W: Write>(
                     let after_str = after.to_string();
                     ppr.create_element("w:spacing")
                         .with_attribute(("w:after", after_str.as_str()))
+                        .write_empty()?;
+                } else if let Some(line) = para.line_twips {
+                    let line_str = line.to_string();
+                    ppr.create_element("w:spacing")
+                        .with_attribute(("w:line", line_str.as_str()))
+                        .with_attribute(("w:lineRule", "exact"))
                         .write_empty()?;
                 }
                 // Emit alignment

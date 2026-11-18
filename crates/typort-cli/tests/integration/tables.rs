@@ -105,6 +105,9 @@ fn table_cell_supports_merged_cell_fields() {
         width_pct: None,
         vertical_align: None,
         shading: None,
+        width_twips: None,
+        borders: None,
+        zero_margins: false,
     };
     assert_eq!(cell.colspan, 2);
     assert_eq!(cell.vmerge, VMerge::Restart);
@@ -118,6 +121,9 @@ fn table_cell_supports_merged_cell_fields() {
         width_pct: None,
         vertical_align: None,
         shading: None,
+        width_twips: None,
+        borders: None,
+        zero_margins: false,
     };
     assert_eq!(cont_cell.vmerge, VMerge::Continue);
 }
@@ -130,6 +136,8 @@ fn merged_cell_emits_grid_span_and_vmerge() {
     let table = Table {
         rows: vec![
             TableRow {
+                height_twips: None,
+                is_header: false,
                 cells: vec![
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -139,6 +147,9 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         width_pct: None,
                         vertical_align: None,
                         shading: None,
+                        width_twips: None,
+                        borders: None,
+                        zero_margins: false,
                     },
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -148,10 +159,15 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         width_pct: None,
                         vertical_align: None,
                         shading: None,
+                        width_twips: None,
+                        borders: None,
+                        zero_margins: false,
                     },
                 ],
             },
             TableRow {
+                height_twips: None,
+                is_header: false,
                 cells: vec![
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -161,6 +177,9 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         width_pct: None,
                         vertical_align: None,
                         shading: None,
+                        width_twips: None,
+                        borders: None,
+                        zero_margins: false,
                     },
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -170,6 +189,9 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         width_pct: None,
                         vertical_align: None,
                         shading: None,
+                        width_twips: None,
+                        borders: None,
+                        zero_margins: false,
                     },
                 ],
             },
@@ -178,6 +200,8 @@ fn merged_cell_emits_grid_span_and_vmerge() {
         border_size: None,
         borders: None,
         cell_margins: None,
+        width_twips: None,
+        col_widths_twips: None,
     };
     doc.add_table(table);
 

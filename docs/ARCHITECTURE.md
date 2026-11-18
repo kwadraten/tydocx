@@ -217,7 +217,7 @@ they exercise that public API as integration tests.
 | `convert/breaks.rs` | Explicit `#pagebreak()`/`#colbreak()` recovery from the source AST (both are consumed at compile time), positioned by run spans, expanding local function calls, and following `#include` chains. |
 | `convert/bibliography.rs` | Citation data via the semantic `BibliographyElem` (+ re-parsing `.bib`/`.yml` with hayagriva). Takes `&dyn Introspector`, so both conversion paths share it (legacy: HtmlDocument's introspector; realize: DocxDocument's). |
 | `convert/footnote.rs` | Footnote bodies from the HTML `doc-endnotes` section. |
-| `convert/image.rs` | Image content decoded from each `<img>`'s base64 src data-URL (typst-html 0.15 embeds the bytes in the DOM); Paged frames contribute display sizes (by content hash) and drawing-canvas rasters keyed by their figure's `Location`. |
+| `convert/image.rs` | Image content decoded from each `<img>`'s base64 src data-URL (typst-html 0.15 embeds the bytes in the DOM); Paged frames contribute display sizes (by content hash) and drawing-canvas SVG+raster pairs keyed by their figure's `Location`. |
 | `convert/inline.rs` | Typst Content-AST inline formatting (bold/italic/…) → styled runs. |
 
 ## The IR: `typort_ooxml::Document`
@@ -268,6 +268,25 @@ Rules the equivalence round established (see
   uniform grid and no strokes give nil borders. **Column widths** are
   fiftieths of a percent (5000 = 100%), summed over spanned tracks
   without rescaling.
+- **Grids** lower to fixed-layout tables through a pure planner
+  (`typort-ir::grid_plan`): occupancy is derived from cell `x`/spans,
+  empty source rows run-length-merge into single rows with summed
+  `w:trHeight`, identical adjacent columns merge into `w:gridSpan`
+  lanes, and `rowspan`s become `w:vMerge` (a continuation keeps the
+  restart's `w:gridSpan`, so a spanning merge never splits into
+  per-lane cells). Strokes resolve per boundary segment the way Typst
+  folds them — an explicit line wins, a declared cell edge beats an
+  undeclared neighbour, ties go to the inner side — and the winning
+  side alone emits the `w:tcBorder`, so whitespace and continuation
+  cells never paint borders they do not own. `auto` row heights are
+  measured per row (`typst_layout::layout_frame` on the row's cell
+  bodies at their resolved widths) instead of equal-sharing the
+  fragment total; empty slots get zero cell margins and a 1pt
+  paragraph mark.
+- **Drawn figure bodies** attach their Paged canvas by `Location` hash
+  and embed as SVG (`typst_svg`) plus a PNG fallback (`typst_render`)
+  inside `mc:AlternateContent`; source SVG images keep their bytes the
+  same way. C1 keeps the raster only.
 - **Heading sizes** are measured from the collected headings' own runs
   (glyph-weighted dominant size per level); the rank-based histogram is
   only the fallback for levels with no sized run.

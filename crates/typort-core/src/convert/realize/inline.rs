@@ -878,24 +878,29 @@ pub(crate) fn image_inline(
         return None;
     };
     let vector = matches!(decoded.kind(), ImageKind::Svg(_));
-    let (bytes, mime, source_hash) = match decoded.kind() {
+    let (bytes, mime, source_hash, svg) = match decoded.kind() {
         ImageKind::Raster(raster) => {
             let original = raster.data().as_slice();
             let source_hash = hash_bytes(original);
             let bytes = original.to_vec();
             if is_jpeg(&bytes) {
-                (bytes, Some("image/jpeg".to_string()), source_hash)
+                (bytes, Some("image/jpeg".to_string()), source_hash, None)
             } else if is_png(&bytes) {
-                (bytes, Some("image/png".to_string()), source_hash)
+                (bytes, Some("image/png".to_string()), source_hash, None)
             } else {
                 let png = reencode_png(&bytes)?;
-                (png, Some("image/png".to_string()), source_hash)
+                (png, Some("image/png".to_string()), source_hash, None)
             }
         }
-        ImageKind::Svg(svg) => {
-            let original = svg.data().as_slice();
+        ImageKind::Svg(svg_data) => {
+            let original = svg_data.data().as_slice();
             let png = rasterize_svg(original)?;
-            (png, Some("image/png".to_string()), hash_bytes(original))
+            (
+                png,
+                Some("image/png".to_string()),
+                hash_bytes(original),
+                Some(original.to_vec()),
+            )
         }
         ImageKind::Pdf(_) => {
             ctx.degradations.push(Degradation {
@@ -917,6 +922,7 @@ pub(crate) fn image_inline(
             let span = image.span();
             span.id().map(|_| span)
         },
+        svg,
         vector,
         non_cover_fit: image
             .fit

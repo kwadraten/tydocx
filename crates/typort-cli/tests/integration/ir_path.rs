@@ -176,7 +176,10 @@ fn ir_path_documented_diffs() {
     {
         let (new_xml, legacy_xml) = convert_both("general_elements");
         assert!(legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""));
-        assert!(!new_xml.contains("w:pBdr"), "new path drops #line (M5 gap)");
+        assert!(
+            new_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""),
+            "#line resolves through its context wrapper to a paragraph rule"
+        );
         assert_eq!(count(&new_xml, "w:val=\"18\""), 6);
         assert_eq!(count(&legacy_xml, "w:val=\"18\""), 0);
         assert!(
@@ -231,7 +234,10 @@ fn ir_path_documented_diffs() {
     {
         let (new_xml, legacy_xml) = convert_both("memo");
         assert!(legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""));
-        assert!(!new_xml.contains("w:pBdr"), "new path drops #line (M5 gap)");
+        assert!(
+            new_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""),
+            "#line resolves through its context wrapper to a paragraph rule"
+        );
         assert_eq!(count(&new_xml, "<w:tbl>"), 1);
         assert_eq!(count(&legacy_xml, "<w:tbl>"), 0);
         assert!(
@@ -313,14 +319,16 @@ fn ir_path_documented_diffs() {
     }
 
     {
+        // L4: the drawn canvas embeds on both paths — an SVG choice plus a
+        // PNG fallback inside mc:AlternateContent, extent taken from the
+        // canvas frame.
         let (new_xml, legacy_xml) = convert_both("edge_figure_rasterized");
-        assert_eq!(count(&legacy_xml, "wp:extent"), 1);
-        assert_eq!(count(&new_xml, "wp:extent"), 0);
-        assert!(legacy_xml.contains("1800000"), "rasterized extent present");
-        assert!(!new_xml.contains("1800000"));
+        assert_eq!(count(&legacy_xml, "asvg:svgBlip"), 1);
+        assert_eq!(count(&new_xml, "asvg:svgBlip"), 1);
+        assert!(new_xml.contains("1800000"), "canvas extent preserved");
         assert!(
-            !new_xml.contains("xmlns:wp="),
-            "no drawing namespaces emitted"
+            !new_xml.contains("ZZLABELZZ"),
+            "canvas text stays inside the image"
         );
     }
 

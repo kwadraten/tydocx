@@ -52,6 +52,7 @@ impl Alignment {
 pub enum ImageFormat {
     Png,
     Jpeg,
+    Svg,
 }
 
 impl ImageFormat {
@@ -60,6 +61,7 @@ impl ImageFormat {
         match self {
             Self::Png => "png",
             Self::Jpeg => "jpg",
+            Self::Svg => "svg",
         }
     }
 
@@ -68,6 +70,7 @@ impl ImageFormat {
         match self {
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
+            Self::Svg => "image/svg+xml",
         }
     }
 }
@@ -77,6 +80,10 @@ impl ImageFormat {
 pub struct ImageData {
     pub bytes: Vec<u8>,
     pub format: ImageFormat,
+    /// Original vector bytes when the source was vector: emitted as
+    /// `asvg:svgBlip` in `mc:AlternateContent`, with `bytes` as the PNG
+    /// fallback for consumers without the SVG extension.
+    pub svg: Option<Vec<u8>>,
     pub width_emu: u64,
     pub height_emu: u64,
 }
@@ -519,6 +526,10 @@ pub struct Paragraph {
     /// recovery pass; lets the element→page map use the real page instead of a
     /// proportional guess. Not emitted to OOXML.
     pub page_from_paged: Option<usize>,
+    /// Exact line height in twips: `w:spacing w:line` + `w:lineRule="exact"`.
+    /// Timetable whitespace cells pin 1pt paragraphs so Word does not inflate
+    /// empty rows to its minimum.
+    pub line_twips: Option<u32>,
 }
 
 impl Paragraph {
@@ -767,6 +778,33 @@ pub struct TableCell {
     /// the semantic `TableElem` fill. Maps to `w:shd` in `w:tcPr`, mirroring
     /// `Run.shading`. `None` = unset.
     pub shading: Option<String>,
+    /// Absolute cell width in twips (`w:tcW` `dxa`); used by fixed-layout
+    /// tables planned from a resolved Typst grid.
+    pub width_twips: Option<u32>,
+    /// Per-side cell strokes (`w:tcBorders`). `None` lets the table-level
+    /// borders show through; `Some` reproduces the grid's exact stroke
+    /// geometry, including `nil` sides.
+    pub borders: Option<CellBorders>,
+    /// Zero cell margins (`w:tcMar` 0) so empty timetable rows do not inflate.
+    pub zero_margins: bool,
+}
+
+/// Per-side cell borders (`w:tcBorders`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CellBorders {
+    pub top: Option<CellBorder>,
+    pub left: Option<CellBorder>,
+    pub bottom: Option<CellBorder>,
+    pub right: Option<CellBorder>,
+}
+
+/// One cell border side: thickness in eighths of a point (`w:sz`), optional
+/// hex colour, dashed or single.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CellBorder {
+    pub sz_eighths: u32,
+    pub color_hex: Option<String>,
+    pub dashed: bool,
 }
 
 /// Vertical alignment of a table cell's content. Maps to `w:vAlign`.
@@ -811,6 +849,11 @@ pub enum VMerge {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableRow {
     pub cells: Vec<TableCell>,
+    /// Exact row height in twips (`w:trHeight` `hRule="exact"`). Timetable
+    /// slot heights pin rendered row pitch instead of inflating to content.
+    pub height_twips: Option<u32>,
+    /// `w:tblHeader`: repeat this row atop each page the table breaks onto.
+    pub is_header: bool,
 }
 
 /// Per-side table border thicknesses in eighths of a point (`None` = no border).
@@ -862,6 +905,13 @@ pub struct Table {
     /// Cell margins applied to every cell (`w:tblCellMar`). `None` leaves the
     /// Word default (left/right 108 twips).
     pub cell_margins: Option<TableCellMargins>,
+    /// Absolute table width in twips (`w:tblW` `dxa`); fixed-layout tables
+    /// planned from a resolved Typst grid set this together with
+    /// `col_widths_twips`.
+    pub width_twips: Option<u32>,
+    /// Absolute column widths in twips (`w:tblGrid` + `w:tblLayout
+    /// w:type="fixed"`). `None` keeps percentage-based auto layout.
+    pub col_widths_twips: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

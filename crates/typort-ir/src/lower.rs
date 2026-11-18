@@ -2,18 +2,20 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use typort_ooxml::document::{
-    BlockElement, CellContent, Document, ImageData, ImageFormat, InlineElement, LevelOverride,
-    ListInfo, Paragraph, SectionBreak, SectionBreakType, Table, TableCell, TableRow, VMerge,
+    BlockElement, CellBorders, CellContent, Document, ImageData, ImageFormat, InlineElement,
+    LevelOverride, ListInfo, Paragraph, SectionBreak, SectionBreakType, Table, TableBorders,
+    TableCell, TableCellMargins, TableRow, VMerge,
 };
 
 use crate::degradation::{Degradation, DegradationAction};
 use crate::geometry::GeometryInput;
+use crate::grid_plan::{MAX_COLUMNS, PlannedCell, PlannedCellKind, PlannedTable, plan_grid};
 use crate::mode::CompatMode;
 use crate::types::{
-    Alignment, HangingIndent, IrBibEntry, IrBlock, IrDocument, IrEnum, IrEquation, IrFootnote,
-    IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList, IrNumberingPattern,
-    IrParagraph, IrRaw, IrSectionBreakType, IrTable, IrTableCell, IrTableRow, IrVMerge,
-    ParagraphStyle, Run,
+    Alignment, HangingIndent, IrBibEntry, IrBlock, IrCellBorders, IrDocument, IrEnum, IrEquation,
+    IrFootnote, IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList,
+    IrNumberingPattern, IrParagraph, IrRaw, IrSectionBreakType, IrTable, IrTableCell, IrTableRow,
+    IrVMerge, ParagraphStyle, Run,
 };
 
 #[derive(Debug, Default)]
@@ -28,6 +30,9 @@ pub struct LowerCtx {
     /// to compare Word's expected number against the number Typst rendered —
     /// a source-side `#counter(heading).update` shifts the two apart.
     pub heading_counters: HashMap<u32, HeadingNumState>,
+    /// Page content width in twips — the width a top-level grid fills, used
+    /// to resolve `fr` track widths for fixed-layout tables.
+    pub content_width_twips: Option<u32>,
     /// Whether an unrepresentable heading numbering was already reported.
     pub unmappable_heading_reported: bool,
 }
@@ -111,6 +116,10 @@ pub fn lower(
         degradations: Vec::new(),
         heading_counters: HashMap::new(),
         unmappable_heading_reported: false,
+        content_width_twips: ir
+            .page
+            .width_twips
+            .checked_sub(ir.page.margin_left + ir.page.margin_right),
     };
 
     for footnote in &ir.footnotes {
@@ -249,7 +258,7 @@ fn lower_block_in(
                 );
                 lower_grid_flat(grid, doc, ctx)
             } else {
-                vec![BlockElement::Table(lower_grid(grid, doc, ctx))]
+                lower_grid(grid, doc, ctx)
             }
         }
         IrBlock::Figure {
@@ -262,6 +271,7 @@ fn lower_block_in(
             caption_first,
             custom_placement,
             gap_twips,
+            location_hash: _,
         } => {
             if ctx.compat.is_c1() && *custom_placement {
                 ctx.degrade(
@@ -875,6 +885,11 @@ fn lower_image(image: &IrImage, ctx: &mut LowerCtx) -> InlineElement {
     InlineElement::Image(ImageData {
         bytes: image.bytes.clone(),
         format,
+        svg: if ctx.compat.is_c1() {
+            None
+        } else {
+            image.svg.clone()
+        },
         width_emu: image.width_emu,
         height_emu: image.height_emu,
     })
@@ -971,6 +986,8 @@ fn lower_table(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Table
         border_size: None,
         borders: table.borders.clone(),
         cell_margins: table.cell_margins,
+        width_twips: None,
+        col_widths_twips: None,
     }
 }
 
@@ -986,18 +1003,160 @@ fn lower_grid_flat(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec
     out
 }
 
-fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Table {
+fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+    let content_width = ctx.content_width_twips;
+    let plan = plan_grid(grid, content_width);
+    if plan.changed {
+        if plan.tables.len() > 1 {
+            ctx.degrade(
+                "grid-column-split",
+                DegradationAction::Approximated,
+                format!(
+                    "a grid wider than {MAX_COLUMNS} columns was split into {} tables",
+                    plan.tables.len()
+                ),
+            );
+        }
+        return plan
+            .tables
+            .iter()
+            .map(|table| BlockElement::Table(lower_planned_table(table, grid, doc, ctx)))
+            .collect();
+    }
     let rows = grid
         .rows
         .iter()
+        .filter(|row| !row.cells.is_empty())
         .map(|row| lower_row(row, grid.column_widths_pct.as_ref(), doc, ctx))
         .collect();
-    Table {
+    vec![BlockElement::Table(Table {
         rows,
         width_pct: Some(5000),
         border_size: None,
         borders: grid.borders.clone(),
         cell_margins: None,
+        width_twips: None,
+        col_widths_twips: None,
+    })]
+}
+
+fn lower_planned_table(
+    planned: &PlannedTable,
+    grid: &IrGrid,
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) -> Table {
+    let rows = planned
+        .rows
+        .iter()
+        .map(|row| {
+            let mut cells = Vec::new();
+            let mut lane = 0_usize;
+            for cell in &row.cells {
+                let span = usize::try_from(cell.col_span).unwrap_or(1);
+                let width = planned
+                    .col_widths_twips
+                    .as_ref()
+                    .and_then(|w| w.get(lane..lane + span).map(|slice| slice.iter().sum()));
+                if cell.kind != PlannedCellKind::Filler {
+                    cells.push(lower_planned_cell(cell, grid, width, doc, ctx));
+                }
+                lane += span;
+            }
+            TableRow {
+                cells,
+                height_twips: row.height_twips,
+                is_header: row.is_header,
+            }
+        })
+        .collect();
+    Table {
+        rows,
+        width_pct: None,
+        border_size: None,
+        borders: Some(TableBorders::default()),
+        cell_margins: Some(TableCellMargins {
+            top: 0,
+            left: 0,
+            bottom: 0,
+            right: 0,
+        }),
+        width_twips: planned.col_widths_twips.as_ref().map(|w| w.iter().sum()),
+        col_widths_twips: planned.col_widths_twips.clone(),
+    }
+}
+
+fn ooxml_cell_borders(borders: &IrCellBorders) -> CellBorders {
+    let map = |b: &Option<crate::types::IrBorder>| {
+        b.as_ref().map(|b| typort_ooxml::document::CellBorder {
+            sz_eighths: b.sz_eighths,
+            color_hex: b.color_hex.clone(),
+            dashed: b.dashed,
+        })
+    };
+    CellBorders {
+        top: map(&borders.top),
+        left: map(&borders.left),
+        bottom: map(&borders.bottom),
+        right: map(&borders.right),
+    }
+}
+
+fn tiny_paragraph() -> Paragraph {
+    let mut para = Paragraph::new();
+    para.line_twips = Some(20);
+    para.mark_size_half_pt = Some(2);
+    para.spacing_before = Some(0);
+    para.spacing_after = Some(0);
+    para
+}
+
+fn lower_planned_cell(
+    cell: &PlannedCell,
+    grid: &IrGrid,
+    width_twips: Option<u32>,
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) -> TableCell {
+    let borders = Some(ooxml_cell_borders(&cell.borders));
+    match cell.kind {
+        PlannedCellKind::Real { row, index } => {
+            let src = &grid.rows[row].cells[index];
+            let mut out = lower_cell(src, None, doc, ctx);
+            out.colspan = cell.col_span;
+            out.vmerge = if cell.row_span > 1 {
+                VMerge::Restart
+            } else {
+                VMerge::None
+            };
+            out.borders = borders;
+            out.width_twips = width_twips;
+            out
+        }
+        PlannedCellKind::Empty | PlannedCellKind::Filler => TableCell {
+            paragraphs: vec![tiny_paragraph()],
+            content: Vec::new(),
+            colspan: 1,
+            vmerge: VMerge::None,
+            width_pct: None,
+            vertical_align: None,
+            shading: cell.fill_hex.clone(),
+            width_twips,
+            borders,
+            zero_margins: true,
+        },
+        PlannedCellKind::VContinue => TableCell {
+            paragraphs: vec![tiny_paragraph()],
+            content: Vec::new(),
+            colspan: cell.col_span,
+            vmerge: VMerge::Continue,
+            width_pct: None,
+            vertical_align: None,
+            shading: cell.fill_hex.clone(),
+            width_twips,
+            borders,
+            zero_margins: true,
+        },
     }
 }
 
@@ -1023,7 +1182,11 @@ fn lower_row(
         col += usize::try_from(cell.colspan).unwrap_or(1).max(1);
         cells.push(lower_cell(cell, width_pct, doc, ctx));
     }
-    TableRow { cells }
+    TableRow {
+        cells,
+        height_twips: row.height_twips,
+        is_header: row.is_header,
+    }
 }
 
 fn lower_cell(
@@ -1072,6 +1235,9 @@ fn lower_cell(
         } else {
             cell.fill_hex.clone()
         },
+        width_twips: None,
+        borders: None,
+        zero_margins: false,
     }
 }
 
@@ -1456,8 +1622,8 @@ fn merge_runs(inlines: Vec<InlineElement>) -> Vec<InlineElement> {
 mod tests {
     use super::*;
     use crate::types::{
-        DocumentStyle, IrDocumentInfo, IrEnumItem, IrListItem, IrNumberingPiece, IrNumeralSystem,
-        IrShapeKind, PageSettings, VerticalAlign,
+        DocumentStyle, IrCellBorderFlags, IrDocumentInfo, IrEnumItem, IrListItem, IrNumberingPiece,
+        IrNumeralSystem, IrShapeKind, PageSettings, VerticalAlign,
     };
     use typort_ooxml::document::{AnchoredLine, BlockElement, InlineElement, ParagraphStyle};
 
@@ -1532,13 +1698,18 @@ mod tests {
             rows: vec![IrTableRow {
                 cells: vec![IrTableCell {
                     body: vec![IrBlock::Paragraph(text_para("a"))],
+                    x: 0,
                     colspan: 2,
                     rowspan: 1,
                     vmerge: IrVMerge::Restart,
                     fill_hex: Some("DDEEFF".to_owned()),
                     vertical_align: Some(VerticalAlign::Center),
                     inset_twips: None,
+                    borders: IrCellBorders::default(),
+                    borders_declared: IrCellBorderFlags::default(),
                 }],
+                height_twips: None,
+                is_header: false,
             }],
             column_widths_pct: Some(vec![2500, 2500]),
             borders: None,
