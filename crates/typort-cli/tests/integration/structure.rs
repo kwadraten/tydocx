@@ -1034,3 +1034,17 @@ fn issue_outline_title_emitted_before_toc() {
         "outline depth 2 reaches the TOC switch"
     );
 }
+
+#[test]
+fn issue_weak_pagebreak_after_content_emits_one_break() {
+    let doc_xml = fixture_doc_xml("issue_pagebreak_weak_after_content");
+    assert_eq!(
+        doc_xml.matches(r#"w:br w:type="page""#).count(),
+        1,
+        "a weak pagebreak after content must emit one hard break:\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let first = texts.iter().position(|t| t.contains("First page."));
+    let second = texts.iter().position(|t| t.contains("Second page."));
+    assert!(first.is_some() && second.is_some() && first < second);
+}

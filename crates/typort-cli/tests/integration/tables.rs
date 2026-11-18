@@ -1015,3 +1015,57 @@ fn issue_table_inset_becomes_cell_margins() {
         "inset (x: 4pt, y: 5pt) must map to y=100 / x=80 twips:\n{mar}"
     );
 }
+
+#[test]
+fn issue_grid_after_set_in_block_becomes_table() {
+    let doc_xml = fixture_doc_xml("issue_grid_in_block");
+    assert!(
+        doc_xml.contains("<w:tbl>"),
+        "grid after a set rule inside a block lowers to a table"
+    );
+    assert_eq!(
+        doc_xml.matches("<w:tr>").count(),
+        1,
+        "one grid row:\n{doc_xml}"
+    );
+    assert_eq!(
+        doc_xml.matches("<w:tc>").count(),
+        3,
+        "three cells keep the grid's column structure:\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let order: Vec<usize> = ["0.1", "Middle entry text", "11"]
+        .iter()
+        .map(|needle| {
+            texts
+                .iter()
+                .position(|t| t.trim() == *needle)
+                .unwrap_or_else(|| panic!("{needle:?} missing as a cell paragraph from {texts:?}"))
+        })
+        .collect();
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "grid cells keep reading order, positions {order:?}"
+    );
+}
+
+#[test]
+fn issue_table_after_set_in_block_keeps_table() {
+    let doc_xml = fixture_doc_xml("issue_table_after_set_in_block");
+    assert!(
+        doc_xml.contains("<w:tbl>"),
+        "table after a set rule inside a block stays a table"
+    );
+    assert_eq!(
+        doc_xml.matches("<w:tr>").count(),
+        2,
+        "header row plus one data row:\n{doc_xml}"
+    );
+    assert_eq!(
+        doc_xml.matches("<w:tc>").count(),
+        6,
+        "three cells per row:\n{doc_xml}"
+    );
+    assert!(doc_xml.contains("481,513"), "data cell should be present");
+    assert!(doc_xml.contains("Row label"), "row label should be present");
+}
