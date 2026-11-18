@@ -422,9 +422,13 @@ pre-cleanup redundant size override).
   the first covered run, matched by span containment with an order+text
   fallback; the covered runs' `overline` flag is cleared. C2/C3 lower it
   to a `wp:anchor` + `wps` `line` shape positioned `relativeFrom="line"`.
-  C1 is unchanged (degradation + text kept); an overline the paged match
-  cannot cover keeps the flag and degrades the same way. The underline
-  stopgap is gone.
+  The writer declares `xmlns:wp`/`xmlns:a`/`xmlns:pic` on `document.xml`
+  and `footnotes.xml` whenever the part holds any drawing (image or
+  anchored line) — not only images — and strokes a colorless line with an
+  explicit black `a:solidFill` so the shape renders without a theme
+  default. C1 is unchanged (degradation + text kept); an overline the
+  paged match cannot cover keeps the flag and degrades the same way. The
+  underline stopgap is gone.
 
 ### Heading-size measurement
 - The IR path measures per-level heading sizes from the collected

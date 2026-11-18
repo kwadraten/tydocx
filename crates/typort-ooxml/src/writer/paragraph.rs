@@ -46,7 +46,6 @@ pub(super) fn write_paragraph<W: Write>(
         let has_tab_stops = !para.tab_stops.is_empty();
         let has_spacing = para.spacing_before.is_some() || para.spacing_after.is_some();
         if has_style
-            || has_list
             || has_num
             || has_alignment
             || suppress_indent

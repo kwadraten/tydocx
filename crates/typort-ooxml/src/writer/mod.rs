@@ -27,7 +27,7 @@ use citation::{
 use document::generate_document_xml;
 use footnotes::{generate_footnote_rels, generate_footnotes_xml};
 use header_footer::{generate_footer_xml, generate_header_xml, generate_page_number_footer_xml};
-use image::{collect_footnote_images, collect_images};
+use image::{body_has_drawing, collect_footnote_images, collect_images, footnotes_have_drawing};
 use numbering::generate_numbering_xml;
 use package::{
     generate_content_types, generate_core_properties, generate_document_rels, generate_rels,
@@ -90,7 +90,6 @@ struct WriteCtx<'a> {
 pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<dyn Error>> {
     let parts = DocParts::new(doc);
     let images = collect_images(doc);
-    let has_images = !images.is_empty();
     let footnote_images = collect_footnote_images(doc);
     // Footnote images are numbered after the body images in the
     // document-wide media numbering.
@@ -138,7 +137,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
 
     zip.start_file("word/document.xml", options)?;
     zip.write_all(&xml_part(|w| {
-        generate_document_xml(w, doc, has_images, &ctx)
+        generate_document_xml(w, doc, body_has_drawing(doc), &ctx)
     })?)?;
 
     if parts.has(RelKind::Footnotes) {
@@ -149,7 +148,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
                 doc,
                 &ctx,
                 footnote_image_base,
-                !footnote_images.is_empty(),
+                footnotes_have_drawing(doc),
             )
         })?)?;
         if !footnote_images.is_empty() {

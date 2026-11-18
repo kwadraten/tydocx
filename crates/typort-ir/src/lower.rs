@@ -11,9 +11,9 @@ use crate::geometry::GeometryInput;
 use crate::mode::CompatMode;
 use crate::types::{
     Alignment, HangingIndent, IrBibEntry, IrBlock, IrDocument, IrEnum, IrEquation, IrFootnote,
-    IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList,
-    IrNumberingPattern, IrNumeralSystem, IrParagraph, IrRaw, IrSectionBreakType, IrTable,
-    IrTableCell, IrTableRow, IrVMerge, ParagraphStyle, Run,
+    IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList, IrNumberingPattern,
+    IrParagraph, IrRaw, IrSectionBreakType, IrTable, IrTableCell, IrTableRow, IrVMerge,
+    ParagraphStyle, Run,
 };
 
 #[derive(Debug, Default)]
@@ -295,32 +295,22 @@ fn lower_outline(
     out
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the heading IR fields are passed through; bundling them into a struct only wraps the enum variant"
-)]
 fn lower_heading(
-    level: u8,
-    numbering_text: Option<&String>,
-    numbering: Option<&IrHeadingNumbering>,
-    body: &[IrInline],
-    label: Option<&String>,
-    alignment: Option<Alignment>,
-    span: Option<typst_syntax::Span>,
+    spec: &HeadingSpec<'_>,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> Vec<BlockElement> {
     let mut para = Paragraph::new();
-    para.style = Some(ParagraphStyle::Heading(level));
-    para.alignment = alignment;
-    let num_id = match numbering {
+    para.style = Some(ParagraphStyle::Heading(spec.level));
+    para.alignment = spec.alignment;
+    let num_id = match spec.numbering {
         Some(IrHeadingNumbering::Mappable(pattern))
-            if !ctx.compat.is_c1() && numbering_text.is_some() =>
+            if !ctx.compat.is_c1() && spec.numbering_text.is_some() =>
         {
             let levels = heading_level_overrides(pattern);
             let (num_id, _) = doc.find_or_allocate_heading_numbering(&levels);
-            if let Some(rendered) = numbering_text {
-                check_heading_number(ctx, num_id, pattern, level, rendered, span);
+            if let Some(rendered) = spec.numbering_text {
+                check_heading_number(ctx, num_id, pattern, spec.level, rendered, spec.span);
             }
             Some(num_id)
         }
@@ -328,7 +318,7 @@ fn lower_heading(
             if !ctx.unmappable_heading_reported {
                 ctx.unmappable_heading_reported = true;
                 ctx.degrade_at(
-                    span,
+                    spec.span,
                     "heading-numbering",
                     DegradationAction::Literalized,
                     "heading numbering is a function or a numeral system without an OOXML \
@@ -342,21 +332,21 @@ fn lower_heading(
     };
     if let Some(num_id) = num_id {
         para.num_pr = Some(ListInfo {
-            level: u32::from(level).saturating_sub(1),
+            level: u32::from(spec.level).saturating_sub(1),
             id: num_id,
         });
-    } else if let Some(number) = numbering_text {
+    } else if let Some(number) = spec.numbering_text {
         para.push_run(Run::new(format!("{number} ")));
     }
-    para.inlines.extend(lower_inlines(body, ctx));
-    let idx = usize::from(level).saturating_sub(1).min(4);
+    para.inlines.extend(lower_inlines(spec.body, ctx));
+    let idx = usize::from(spec.level).saturating_sub(1).min(4);
     let style_size = ctx.heading_sizes[idx];
     for inline in &mut para.inlines {
         if let InlineElement::Text(run) = inline {
             strip_redundant_heading_run(run, style_size);
         }
     }
-    if let Some(name) = label {
+    if let Some(name) = spec.label {
         let id = ctx.next_bookmark();
         para.add_bookmark_at_start(id, name.clone());
     }
@@ -563,7 +553,21 @@ struct FigureSpec<'a> {
     gap_twips: Option<u32>,
 }
 
-fn lower_heading_block(block: &IrBlock, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+struct HeadingSpec<'a> {
+    level: u8,
+    numbering_text: Option<&'a String>,
+    numbering: Option<&'a IrHeadingNumbering>,
+    body: &'a [IrInline],
+    label: Option<&'a String>,
+    alignment: Option<Alignment>,
+    span: Option<typst_syntax::Span>,
+}
+
+fn lower_heading_block(
+    block: &IrBlock,
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) -> Vec<BlockElement> {
     let IrBlock::Heading {
         level,
         numbering_text,
@@ -577,13 +581,15 @@ fn lower_heading_block(block: &IrBlock, doc: &mut Document, ctx: &mut LowerCtx) 
         return Vec::new();
     };
     lower_heading(
-        *level,
-        numbering_text.as_ref(),
-        numbering.as_ref(),
-        body,
-        label.as_ref(),
-        *alignment,
-        *span,
+        &HeadingSpec {
+            level: *level,
+            numbering_text: numbering_text.as_ref(),
+            numbering: numbering.as_ref(),
+            body,
+            label: label.as_ref(),
+            alignment: *alignment,
+            span: *span,
+        },
         doc,
         ctx,
     )
@@ -844,10 +850,16 @@ fn inline_to_runs(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<Run> {
             IrInline::Link { body, .. } | IrInline::Shape { body, .. } => {
                 runs.extend(inline_to_runs(body, ctx));
             }
+            IrInline::Overline(_) => {
+                ctx.degrade(
+                    "overline",
+                    DegradationAction::Skipped,
+                    "measured overline reached a flattened text context; line dropped".to_string(),
+                );
+            }
             IrInline::Image(_)
             | IrInline::Math { .. }
             | IrInline::PageBreak
-            | IrInline::Overline(_)
             | IrInline::ColumnBreak
             | IrInline::Tab => {}
         }
@@ -1291,13 +1303,7 @@ pub fn numbering_level_def(pattern: &IrNumberingPattern, level: u32) -> Option<I
     }
     let idx = (usize::try_from(level).unwrap_or(0)).min(pattern.pieces.len() - 1);
     let system = pattern.pieces[idx].system;
-    let num_fmt = match system {
-        IrNumeralSystem::Arabic => "decimal".to_owned(),
-        IrNumeralSystem::LowerLatin => "lowerLetter".to_owned(),
-        IrNumeralSystem::UpperLatin => "upperLetter".to_owned(),
-        IrNumeralSystem::LowerRoman => "lowerRoman".to_owned(),
-        IrNumeralSystem::UpperRoman => "upperRoman".to_owned(),
-    };
+    let num_fmt = system.num_fmt().to_owned();
     let mut lvl_text = String::new();
     if pattern.full {
         for j in 0..=usize::try_from(level).unwrap_or(0) {
@@ -1380,8 +1386,8 @@ fn merge_runs(inlines: Vec<InlineElement>) -> Vec<InlineElement> {
 mod tests {
     use super::*;
     use crate::types::{
-        DocumentStyle, IrDocumentInfo, IrEnumItem, IrListItem, IrNumberingPiece, IrShapeKind,
-        PageSettings, VerticalAlign,
+        DocumentStyle, IrDocumentInfo, IrEnumItem, IrListItem, IrNumberingPiece, IrNumeralSystem,
+        IrShapeKind, PageSettings, VerticalAlign,
     };
     use typort_ooxml::document::{AnchoredLine, BlockElement, InlineElement, ParagraphStyle};
 
@@ -1939,7 +1945,7 @@ mod tests {
         let mut para = IrParagraph::default();
         para.inlines.push(IrInline::Overline(AnchoredLine {
             x_emu: 914_400,
-            y_emu: -12_700,
+            y_emu: 18_999,
             length_emu: 457_200,
             thickness_emu: 6_350,
             color: None,
@@ -1951,7 +1957,7 @@ mod tests {
         assert!(matches!(
             &doc.body.elements[0],
             BlockElement::Paragraph(para)
-                if matches!(&para.inlines[0], InlineElement::AnchoredLine(line) if line.y_emu < 0)
+                if matches!(&para.inlines[0], InlineElement::AnchoredLine(line) if line.y_emu == 18_999)
         ));
     }
 
@@ -1987,5 +1993,169 @@ mod tests {
         assert_eq!(parse_circled_number("①"), Some(1));
         assert_eq!(parse_circled_number("㊿"), Some(50));
         assert_eq!(parse_circled_number("①②"), None);
+    }
+
+    fn heading(level: u8, number: &str, numbering: Option<IrHeadingNumbering>) -> IrBlock {
+        IrBlock::Heading {
+            level,
+            numbering_text: Some(number.to_owned()),
+            numbering,
+            body: vec![IrInline::Text(Run::new("Title"))],
+            label: None,
+            alignment: None,
+            span: None,
+        }
+    }
+
+    fn heading_para(doc: &Document, index: usize) -> &Paragraph {
+        let BlockElement::Paragraph(para) = &doc.body.elements[index] else {
+            panic!("expected a paragraph");
+        };
+        para
+    }
+
+    #[test]
+    fn mappable_heading_uses_word_numbering() {
+        let mut ir = empty_doc();
+        let numbering = Some(IrHeadingNumbering::Mappable(pattern(
+            &[
+                ("", IrNumeralSystem::Arabic),
+                (".", IrNumeralSystem::Arabic),
+            ],
+            "",
+            true,
+        )));
+        ir.body.push(heading(1, "1", numbering.clone()));
+        ir.body.push(heading(2, "1.1", numbering));
+        let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
+        assert!(degradations.is_empty());
+        assert_eq!(doc.heading_num_instances.len(), 1);
+        let num_id = doc.heading_num_instances[0].num_id;
+        assert_eq!(doc.heading_num_instances[0].levels.len(), 9);
+        let h1 = heading_para(&doc, 0);
+        assert_eq!(
+            h1.num_pr.as_ref().map(|info| (info.id, info.level)),
+            Some((num_id, 0))
+        );
+        let h2 = heading_para(&doc, 1);
+        assert_eq!(
+            h2.num_pr.as_ref().map(|info| (info.id, info.level)),
+            Some((num_id, 1))
+        );
+        assert!(
+            !h2.inlines.iter().any(
+                |inline| matches!(inline, InlineElement::Text(run) if run.text.contains("1.1"))
+            )
+        );
+    }
+
+    #[test]
+    fn c1_mappable_heading_keeps_literal_number() {
+        let mut ir = empty_doc();
+        ir.body.push(heading(
+            1,
+            "1.",
+            Some(IrHeadingNumbering::Mappable(pattern(
+                &[("", IrNumeralSystem::Arabic)],
+                ".",
+                true,
+            ))),
+        ));
+        let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
+        assert!(degradations.is_empty());
+        assert!(doc.heading_num_instances.is_empty());
+        let para = heading_para(&doc, 0);
+        assert!(para.num_pr.is_none());
+        assert!(matches!(
+            &para.inlines[0],
+            InlineElement::Text(run) if run.text == "1. "
+        ));
+    }
+
+    #[test]
+    fn unmappable_heading_numbering_literalizes_once() {
+        let mut ir = empty_doc();
+        ir.body
+            .push(heading(1, "一、", Some(IrHeadingNumbering::Unmappable)));
+        ir.body
+            .push(heading(1, "二、", Some(IrHeadingNumbering::Unmappable)));
+        let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
+        assert_eq!(
+            degradations
+                .iter()
+                .filter(|d| d.construct == "heading-numbering")
+                .count(),
+            1
+        );
+        let para = heading_para(&doc, 1);
+        assert!(para.num_pr.is_none());
+        assert!(matches!(
+            &para.inlines[0],
+            InlineElement::Text(run) if run.text == "二、 "
+        ));
+    }
+
+    #[test]
+    fn shifted_heading_counter_reports_divergence_once() {
+        let numbering = || {
+            Some(IrHeadingNumbering::Mappable(pattern(
+                &[("", IrNumeralSystem::Arabic)],
+                ".",
+                true,
+            )))
+        };
+        let mut ir = empty_doc();
+        ir.body.push(heading(1, "1.", numbering()));
+        ir.body.push(heading(1, "3.", numbering()));
+        ir.body.push(heading(1, "5.", numbering()));
+        let (_, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
+        let reports: Vec<_> = degradations
+            .iter()
+            .filter(|d| d.construct == "heading-numbering")
+            .collect();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].action, DegradationAction::Approximated);
+    }
+
+    #[test]
+    fn level_def_cycles_last_piece_with_suffix_separator() {
+        let pat = pattern(&[("", IrNumeralSystem::Arabic)], ".", true);
+        assert_eq!(
+            numbering_level_def(&pat, 1).map(|def| def.lvl_text),
+            Some("%1.%2.".to_owned())
+        );
+        let two_piece = pattern(
+            &[
+                ("", IrNumeralSystem::Arabic),
+                (".", IrNumeralSystem::Arabic),
+            ],
+            "",
+            true,
+        );
+        assert_eq!(
+            numbering_level_def(&two_piece, 2).map(|def| def.lvl_text),
+            Some("%1.%2.%3".to_owned())
+        );
+    }
+
+    #[test]
+    fn expected_number_matches_rendered_pattern() {
+        let pat = pattern(&[("", IrNumeralSystem::Arabic)], ".", true);
+        assert_eq!(
+            expected_heading_number(&pat, &[1, 1, 0, 0, 0, 0, 0, 0, 0], 1),
+            "1.1."
+        );
+        let roman = pattern(
+            &[
+                ("Ch.", IrNumeralSystem::UpperRoman),
+                (".", IrNumeralSystem::Arabic),
+            ],
+            ":",
+            true,
+        );
+        assert_eq!(
+            expected_heading_number(&roman, &[2, 3, 0, 0, 0, 0, 0, 0, 0], 1),
+            "Ch.II.3:"
+        );
     }
 }

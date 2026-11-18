@@ -938,6 +938,117 @@ mod tests {
         );
     }
 
+    fn anchored_line() -> document::AnchoredLine {
+        document::AnchoredLine {
+            x_emu: 1_306_527,
+            y_emu: 18_999,
+            length_emu: 789_864,
+            thickness_emu: 5_588,
+            color: None,
+        }
+    }
+
+    /// Every `prefix:` used by element/attribute names must be declared via
+    /// `xmlns:prefix` somewhere in the part — an unbound prefix makes it
+    /// unparseable.
+    fn assert_bound_prefixes(xml: &str) {
+        use std::collections::BTreeSet;
+        let mut used = BTreeSet::new();
+        let mut declared = BTreeSet::new();
+        let mut reader = quick_xml::Reader::from_str(xml);
+        let mut buf = Vec::new();
+        loop {
+            let event = reader
+                .read_event_into(&mut buf)
+                .unwrap_or_else(|e| panic!("{xml} is not well-formed XML: {e}"));
+            match event {
+                quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e) => {
+                    collect_prefix(e.name().as_ref(), &mut used);
+                    for attr in e.attributes().flatten() {
+                        let key = attr.key.as_ref();
+                        if let Some(rest) = key.strip_prefix(b"xmlns:") {
+                            declared.insert(rest.to_vec());
+                        } else {
+                            collect_prefix(key, &mut used);
+                        }
+                    }
+                }
+                quick_xml::events::Event::End(e) => {
+                    collect_prefix(e.name().as_ref(), &mut used);
+                }
+                quick_xml::events::Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        // `xml` is reserved by the XML spec; it never needs a declaration.
+        used.remove(&b"xml".to_vec());
+        let unbound: Vec<_> = used.difference(&declared).collect();
+        assert!(
+            unbound.is_empty(),
+            "unbound prefixes {unbound:?} used but never declared: {xml}"
+        );
+    }
+
+    fn collect_prefix(name: &[u8], prefixes: &mut std::collections::BTreeSet<Vec<u8>>) {
+        if let Some(colon) = name.iter().position(|b| *b == b':') {
+            prefixes.insert(name[..colon].to_vec());
+        }
+    }
+
+    #[test]
+    fn anchored_line_declares_drawing_namespaces() {
+        let mut doc = Document::new();
+        let mut para = document::Paragraph::new();
+        para.inlines
+            .push(document::InlineElement::AnchoredLine(anchored_line()));
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        let xml = read_zip_entry(&buf, "word/document.xml");
+        assert_bound_prefixes(&xml);
+        assert!(xml.contains("xmlns:wp="), "anchored line needs wp: {xml}");
+        assert!(xml.contains("xmlns:a="), "anchored line needs a: {xml}");
+    }
+
+    #[test]
+    fn anchored_line_strokes_black_by_default() {
+        let mut doc = Document::new();
+        let mut para = document::Paragraph::new();
+        para.inlines
+            .push(document::InlineElement::AnchoredLine(anchored_line()));
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        let xml = read_zip_entry(&buf, "word/document.xml");
+        let ln_pos = xml.find("<a:ln").expect("the line needs an a:ln stroke");
+        let ln_end = xml[ln_pos..]
+            .find("</a:ln>")
+            .map(|i| ln_pos + i)
+            .unwrap_or(xml.len());
+        assert!(
+            xml[ln_pos..ln_end].contains(r#"<a:srgbClr val="000000""#),
+            "a colorless anchored line must fill its stroke black: {xml}"
+        );
+    }
+
+    #[test]
+    fn footnote_anchored_line_declares_drawing_namespaces() {
+        let mut doc = Document::new();
+        doc.add_footnote(vec![
+            document::InlineElement::Text(document::Run::new("note ")),
+            document::InlineElement::AnchoredLine(anchored_line()),
+        ]);
+        let mut para = document::Paragraph::new();
+        para.add_footnote_ref(2);
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        let xml = read_zip_entry(&buf, "word/footnotes.xml");
+        assert_bound_prefixes(&xml);
+        assert!(xml.contains("xmlns:wp="), "anchored line needs wp: {xml}");
+    }
+
     // ── 25. Bookmark start/end ──────────────────────────────────────────
 
     #[test]

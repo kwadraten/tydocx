@@ -167,8 +167,9 @@ pub struct AnchoredLine {
     /// Horizontal position relative to the page edge (`relativeFrom="page"`),
     /// in EMU.
     pub x_emu: i64,
-    /// Vertical offset from the top of the anchor's text line
-    /// (`relativeFrom="line"`), in EMU. Negative = above the line top.
+    /// Vertical offset downward from the top of the anchor's text line
+    /// (`relativeFrom="line"`), in EMU. Typst draws the overline just below
+    /// the ascender top, so measured values are small positive numbers.
     pub y_emu: i64,
     /// Line length, in EMU.
     pub length_emu: u64,
@@ -1392,7 +1393,8 @@ impl Document {
         }
         let num_id = self.next_list_id;
         self.next_list_id += 1;
-        let abstract_num_id = u32::try_from(self.heading_num_instances.len() + 3).unwrap_or(u32::MAX);
+        let abstract_num_id =
+            u32::try_from(self.heading_num_instances.len() + 3).unwrap_or(u32::MAX);
         self.heading_num_instances.push(HeadingNumInstance {
             num_id,
             abstract_num_id,

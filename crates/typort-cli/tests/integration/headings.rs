@@ -1,8 +1,7 @@
 //! Heading semantics and formatting tests.
 
 use crate::common::{
-    fixture_doc_xml, fixture_outcome, fixture_package_with_options, fixture_part,
-    fixture_styles_xml, paragraph_containing,
+    fixture_doc_xml, fixture_outcome, fixture_part, fixture_styles_xml, paragraph_containing,
 };
 use typort_core::{CompatMode, ConvertOptions};
 
@@ -224,14 +223,15 @@ fn issue_heading_numbering_func_keeps_literal() {
         "no Word numbering for a function: {alpha}"
     );
     let beta = paragraph_containing(&xml, "Beta");
-    assert!(beta.contains("Sec.2"), "second number is literal too: {beta}");
+    assert!(
+        beta.contains("Sec.2"),
+        "second number is literal too: {beta}"
+    );
 }
 
 #[test]
 fn issue_cjk_heading_numbering_reports_and_stays_literal() {
-    // L2: "一、" uses ChineseSimplified — no exact w:numFmt — so its number
-    // stays literal with a degradation, while the fixture's later "1."
-    // pattern still maps to Word numbering.
+    // L2: "一、" has no exact w:numFmt — its numbers stay literal and degrade.
     let outcome = fixture_outcome("issue_cjk_heading_numbering");
     let constructs: Vec<&str> = outcome.degradations.iter().map(|d| d.construct).collect();
     assert!(
@@ -239,13 +239,56 @@ fn issue_cjk_heading_numbering_reports_and_stays_literal() {
         "Chinese numbering should report heading-numbering: {constructs:?}"
     );
     let xml = fixture_doc_xml("issue_cjk_heading_numbering");
+    let para = paragraph_containing(&xml, "绪论");
     assert!(
-        paragraph_containing(&xml, "绪论").contains("一、"),
-        "the CJK number stays literal in the heading"
+        para.contains("一、"),
+        "the CJK number stays literal: {para}"
     );
     assert!(
-        paragraph_containing(&xml, "Section Three").contains("<w:numPr>"),
-        "the later 1. pattern still uses Word numbering"
+        !para.contains("<w:numPr>"),
+        "no Word numbering for an unrepresentable system: {para}"
+    );
+}
+
+#[test]
+fn issue_mixed_heading_numbering_maps_per_heading() {
+    // L2: numbering is decided per heading — switching from a mappable
+    // system to an unmappable one mid-document numbers the first group and
+    // literalizes + reports the last.
+    let outcome = fixture_outcome("issue_heading_numbering_mixed");
+    let reports = outcome
+        .degradations
+        .iter()
+        .filter(|d| d.construct == "heading-numbering")
+        .count();
+    assert_eq!(
+        reports, 1,
+        "exactly one literalized report for the unmappable heading: {:?}",
+        outcome.degradations
+    );
+    let xml = fixture_doc_xml("issue_heading_numbering_mixed");
+    let second = paragraph_containing(&xml, "Second");
+    assert!(
+        second.contains(r#"<w:ilvl w:val="0"/>"#),
+        "the mappable heading uses Word numbering: {second}"
+    );
+    let second_one = paragraph_containing(&xml, "Second One");
+    assert!(
+        second_one.contains(r#"<w:ilvl w:val="1"/>"#),
+        "level 2 also maps: {second_one}"
+    );
+    assert!(
+        !second_one.contains("1.1"),
+        "no literal number baked in: {second_one}"
+    );
+    let appendix = paragraph_containing(&xml, "附录");
+    assert!(
+        appendix.contains("二、"),
+        "the unmappable number stays literal: {appendix}"
+    );
+    assert!(
+        !appendix.contains("<w:numPr>"),
+        "no Word numbering on the unmappable heading: {appendix}"
     );
 }
 

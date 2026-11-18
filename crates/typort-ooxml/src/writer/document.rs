@@ -34,7 +34,7 @@ fn header_footer_rel_id(is_header: bool, parts: &DocParts) -> String {
 pub(super) fn generate_document_xml(
     writer: &mut Writer<&mut Vec<u8>>,
     doc: &Document,
-    has_images: bool,
+    has_drawings: bool,
     ctx: &WriteCtx,
 ) -> io::Result<()> {
     let mut elem = writer
@@ -51,7 +51,7 @@ pub(super) fn generate_document_xml(
             "xmlns:m",
             "http://schemas.openxmlformats.org/officeDocument/2006/math",
         ));
-    if has_images {
+    if has_drawings {
         elem = elem
             .with_attribute((
                 "xmlns:wp",

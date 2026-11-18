@@ -100,9 +100,7 @@ fn ir_has_overline(doc: &IrDocument) -> bool {
                 .iter()
                 .flat_map(|row| &row.cells)
                 .any(|cell| blocks_have(&cell.body)),
-            IrBlock::Figure { body, caption, .. } => {
-                blocks_have(body) || inlines_have(caption)
-            }
+            IrBlock::Figure { body, caption, .. } => blocks_have(body) || inlines_have(caption),
             IrBlock::List(list) => list.items.iter().any(|item| blocks_have(&item.body)),
             IrBlock::Enum(enumer) => enumer.items.iter().any(|item| blocks_have(&item.body)),
             IrBlock::Quote { body } | IrBlock::Place { body, .. } | IrBlock::Shape { body, .. } => {
@@ -344,25 +342,21 @@ fn patch_overlines_in_inlines(inlines: &mut Vec<IrInline>, state: &mut PatchStat
         while i < inlines.len() {
             match &inlines[i] {
                 IrInline::Text(run) if run.overline => text.push_str(&run.text),
-                IrInline::Space
-                    if inlines.get(i + 1).is_some_and(is_overlined) => {}
+                IrInline::Space if inlines.get(i + 1).is_some_and(is_overlined) => {}
                 _ => break,
             }
             i += 1;
         }
         let end = i;
         let mut next = (0..state.measurements.len()).filter(|mi| !state.used[*mi]);
-        let found = next.find(|mi| {
-            let m = &state.measurements[*mi];
-            m.text.is_empty() || text.is_empty() || m.text == text
-        });
+        let found = next.find(|mi| state.measurements[*mi].text == text);
         if let Some(mi) = found {
             state.used[mi] = true;
             for (offset, line) in state.measurements[mi].lines.iter().enumerate() {
                 inlines.insert(start + offset, IrInline::Overline(line.clone()));
             }
-            for inline in &mut inlines[start + state.measurements[mi].lines.len()..end
-                + state.measurements[mi].lines.len()]
+            for inline in &mut inlines[start + state.measurements[mi].lines.len()
+                ..end + state.measurements[mi].lines.len()]
             {
                 if let IrInline::Text(run) = inline {
                     run.overline = false;
