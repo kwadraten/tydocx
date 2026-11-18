@@ -15,6 +15,7 @@ mod ir_path;
 mod lists;
 mod math;
 mod misc;
+mod placement;
 mod recovery;
 mod sections;
 mod structure;
