@@ -33,7 +33,8 @@ not a deletion list.
   `outline-target`, `outline-indent`, `vector-image`, `image-fit`,
   `image-alt`, `shape`, `footnote-numbering`) and the corresponding
   skip/fallback behavior. `section-break` is emitted in `export_ir` from
-  `detect_page_setting_change` (source AST). The gate tests run against
+  the collected `ir.sections` (StyleChain `PageSnapshot`s), no longer from
+  `detect_page_setting_change`. The gate tests run against
   `convert()` — the IR path — unchanged.
 - **Owner:** C1 Phase 1 agent, then user review.
 
@@ -70,9 +71,9 @@ not a deletion list.
   `PageBreak { to }` / page-setting pairs, and the
   `section_break_test` / `edge_multi_section` /
   `issue_final_section_landscape` fixtures match. The C1 half is done:
-  `export_ir` emits the `section-break` degradation from the source-AST
-  `detect_page_setting_change` when a mid-document columns/margins
-  change is collapsed to a single section.
+  `export_ir` emits the `section-break` degradation from the collected
+  `ir.sections` (the `PageSnapshot` chains) when a mid-document
+  columns/margins change is collapsed to a single section.
 - **Owner:** step-2 follow-up.
 
 ### `apply_styles_from_paged`
@@ -93,11 +94,12 @@ not a deletion list.
 ### `apply_breaks_from_source` (pagebreak/colbreak recovery)
 - **What:** explicit `#pagebreak()`/`#colbreak()` recovered from the
   source AST when the compiled output does not surface them.
-- **Delete when:** the `pagebreak_*` and `issue_column_break` fixtures
-  are byte-identical between the two paths. The IR path already emits
-  `PageBreak`/`ColumnBreak` from the pairs; this item is only the
-  source-AST backstop for breaks the pairs never see (inactive branches,
-  show-rule-generated breaks).
+- **Status (step 3):** the IR path never called this — all `pagebreak_*`
+  fixtures (weak/strong breaks, inactive and bound-false branches,
+  called and unused functions, `#include` chains, consecutive and
+  odd/even breaks) pass through the `PagebreakElem`/`ColbreakElem` pairs
+  and the `FreshPage` state machine in the lowering. The function now
+  serves the legacy path only; it is deleted when `export()` goes.
 - **Owner:** step-2 follow-up.
 
 ### Same-line paragraph merging (`merge_same_line_paragraphs`)
@@ -112,15 +114,54 @@ not a deletion list.
 ## Page/style extraction still shared with the legacy path
 
 ### `apply_page_and_style` / `apply_headers_and_footers` (temp `Document`)
-- **What:** `export_ir` still runs the legacy three-source extraction
-  (Paged + source-AST overrides) on a scratch `Document` and copies
-  `page`/`style`/header/footer into the IR. The IR path does not yet
-  derive page settings or running headers from the pairs.
-- **Delete when:** page settings and headers/footers are derived from the
-  realize pairs (page settings live on the root `StyleChain`) plus the
-  source-AST overrides, with the `style_*` / `header_footer_test` /
-  `edge_multi_section` fixtures matching.
+- **Status (step 3):** `export_ir` no longer runs the legacy three-source
+  extraction. A scratch `Document` still carries `page`/`style`/header/footer
+  into the IR, but it is filled by `PagedDocument` heuristics plus
+  `StyleChain`-resolved overrides (`convert/realize/chain.rs`), with the
+  source AST only as a `merge_from` fill-in for fields no chain can carry
+  (see "Remaining source-AST reads" below).
+- **Remaining:** headers/footers still come from the companion
+  `PagedDocument` (`apply_headers_and_footers`) — page-margin content is
+  not represented in the pairs.
 - **Owner:** step-2 follow-up.
+
+## Remaining source-AST reads on the IR path (step-3 exceptions)
+
+The source AST is no longer a third authority — these are the narrow reads
+that remain, each because no `StyleChain` or pair carries the value:
+
+- **Imported-module `set` rules** — module styles do not escape the
+  import, so a `set par(first-line-indent:)` inside an imported file that
+  owns no content is invisible to every chain. `merge_from` in
+  `apply_page_and_style_ir` keeps the reachable-file AST scan as a
+  fill-in for unset fields (`issue_import_nested` /
+  `issue_import_parent_dir` fixtures).
+- **Declared font spelling** — `FontFamily::new` lowercases the name
+  before it reaches the chain; OOXML and CJK `eastAsia` selection need
+  the declared case (`issue_cjk_*` fixtures, golden font names).
+  `text_font` is left unset by `chain_overrides` and filled by the merge.
+- **`doc.page_numbering`** — the AST `page_numbering` field is the single
+  source for the document-level `w:pgNumType` (last-wins, as before). A
+  deliberate single-source choice, not a blind spot: the chain sees the
+  same declarations but supplies only the `numbering_changed` flag (more
+  than one distinct ambient-chain value), which drives the C1
+  `page-numbering-change` degradation.
+- **`show heading:` / `show outline.entry:` flags** — whether the rule
+  re-emitted `it` is unobservable in the pairs; `c1_chain_degradations`
+  keeps the narrow `extract_source_style_overrides` call for those two
+  flags.
+- **`counter(footnote).update(0)`** — `CounterUpdateElem::key` is private
+  in typst 0.15.1, so the chain cannot identify the counter;
+  `detect_footnote_restart_each_page` stays.
+- **`counter(page).at(<label>)` targets** — the label is recovered from
+  the source span (`page_ref.rs::counter_page_label`), used only to
+  classify an already-realized `RefElem`.
+- **Overline span matching** — `overline.rs` uses source spans to attach
+  Paged geometry to IR runs; it reads positions, not style values.
+
+Everything else that used to be source-AST on this path — document-global
+`set` values, smallcaps, hanging indent, `text(baseline:)`, transform
+bodies — now comes from `StyleChain`s or element identity.
 
 ## Known gaps in the IR path itself
 
@@ -392,14 +433,14 @@ text. Integration tests live in `crates/typort-cli/tests/integration/universe.rs
   rewritten entry formatting.
 
 ### `move`/`rotate`/`scale`/`skew` bodies (V-10)
-- **Current:** the layout elements never reach the realize pairs;
-  `transform_bodies_text` recovers their literal markup text from the source
-  AST and appends it as a trailing paragraph; `moved-content`/
-  `rotated-content`/`scaled-content`/`skewed-content` report the dropped
-  transform.
-- **C2 target:** in-place text recovery (pairs carry no position), plus
-  `w:position` run offsets for `move(dy:)` and — for `rotate` — a
-  `wp:anchor` text box with `rot` transform.
+- **Current:** on the IR path the realized layouter resolves back to the
+  original `MoveElem`/`RotateElem`/`ScaleElem`/`SkewElem` through the span
+  index (`collect_layouter_block`), the body is collected in place, and
+  `moved-content`/`rotated-content`/`scaled-content`/`skewed-content`
+  report the dropped transform — no source-AST read. (The legacy path
+  still uses `transform_bodies_text`.)
+- **C2 target:** `w:position` run offsets for `move(dy:)` and — for
+  `rotate` — a `wp:anchor` text box with `rot` transform.
 
 ### `box`/`block` sizing and decorations (V-21, V-26)
 - **Current:** `block-width`/`box-width`/`block-decoration`/
@@ -418,12 +459,12 @@ text. Integration tests live in `crates/typort-cli/tests/integration/universe.rs
 ### Text metrics and decorations (V-27, V-30, V-31)
 - **Current:** `highlight-geometry`, `underline-offset`,
   `text-edge-metrics`, `box-baseline` (skipped). `text(baseline:)` is the
-  one fully implemented path here: it is a ghost property (consumed during
-  realization, absent from pairs and the StyleChain), so
-  `apply_baseline_shifts_from_source` recovers it from the source AST and
-  splits the coalesced run around the shifted body — the split run carries
-  `position_half_pt`, emitted as `w:position` by the run writer.
-  `box(baseline:)` is degrade-only.
+  one fully implemented path here: it is a ghost property, but `text(...)`
+  calls wrap their body in `styled_with_map`, so the declared value reaches
+  the fragment `StyleChain` — `run_from_styles` resolves
+  `TextElem::baseline` to `position_half_pt`, emitted as `w:position` by the
+  run writer (the AST post-pass `apply_baseline_shifts_from_source` remains
+  on the legacy path only). `box(baseline:)` is degrade-only.
 - **C2 target:** `w:u w:val="single"` already carries the underline — the
   offset needs `w:position`-style run baseline or a custom underline;
   highlight extents map to `w:shd` padding (limited OOXML support);
@@ -579,8 +620,8 @@ pre-cleanup redundant size override).
 
 ### Run spans
 - IR runs carry their source span (threaded from the pair content), so
-  the source-AST post-passes (hanging indent, small caps) locate IR
-  paragraphs.
+  span-keyed lookups (the `counter(page).at` exception, overline geometry
+  matching) locate IR content.
 
 ### Pure shapes via the layouter span index
 - The built-in Paged show rules rewrite `#rect`/`#square`/`#ellipse`/

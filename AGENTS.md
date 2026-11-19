@@ -30,15 +30,15 @@ should convert to an editable `.docx`. For how it works, read
    back to Paged geometry only for things the pairs cannot express. Geometry inference
    is the lossy path we exist to avoid — keep it contained.
 
-4. **Before declaring something impossible, check all three sources.** If Typst
+4. **Before declaring something impossible, probe every representation.** If Typst
    renders it correctly, the information exists *somewhere* — a "can't" almost
    always means "not in the representation I happened to look at." Elements consumed
    during compilation are queryable in neither the HtmlDocument nor the
    PagedDocument (introspector hits = 0), yet are still present in the **source AST**:
-   `#colbreak()`, `smallcaps`, `#set text(lang:)`, and `datetime.today()`'s inputs
-   are all recovered from source, not from the compiled output. Probe (compile +
-   query/parse) before concluding, and look for a precedent — smallcaps' source-AST
-   recovery was the template for colbreak. Say "I haven't found a way" rather than
+   `datetime.today()`'s inputs, `counter(footnote).update(0)` in a page header,
+   and whether a `show` rule re-emitted `it` are recovered from source, not from
+   the compiled output. Probe (compile + query/parse) before concluding. Say "I
+   haven't found a way" rather than
    "there is no way" until you have proof there is no principled rule.
 
 ## Architecture in one paragraph
@@ -46,14 +46,17 @@ should convert to an editable `.docx`. For how it works, read
 typort compiles the same source to **realize pairs** (`typst-realize`,
 `Target::Paged`: element identity + document order + the `StyleChain` that
 applies to each element) *and* a companion **`PagedDocument`** (footnote entry
-bodies, image display sizes, page-level facts the pairs cannot carry), and
-additionally **re-parses the source AST** for authoritative `set` rules. The
-realize pairs are the skeleton and the paint; Paged supplies only what the
-pairs cannot; the AST overrides both when the author declared a value. The
-legacy `HtmlDocument` tag-walker path is kept as an explicit fallback
-(`convert_legacy`), not the conversion path. This is **three** sources, not
-two — don't let anyone "simplify" it back to a dual-compilation description.
-Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+bodies, image display sizes, page-level facts the pairs cannot carry). The
+realize pairs are the skeleton and the paint — the `StyleChain` is the
+authoritative declared value (set rules, smallcaps, hanging indent, baseline);
+Paged supplies only what the pairs cannot. The **source AST** remains only as
+narrow, documented exceptions for values no chain carries (declared font
+spelling, imported-module `set` rules, show-rule consumption facts,
+`counter(footnote).update(0)`, `counter(page).at` targets — see
+`docs/fallback-registry.md` "Remaining source-AST reads"). The legacy
+`HtmlDocument` tag-walker path is kept as an explicit fallback
+(`convert_legacy`), not the conversion path; there the AST is still a full
+third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Rust conventions
 

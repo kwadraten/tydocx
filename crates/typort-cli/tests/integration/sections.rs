@@ -292,6 +292,19 @@ fn issue_margin_zero_c2_emits_explicit_zero() {
 }
 
 #[test]
+fn issue_margin_variable_c2_emits_explicit_zero() {
+    let package = fixture_package_with_options(
+        "issue_margin_variable",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    let xml = package.part_text("word/document.xml");
+    assert!(
+        xml.contains(r#"<w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0""#),
+        "a margin declared through a variable resolves to declared zeros, got {xml:?}"
+    );
+}
+
+#[test]
 fn issue_inside_outside_margins_c1_reports() {
     let outcome = c1("issue_inside_outside_margins");
     assert_has(&outcome, "mirrored-margins");
@@ -322,6 +335,20 @@ fn issue_page_numbering_change_c1_reports() {
         "C1 keeps a single section; the numbering change is not realized"
     );
     assert!(!xml.contains("w:start"), "C1 emits no page-number restart");
+}
+
+#[test]
+fn issue_page_numbering_mid_c1_no_change_degradation() {
+    let outcome = c1("issue_page_numbering_mid");
+    let constructs = constructs(&outcome);
+    assert!(
+        !constructs.iter().any(|c| c == "page-numbering-change"),
+        "a single mid-document numbering declaration is not a change, got {constructs:?}"
+    );
+    assert!(
+        constructs.iter().any(|c| c == "section-break"),
+        "the mid-document page-setting change is still detected, got {constructs:?}"
+    );
 }
 
 #[test]

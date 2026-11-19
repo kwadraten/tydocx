@@ -3,7 +3,7 @@ use typort_ooxml::document::VerticalAlign;
 
 /// All style overrides extracted from `#set` rules in the source AST.
 /// Each field is `None` if the source doesn't set it (use heuristic fallback).
-#[derive(Default)]
+#[derive(Clone, Default)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "each flag is a distinct source-declared fact; grouping them is artificial"

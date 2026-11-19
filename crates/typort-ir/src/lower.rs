@@ -1767,21 +1767,7 @@ fn same_format(a: &Run, b: &Run) -> bool {
     if a.line_break || b.line_break {
         return false;
     }
-    a.bold == b.bold
-        && a.italic == b.italic
-        && a.superscript == b.superscript
-        && a.subscript == b.subscript
-        && a.monospace == b.monospace
-        && a.underline == b.underline
-        && a.strikethrough == b.strikethrough
-        && a.highlight_color == b.highlight_color
-        && a.shading == b.shading
-        && a.smallcaps == b.smallcaps
-        && a.color == b.color
-        && a.font_ascii == b.font_ascii
-        && a.font_east_asia == b.font_east_asia
-        && a.size_half_pt == b.size_half_pt
-        && a.tracking_twips == b.tracking_twips
+    a.format_key() == b.format_key()
 }
 
 fn merge_runs(inlines: Vec<InlineElement>) -> Vec<InlineElement> {

@@ -56,6 +56,10 @@ pub struct CollectorState {
     pub footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
     pub footnote_circled: bool,
     pub degradations: Vec<Degradation>,
+    pub chain_overrides: page::SourceStyleOverrides,
+    /// Span of the pair whose ambient page settings first diverged — the
+    /// `section-break` degradation's location.
+    pub section_span: Option<Span>,
 }
 
 pub struct Collector<'a> {
@@ -73,6 +77,7 @@ pub struct Collector<'a> {
     page_snapshot: Option<PageSnapshot>,
     first_snapshot: Option<PageSnapshot>,
     sections: Vec<IrSection>,
+    section_span: Option<Span>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -162,17 +167,21 @@ pub fn collect_document(
         page_snapshot: None,
         first_snapshot: None,
         sections: Vec::new(),
+        section_span: None,
         _marker: std::marker::PhantomData,
     };
     collector.pass_one(pairs, engine, locator)?;
     let body = collector.collect_blocks(pairs, engine, locator, true)?;
     let sections = std::mem::take(&mut collector.sections);
     let first_snapshot = collector.first_snapshot.take();
+    let chain_overrides = super::chain::chain_overrides(pairs);
     let state = CollectorState {
         footnote_markers: std::mem::take(&mut collector.footnote_markers),
         footnote_bodies: std::mem::take(&mut collector.footnote_bodies),
         footnote_circled: collector.footnote_circled,
         degradations: std::mem::take(&mut collector.degradations),
+        chain_overrides,
+        section_span: collector.section_span,
     };
     let mut page_furniture = Vec::new();
     for content in [
@@ -367,6 +376,10 @@ impl Collector<'_> {
                                 numbering: page::numbering_page_format(snapshot.numbering.as_ref()),
                                 numbering_start: None,
                             });
+                            if self.section_span.is_none() {
+                                let span = content.span();
+                                self.section_span = span.id().map(|_| span);
+                            }
                             self.page_snapshot = Some(snapshot);
                         }
                     }
@@ -715,6 +728,19 @@ impl Collector<'_> {
         }
         if is_block_element(&original) {
             return self.collect_content_element(&original, styles, engine, locator);
+        }
+        // `is_block_element` claims `ColumnsElem`, so the "column-block" arm of
+        // `transparent_container_body` is unreachable at this site by design.
+        if let Some((construct, transparent)) = transparent_container_body(&original) {
+            self.degradations.push(Degradation {
+                span: Some(content.span()),
+                construct,
+                action: DegradationAction::Skipped,
+                message: "the container's transform or column layout has no OOXML equivalent; \
+                          the content is kept without it"
+                    .to_string(),
+            });
+            return self.collect_content_blocks(transparent, styles, engine, locator);
         }
         self.degradations.push(Degradation {
             span: Some(content.span()),
