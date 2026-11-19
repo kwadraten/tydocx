@@ -25,7 +25,7 @@ use typst_library::visualize::{ImageElem, ImageFit, ImageKind};
 use typst_syntax::Source;
 use typst_syntax::Span;
 
-use super::collect::{block_body_content, shape_parts, transparent_container_body};
+use super::collect::{block_body_content, shape_fill_hex, shape_parts, transparent_container_body};
 use super::style::{StyleDefaults, lower_runs_match, run_from_styles};
 use super::with_fragment;
 use crate::convert::image::hash_bytes;
@@ -152,6 +152,7 @@ fn collect_fragment_inlines(
             push_shape_inline(
                 kind,
                 body,
+                shape_fill_hex(content, styles),
                 content.span(),
                 styles,
                 engine,
@@ -304,6 +305,7 @@ fn collect_layouter_shape(
         push_shape_inline(
             kind,
             body,
+            shape_fill_hex(&original, styles),
             original.span(),
             styles,
             engine,
@@ -374,6 +376,7 @@ fn push_image_inline(
 fn push_shape_inline(
     kind: typort_ir::IrShapeKind,
     body: Option<Content>,
+    fill_hex: Option<String>,
     span: Span,
     styles: StyleChain<'_>,
     engine: &mut Engine,
@@ -391,6 +394,7 @@ fn push_shape_inline(
             kind,
             span,
             body: Vec::new(),
+            fill_hex,
         });
         return;
     };
@@ -400,6 +404,7 @@ fn push_shape_inline(
                 kind,
                 span,
                 body: body_inlines,
+                fill_hex,
             });
             ctx.prev_char = Some('\u{FFFC}');
         }

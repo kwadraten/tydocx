@@ -162,6 +162,7 @@ pub enum IrBlock {
         kind: IrShapeKind,
         span: Option<typst_syntax::Span>,
         body: Vec<IrBlock>,
+        fill_hex: Option<String>,
     },
 }
 
@@ -256,6 +257,7 @@ pub enum IrInline {
         kind: IrShapeKind,
         span: Option<typst_syntax::Span>,
         body: Vec<IrInline>,
+        fill_hex: Option<String>,
     },
     /// A measured overline: a floating line shape above this position in the
     /// text, geometry taken from Typst's own rendered deco line. Inserted by

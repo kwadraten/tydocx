@@ -57,6 +57,7 @@ pub(super) fn write_paragraph<W: Write>(
             || has_code_block
             || has_section_break
             || has_hrule
+            || para.shading.is_some()
             || has_tab_stops
             || has_spacing
             || has_keep
@@ -74,6 +75,13 @@ pub(super) fn write_paragraph<W: Write>(
                             .write_empty()?;
                         Ok(())
                     })?;
+                }
+                if let Some(fill) = &para.shading {
+                    ppr.create_element("w:shd")
+                        .with_attribute(("w:val", "clear"))
+                        .with_attribute(("w:color", "auto"))
+                        .with_attribute(("w:fill", fill.as_str()))
+                        .write_empty()?;
                 }
                 if has_code_block {
                     ppr.create_element("w:pStyle")

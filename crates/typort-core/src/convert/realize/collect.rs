@@ -517,6 +517,7 @@ impl Collector<'_> {
                     span.id().map(|_| span)
                 },
                 body,
+                fill_hex: shape_fill_hex(inner, styles),
             }]);
         }
         self.collect_blocks(group, engine, locator, false)
@@ -653,6 +654,7 @@ impl Collector<'_> {
                     span.id().map(|_| span)
                 },
                 body,
+                fill_hex: shape_fill_hex(content, styles),
             }]);
         }
         if let Some(line) = content.to_packed::<LineElem>() {
@@ -708,6 +710,7 @@ impl Collector<'_> {
                     span.id().map(|_| span)
                 },
                 body,
+                fill_hex: shape_fill_hex(&original, styles),
             }]);
         }
         if is_block_element(&original) {
@@ -830,9 +833,13 @@ impl Collector<'_> {
                 i += 1;
             } else if let Some(pad) = child.to_packed::<PadElem>() {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
-                let mut blocks = self.collect_content_blocks(&pad.body, styles, engine, locator)?;
-                apply_pad_insets(&mut blocks, pad, styles);
-                out.extend(blocks);
+                out.extend(self.collect_pad_body_blocks(pad, styles, engine, locator)?);
+                i += 1;
+            } else if let Some(styled) = child.to_packed::<StyledElem>()
+                && styled_holds_block(&styled.child)
+            {
+                flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
+                out.extend(self.collect_body_blocks(child, list_ctx, styles, engine, locator)?);
                 i += 1;
             } else if let Some(tagged) = child.to_packed::<TagElem>()
                 && let Tag::Start(inner, _) = &tagged.tag
@@ -874,6 +881,18 @@ impl Collector<'_> {
             para.spacing_before = Some(para.spacing_before.map_or(twips, |s| s.max(twips)));
         }
         Ok(out)
+    }
+
+    fn collect_pad_body_blocks(
+        &mut self,
+        pad: &Packed<PadElem>,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrBlock>> {
+        let mut blocks = self.collect_content_blocks(&pad.body, styles, engine, locator)?;
+        apply_pad_insets(&mut blocks, pad, styles);
+        Ok(blocks)
     }
 
     fn collect_bare_items(
@@ -1049,6 +1068,7 @@ impl Collector<'_> {
             kind,
             span: span.id().map(|_| span),
             body,
+            fill_hex: shape_fill_hex(child, styles),
         }))
     }
 
@@ -2717,6 +2737,31 @@ pub(super) fn shape_parts(content: &Content) -> Option<(IrShapeKind, Option<Cont
     None
 }
 
+pub(super) fn shape_fill_hex(content: &Content, styles: StyleChain<'_>) -> Option<String> {
+    let fill = if let Some(rect) = content.to_packed::<RectElem>() {
+        rect.fill.get_cloned(styles)
+    } else if let Some(square) = content.to_packed::<SquareElem>() {
+        square.fill.get_cloned(styles)
+    } else if let Some(ellipse) = content.to_packed::<EllipseElem>() {
+        ellipse.fill.get_cloned(styles)
+    } else if let Some(circle) = content.to_packed::<CircleElem>() {
+        circle.fill.get_cloned(styles)
+    } else {
+        None
+    };
+    fill.as_ref().and_then(paint_to_shd_hex)
+}
+
+fn styled_holds_block(content: &Content) -> bool {
+    if let Some(styled) = content.to_packed::<StyledElem>() {
+        return styled_holds_block(&styled.child);
+    }
+    if let Some(sequence) = content.to_packed::<SequenceElem>() {
+        return sequence.children.iter().any(styled_holds_block);
+    }
+    is_block_element(content)
+}
+
 fn is_block_element(content: &Content) -> bool {
     content.to_packed::<HeadingElem>().is_some()
         || content.to_packed::<TableElem>().is_some()
@@ -2973,6 +3018,7 @@ fn line_blocks(line: &Packed<LineElem>, styles: StyleChain<'_>, span: Span) -> V
         kind: IrShapeKind::Line,
         span: Some(span),
         body: Vec::new(),
+        fill_hex: None,
     }]
 }
 
