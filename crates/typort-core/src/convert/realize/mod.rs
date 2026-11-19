@@ -1,3 +1,4 @@
+mod chain;
 mod collect;
 mod inline;
 mod overline;
@@ -11,9 +12,7 @@ use typort_ir::{
     CompatMode as IrCompatMode, Degradation as IrDegradation, DegradationAction as IrAction,
     GeometryInput, IrBlock, IrDocument, IrInline, IrParagraph, lower,
 };
-use typort_ooxml::document::{
-    BlockElement, Document, FootnoteFormat, InlineElement, Paragraph, Run,
-};
+use typort_ooxml::document::{Document, FootnoteFormat};
 use typst::World;
 use typst::diag::{SourceDiagnostic, SourceResult, StrResult};
 use typst::ecow::{EcoString, EcoVec};
@@ -25,7 +24,7 @@ use typst::introspection::{
 };
 use typst::model::{DocumentInfo, Numbering};
 use typst::routines::{Arenas, FragmentKind, Pair, RealizationKind};
-use typst::syntax::VirtualPath;
+use typst::syntax::{Span, VirtualPath};
 use typst_layout::PagedDocument;
 use typst_library::foundations::{SequenceElem, StyledElem};
 use typst_library::layout::{BlockBody, BlockElem};
@@ -36,13 +35,11 @@ use crate::compat::{CompatMode, ConvertOptions, ConvertOutcome, Degradation, Deg
 use crate::convert::bibliography::extract_bibliography_sources;
 use crate::world::TyportWorld;
 
-use super::baseline::apply_baseline_shifts_from_source;
+use super::apply_headers_and_footers;
 use super::coalesce::coalesce_runs;
 use super::page::{self, canonicalize_font_names, localize_cjk_fonts};
 use super::postprocess::apply_paragraph_formatting;
-use super::smallcaps::apply_smallcaps_from_source;
-use super::source::apply_hanging_indent_from_source;
-use super::{apply_headers_and_footers, apply_page_and_style};
+use super::source::apply_source_overrides;
 use collect::{collect_document, document_info};
 use patch::patch_document;
 
@@ -57,6 +54,8 @@ pub struct DocxDocument {
     footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
     footnote_circled: bool,
     degradations: Vec<IrDegradation>,
+    chain_overrides: page::SourceStyleOverrides,
+    section_span: Option<Span>,
     introspector: ElementIntrospector<DocxPosition>,
 }
 
@@ -101,6 +100,8 @@ impl Output for DocxDocument {
             footnote_bodies: state.footnote_bodies,
             footnote_circled: state.footnote_circled,
             degradations: state.degradations,
+            chain_overrides: state.chain_overrides,
+            section_span: state.section_span,
             introspector,
         })
     }
@@ -319,30 +320,23 @@ fn collect_heading_sizes(
     }
 }
 
-fn append_transform_bodies(world: &TyportWorld, doc: &mut Document) {
-    let texts = page::transform_bodies_text(world.main_source().text());
-    if texts.is_empty() {
-        return;
-    }
-    let mut para = Paragraph::new();
-    para.inlines
-        .push(InlineElement::Text(Run::new(texts.join(" "))));
-    doc.body.elements.push(BlockElement::Paragraph(para));
-}
-
-fn c1_source_degradations(world: &TyportWorld, degradations: &mut Vec<Degradation>) {
-    let main = world.main_source();
-    let template_names = page::extract_show_template_names_from_source(main.text());
-    if let Some(span) = page::detect_page_setting_change(main, &template_names) {
+/// C1-only degradations that are not already emitted by the collector.
+fn c1_chain_degradations(
+    world: &TyportWorld,
+    chain: &page::SourceStyleOverrides,
+    has_section_change: bool,
+    section_span: Option<Span>,
+    degradations: &mut Vec<Degradation>,
+) {
+    if has_section_change {
         degradations.push(Degradation::new(
-            Some(span),
+            section_span,
             "section-break",
             DegradationAction::Skipped,
             "page columns or margins change mid-document; kept as a single section",
         ));
     }
-    let overrides = page::extract_source_style_overrides(main.text(), &template_names);
-    if overrides.margins_mirrored {
+    if chain.margins_mirrored {
         degradations.push(Degradation::new(
             None,
             "mirrored-margins",
@@ -351,7 +345,7 @@ fn c1_source_degradations(world: &TyportWorld, degradations: &mut Vec<Degradatio
              both sides keep the Typst default",
         ));
     }
-    if overrides.numbering_changed {
+    if chain.numbering_changed {
         degradations.push(Degradation::new(
             None,
             "page-numbering-change",
@@ -360,7 +354,7 @@ fn c1_source_degradations(world: &TyportWorld, degradations: &mut Vec<Degradatio
              kept as a single numbering scheme",
         ));
     }
-    if overrides.page_furniture {
+    if chain.page_furniture {
         degradations.push(Degradation::new(
             None,
             "page-foreground",
@@ -369,7 +363,11 @@ fn c1_source_degradations(world: &TyportWorld, degradations: &mut Vec<Degradatio
              its content is kept in the page header or dropped",
         ));
     }
-    if overrides.show_outline_entry_rule {
+    // Whether a `show` rule re-emitted `it` is unobservable in the pairs.
+    let main = world.main_source();
+    let template_names = page::extract_show_template_names_from_source(main.text());
+    let show = page::extract_source_style_overrides(main.text(), &template_names);
+    if show.show_outline_entry_rule {
         degradations.push(Degradation::new(
             None,
             "show-outline-entry-rule",
@@ -378,27 +376,7 @@ fn c1_source_degradations(world: &TyportWorld, degradations: &mut Vec<Degradatio
              contents keeps Word's default entry formatting",
         ));
     }
-    let transforms = [
-        (overrides.move_call, "moved-content", "a `move` offset"),
-        (
-            overrides.rotate_call,
-            "rotated-content",
-            "a `rotate` rotation",
-        ),
-        (overrides.scale_call, "scaled-content", "a `scale` factor"),
-        (overrides.skew_call, "skewed-content", "a `skew` shear"),
-    ];
-    for (present, construct, what) in transforms {
-        if present {
-            degradations.push(Degradation::new(
-                None,
-                construct,
-                DegradationAction::Skipped,
-                format!("{what} has no OOXML equivalent; the content is kept in place"),
-            ));
-        }
-    }
-    if overrides.show_heading_rule {
+    if show.show_heading_rule {
         degradations.push(Degradation::new(
             None,
             "show-heading-rule",
@@ -408,6 +386,28 @@ fn c1_source_degradations(world: &TyportWorld, degradations: &mut Vec<Degradatio
              its text is kept",
         ));
     }
+}
+
+/// Page settings and document style for the IR path.
+fn apply_page_and_style_ir(
+    chain: &page::SourceStyleOverrides,
+    world: &TyportWorld,
+    paged_doc: Option<&PagedDocument>,
+    doc: &mut Document,
+    degradations: &mut Vec<Degradation>,
+) {
+    if let Some(paged) = paged_doc {
+        doc.style = page::extract_document_style(paged);
+        page::extract_page_settings(paged, &mut doc.page_settings);
+    }
+    // AST fill-in for what no chain carries; `page_numbering` stays AST-only
+    // on purpose — a single source, last-wins as before.
+    let mut styles = chain.clone();
+    styles.merge_from(&super::source::gather_source_overrides(world));
+    apply_source_overrides(&styles, doc, paged_doc.is_some(), degradations);
+    // `counter(footnote).update(0)` in a page header — `CounterUpdateElem`'s
+    // key is private, so the chain can't identify the counter.
+    doc.style.footnote_restart_each_page = super::source::detect_footnote_restart_each_page(world);
 }
 
 pub fn export_ir(
@@ -421,8 +421,15 @@ pub fn export_ir(
         docx_doc.degradations.iter().map(core_degradation).collect();
 
     let mut tmp = Document::new();
-    apply_page_and_style(world, paged_doc, &mut tmp, &mut degradations);
+    apply_page_and_style_ir(
+        &docx_doc.chain_overrides,
+        world,
+        paged_doc,
+        &mut tmp,
+        &mut degradations,
+    );
     apply_headers_and_footers(paged_doc, &mut tmp, options.compat, &mut degradations);
+    let section_break = !ir.sections.is_empty();
     if options.compat == CompatMode::C1 {
         ir.sections.clear();
     }
@@ -487,16 +494,18 @@ pub fn export_ir(
     degradations.extend(lower_degradations.iter().map(core_degradation));
 
     apply_paragraph_formatting(&mut doc);
-    apply_hanging_indent_from_source(world, &mut doc);
     canonicalize_font_names(world, &mut doc);
     localize_cjk_fonts(world, &mut doc);
-    apply_smallcaps_from_source(world, &mut doc);
-    apply_baseline_shifts_from_source(world, &mut doc);
     coalesce_runs(&mut doc);
 
-    append_transform_bodies(world, &mut doc);
     if options.compat == CompatMode::C1 {
-        c1_source_degradations(world, &mut degradations);
+        c1_chain_degradations(
+            world,
+            &docx_doc.chain_overrides,
+            section_break,
+            docx_doc.section_span,
+            &mut degradations,
+        );
     }
 
     ConvertOutcome::new(doc, degradations)

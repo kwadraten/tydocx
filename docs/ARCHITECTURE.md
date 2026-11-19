@@ -24,30 +24,32 @@ page-bottom paragraphs, cross-references break. typort exists to avoid exactly
 that. (See the competitor analysis in the project notes: PDF-intermediate tools
 are fundamentally lossy.)
 
-## The core idea: read the document from three sources at once
+## The core idea: read the document from two representations, plus narrow source-AST exceptions
 
 typort compiles the **same source** more than once, because no single
-representation carries everything Word needs. There are **three** information
-sources, in order of authority:
+representation carries everything Word needs. The primary sources, in order
+of authority:
 
 | Source | Produced by | Carries | Used for |
 |--------|-------------|---------|----------|
-| **Realize pairs** | `typst::compile::<DocxDocument>` (`Target::Paged`, via `typst-realize`) | element identity + document order + the `StyleChain` that applies to each element + an *introspector* | the skeleton *and* the paint: what each thing *is*, what order it comes in, and how it is formatted |
+| **Realize pairs** | `typst::compile::<DocxDocument>` (`Target::Paged`, via `typst-realize`) | element identity + document order + the `StyleChain` that applies to each element + an *introspector* | the skeleton *and* the paint: what each thing *is*, what order it comes in, and how it is formatted — including declared `set` values, which live in the chains |
 | **Paged geometry** | `typst::compile::<PagedDocument>` (companion compile) | footnote entry bodies, on-page image display sizes, page dimensions, headers/footers, page numbering | what the pairs cannot carry: footnote bodies, image sizes, page-level facts |
-| **Source AST** | re-parsing the `.typ` text (and imports) for `set` rules | authoritative declared values (`set text(font: ...)`, margins, columns) | overriding heuristic guesses with what the author literally wrote |
+| **Source AST** (narrow exceptions only) | re-parsing the `.typ` text | values consumed before the chain (declared font spelling — `FontFamily::new` lowercases it), values no chain can see (`set` rules inside imported modules that own no content), and facts about consumption (whether a `show` rule re-emitted `it`, `counter(footnote).update(0)`, `counter(page).at(<label>)` targets) | a fill-in under the chain-derived values — never the primary read |
 
 The mental model:
 
 > **The realize pairs are the skeleton and the paint** (semantics + order +
-> styles, straight from the evaluator). **Paged supplies only what the pairs
-> cannot** (footnote entry bodies, image display sizes, page-level facts).
-> **The source AST corrects both when the author stated a value
-> explicitly.**
+> styles, straight from the evaluator — the `StyleChain` is the authoritative
+> declared value, the same place Typst itself reads it). **Paged supplies
+> only what the pairs cannot** (footnote entry bodies, image display sizes,
+> page-level facts). **The source AST is a gap-fill** for values that provably
+> never reach a chain — not a third authority.
 
 The legacy `HtmlDocument` tag-walker path is kept as `convert_legacy` /
 `export` — the explicitly-injected fallback and the equivalence baseline
 for the realize path (see `docs/fallback-registry.md`). It is not the
-conversion path anymore.
+conversion path anymore; on that path the source AST remains a full third
+source (it predates the chain work).
 
 ### Why realization replaced HTML
 
@@ -93,13 +95,30 @@ and text boxes. Building Word from geometry alone is the lossy PDF→Word path w
 are explicitly avoiding. The realize pairs are what let typort emit **native** Word headings,
 footnotes, and cross-references.
 
-### Why the source AST is a third source
+### Why the source AST still exists (narrowly)
 
-Heuristics from geometry are a *fallback*. When the author wrote
-`#set text(font: ("Times New Roman", "SimSun"))`, that declaration is more
-trustworthy than counting glyphs. `convert/page/source_ast.rs::extract_source_style_overrides`
-re-parses the main source **and its imports** (template `lib.typ` files often hide
-`set` rules inside functions) and these values override the Paged-derived guesses.
+Heuristics from geometry are a *fallback*, and the `StyleChain` is the
+primary declared-value source — but a few values provably never reach a
+chain:
+
+- **Declared font spelling.** `FontFamily::new` lowercases the family name
+  before it enters the chain (`"Libertinus Serif"` → `"libertinus serif"`),
+  but OOXML and CJK `eastAsia` selection need the declared spelling.
+- **Imported-module `set` rules** apply only to the module's own content;
+  when it has none, no pair carries the value. The AST scan
+  (`extract_source_style_overrides` over reachable files) treats their
+  top-level rules as document-global, so `merge_from` keeps them for fields
+  the ambient chains leave unset.
+- **Consumption facts.** `show heading:`/`show outline.entry:` rewrite the
+  element during realization — whether `it` was re-emitted is unobservable
+  in the pairs. `counter(footnote).update(0)` is locatable, but
+  `CounterUpdateElem::key` is private in typst 0.15. `counter(page).at(<label>)`
+  reference targets likewise need the source span lookup.
+
+Document-global overrides are resolved by `convert/realize/chain.rs` from the
+`TagElem` marker pairs' chains — the ambient document-scope state that
+element-internal styling never contaminates — and `merge_from` fills only the
+fields no chain could provide.
 
 ## The pipeline
 
@@ -120,7 +139,7 @@ flowchart TD
     INPUT["input.typ"] --> WORLD["TyportWorld (World trait: source, fonts, packages, Feature::Html)"]
     WORLD -->|compile::&lt;DocxDocument&gt; — realize pairs + collect IR| COMPILE["convert_ir(): thin wrapper<br/>1 compile DocxDocument + companion PagedDocument"]
     WORLD -->|compile::&lt;PagedDocument&gt; — geometry + frames| COMPILE
-    COMPILE --> EXPORT["export_ir(docx_doc, paged_doc, world, &options)<br/>2 page + style from Paged + AST overrides (scratch Document)<br/>3 patch: footnote bodies + image sizes from Paged frames<br/>4 pure lowering: IrDocument → typort_ooxml::Document<br/>5 post-passes (paragraph formatting, source hanging indent, CJK fonts, smallcaps, run coalescing)"]
+    COMPILE --> EXPORT["export_ir(docx_doc, paged_doc, world, &options)<br/>2 page + style from Paged + StyleChain overrides (+ narrow AST fill-in)<br/>3 patch: footnote bodies + image sizes from Paged frames<br/>4 pure lowering: IrDocument → typort_ooxml::Document<br/>5 post-passes (paragraph formatting, CJK fonts, run coalescing)"]
     EXPORT --> IR["typort_ooxml::Document"]
     IR --> WRITER["writer → XML parts → ZIP"]
     WRITER --> OUT["output.docx"]
@@ -302,9 +321,9 @@ Rules the equivalence round established (see
   by `Location` first, then by ordinal order. Footnote entry text is
   excluded from the body-size/font histograms, so it cannot misdetect
   the Normal style.
-- **Runs carry their source span** (from the pair content), so the
-  source-AST post-passes (hanging indent, small caps) locate IR
-  paragraphs. **Term lists** are collected as paragraphs: tight items
+- **Runs carry their source span** (from the pair content), so span-keyed
+  lookups (the `counter(page).at` exception, overline geometry matching)
+  locate IR content. **Term lists** are collected as paragraphs: tight items
   are one paragraph (bold term + separator + description), wide items a
   term paragraph plus description blocks.
 - **Footnote bodies** are collected from the `FootnoteElem.body` content

@@ -186,9 +186,6 @@ fn apply_opentype_props(run: &mut Run, styles: StyleChain<'_>) {
             run.smallcaps = true;
         }
     }
-    // `baseline` is a ghost property: `#set text(baseline:)` reaches the
-    // chain here, but `text(baseline:)` on a call is consumed during
-    // realization — `apply_baseline_shifts_from_source` recovers that form.
     let baseline = styles.resolve(TextElem::baseline);
     #[allow(
         clippy::cast_possible_truncation,
