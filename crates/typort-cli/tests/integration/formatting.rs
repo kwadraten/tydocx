@@ -1010,6 +1010,24 @@ fn issue_code_font_detected_by_flag_not_name() {
 }
 
 #[test]
+fn issue_code_font_flag_marks_code_runs_not_declared_name() {
+    let fonts = std::path::PathBuf::from("../../tests/fonts");
+    let doc_xml = crate::common::fixture_part_with_font_dirs(
+        "issue_code_font_flag_not_name",
+        "word/document.xml",
+        &[fonts],
+    );
+    assert!(
+        doc_xml.contains(r#"w:ascii="Zed Sans" w:hAnsi="Zed Sans" w:eastAsia="Zed Sans""#),
+        "code runs must resolve to the flag-detected code font in every rFonts slot:\n{doc_xml}"
+    );
+    assert!(
+        !doc_xml.contains(r#"w:eastAsia="Liberation Serif""#),
+        "code runs must not keep the body font in the eastAsia slot:\n{doc_xml}"
+    );
+}
+
+#[test]
 fn issue_import_nested_set_rule_reaches_document() {
     // b.typ's `#set par(first-line-indent: 2em)` lives two imports deep
     // (main -> a.typ -> b.typ, each resolved relative to its own file); the

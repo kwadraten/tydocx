@@ -5,6 +5,7 @@ mod bibliography;
 mod cli;
 mod compat;
 mod diagnostics;
+mod floats;
 mod fonts_cjk;
 mod footnotes;
 mod formatting;

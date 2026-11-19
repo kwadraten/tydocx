@@ -2,8 +2,8 @@ use typort_ooxml::document::Run;
 use typst_library::foundations::{Smart, StyleChain};
 use typst_library::layout::Abs;
 use typst_library::text::{
-    DecoLine, FontFamily, FontStyle, FontWeight, NumberType, NumberWidth, ScriptKind, TextElem,
-    variant,
+    DecoLine, FontBook, FontFamily, FontFlags, FontStyle, FontWeight, NumberType, NumberWidth,
+    ScriptKind, TextElem, variant,
 };
 use typst_syntax::Span;
 
@@ -15,6 +15,7 @@ pub struct StyleDefaults {
     pub size_half_pt: u32,
     pub body_font: String,
     pub font_east_asia: String,
+    pub monospace_families: Vec<String>,
 }
 
 pub fn defaults_from_root(styles: StyleChain<'_>) -> StyleDefaults {
@@ -44,7 +45,24 @@ pub fn defaults_from_root(styles: StyleChain<'_>) -> StyleDefaults {
         size_half_pt,
         body_font,
         font_east_asia,
+        monospace_families: Vec::new(),
     }
+}
+
+pub fn monospace_families(book: &FontBook, body_font: &str) -> Vec<String> {
+    let mut families = Vec::new();
+    for (name, infos) in book.families() {
+        if name.eq_ignore_ascii_case(body_font) {
+            continue;
+        }
+        if infos
+            .filter_map(|index| book.info(index))
+            .any(|info| info.flags.contains(FontFlags::MONOSPACE))
+        {
+            families.push(name.to_lowercase());
+        }
+    }
+    families
 }
 
 pub fn run_from_styles(
@@ -102,10 +120,12 @@ pub fn run_from_styles(
     {
         run.font_east_asia = Some((*last).to_string());
     }
-    if families
-        .first()
-        .is_some_and(|name| name.contains("mono") || name.contains("courier"))
-    {
+    if families.first().is_some_and(|name| {
+        defaults
+            .monospace_families
+            .iter()
+            .any(|f| f.as_str() == *name)
+    }) {
         run.monospace = true;
     }
 
@@ -199,7 +219,7 @@ pub fn lower_runs_match(prev: &Run, next: &Run) -> bool {
 mod tests {
     use super::*;
     use typst_library::foundations::{StyleChain, Styles};
-    use typst_library::text::{Case, FontList, TextElem};
+    use typst_library::text::{Case, Coverage, FontInfo, FontList, FontVariant, TextElem};
     use typst_library::visualize::Paint;
 
     fn root_styles() -> Styles {
@@ -244,6 +264,7 @@ mod tests {
             size_half_pt: 22,
             body_font: "libertinus serif".to_owned(),
             font_east_asia: "segoe ui emoji".to_owned(),
+            monospace_families: Vec::new(),
         };
         let styles = root_styles();
         let run = run_from_styles("中文", StyleChain::new(&styles), &defaults, None);
@@ -294,6 +315,71 @@ mod tests {
         let run = run_from_styles("abc", StyleChain::new(&styles), &defaults, None);
         assert_eq!(run.text, "ABC");
         assert!(run.smallcaps);
+    }
+
+    fn font_info(family: &str, flags: FontFlags) -> FontInfo {
+        FontInfo {
+            family: family.to_string(),
+            variant: FontVariant::default(),
+            flags,
+            axes: Vec::new(),
+            coverage: Coverage::from_vec(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn monospace_families_flags_not_name_substrings() {
+        let book = FontBook::from_infos([
+            font_info("Libertinus Serif", FontFlags::SERIF),
+            font_info("Foxit Fixed", FontFlags::MONOSPACE),
+            font_info("Faux Mono Pro", FontFlags::SERIF),
+        ]);
+        let families = monospace_families(&book, "libertinus serif");
+        assert_eq!(families, vec!["foxit fixed"]);
+    }
+
+    #[test]
+    fn monospace_families_excludes_body_font() {
+        let book = FontBook::from_infos([
+            font_info("DejaVu Sans Mono", FontFlags::MONOSPACE),
+            font_info("Libertinus Serif", FontFlags::SERIF),
+        ]);
+        assert!(monospace_families(&book, "dejavu sans mono").is_empty());
+    }
+
+    #[test]
+    fn run_from_styles_mono_body_family_is_not_flagged() {
+        let mut styles = root_styles();
+        styles.set(
+            TextElem::font,
+            FontList(vec![FontFamily::new("DejaVu Sans Mono")]),
+        );
+        let defaults = StyleDefaults {
+            size_half_pt: 22,
+            body_font: "dejavu sans mono".to_owned(),
+            font_east_asia: "dejavu sans mono".to_owned(),
+            monospace_families: Vec::new(),
+        };
+        let run = run_from_styles("body", StyleChain::new(&styles), &defaults, None);
+        assert!(!run.monospace);
+        assert_eq!(run.font_ascii, None);
+    }
+
+    #[test]
+    fn run_from_styles_flags_book_verified_mono_family() {
+        let mut styles = root_styles();
+        styles.set(
+            TextElem::font,
+            FontList(vec![FontFamily::new("Foxit Fixed")]),
+        );
+        let defaults = StyleDefaults {
+            size_half_pt: 22,
+            body_font: "libertinus serif".to_owned(),
+            font_east_asia: "libertinus serif".to_owned(),
+            monospace_families: vec!["foxit fixed".to_owned()],
+        };
+        let run = run_from_styles("code", StyleChain::new(&styles), &defaults, None);
+        assert!(run.monospace);
     }
 
     #[test]

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use typort_ooxml::document::{
-    BlockElement, CellBorders, CellContent, Document, ImageData, ImageFormat, InlineElement,
-    LevelOverride, ListInfo, Paragraph, SectionBreak, SectionBreakType, Table, TableBorders,
-    TableCell, TableCellMargins, TableRow, VMerge,
+    AnchoredContent, AnchoredFloat, BlockElement, CellBorders, CellContent, Document, ImageData,
+    ImageFormat, InlineElement, LevelOverride, ListInfo, Paragraph, SectionBreak, SectionBreakType,
+    Table, TableBorders, TableCell, TableCellMargins, TableRow, VMerge,
 };
 
 use crate::degradation::{Degradation, DegradationAction};
@@ -12,10 +12,10 @@ use crate::geometry::GeometryInput;
 use crate::grid_plan::{MAX_COLUMNS, PlannedCell, PlannedCellKind, PlannedTable, plan_grid};
 use crate::mode::CompatMode;
 use crate::types::{
-    Alignment, HangingIndent, IrBibEntry, IrBlock, IrCellBorders, IrDocument, IrEnum, IrEquation,
-    IrFootnote, IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList,
-    IrNumberingPattern, IrParagraph, IrRaw, IrSectionBreakType, IrTable, IrTableCell, IrTableRow,
-    IrVMerge, ParagraphStyle, Run,
+    Alignment, HangingIndent, IrAnchor, IrBibEntry, IrBlock, IrCellBorders, IrDocument, IrEnum,
+    IrEquation, IrFootnote, IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList,
+    IrNumberingPattern, IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType, IrTable, IrTableCell,
+    IrTableRow, IrVMerge, ParagraphStyle, Run,
 };
 
 #[derive(Debug, Default)]
@@ -306,7 +306,24 @@ fn lower_block_in(
             custom_indent,
         } => lower_outline(title, *depth, *custom_target, *custom_indent, ctx),
         IrBlock::Bibliography { entries } => lower_bibliography(entries, ctx),
-        IrBlock::Place { float, body } => lower_place(*float, body, doc, ctx),
+        IrBlock::Place {
+            float,
+            wrap,
+            clearance_emu,
+            location_hash: _,
+            anchor,
+            body,
+        } => lower_place(
+            &PlaceSpec {
+                float: *float,
+                wrap: *wrap,
+                clearance_emu: *clearance_emu,
+                anchor: *anchor,
+                body,
+            },
+            doc,
+            ctx,
+        ),
         IrBlock::PageBreak { weak, to } => lower_pagebreak(*weak, *to),
         IrBlock::Shape { kind, span, body } => {
             if ctx.compat.is_c1() {
@@ -575,23 +592,68 @@ fn lower_bibliography(entries: &[IrBibEntry], ctx: &mut LowerCtx) -> Vec<BlockEl
     vec![BlockElement::BibliographyBlock { paragraphs }]
 }
 
-fn lower_place(
+struct PlaceSpec<'a> {
     float: bool,
-    body: &[IrBlock],
-    doc: &mut Document,
-    ctx: &mut LowerCtx,
-) -> Vec<BlockElement> {
+    wrap: IrPlaceWrap,
+    clearance_emu: u64,
+    anchor: Option<IrAnchor>,
+    body: &'a [IrBlock],
+}
+
+fn lower_place(spec: &PlaceSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+    if spec.float
+        && !ctx.compat.is_c1()
+        && let Some(anchor) = spec.anchor
+        && let Some(content) = anchored_content(spec.body, doc, ctx)
+    {
+        let mut para = Paragraph::new();
+        para.mark_size_half_pt = Some(2);
+        para.spacing_before = Some(0);
+        para.spacing_after = Some(0);
+        para.inlines
+            .push(InlineElement::AnchoredFloat(AnchoredFloat {
+                x_emu: anchor.x_emu,
+                y_emu: anchor.y_emu,
+                width_emu: anchor.width_emu,
+                height_emu: anchor.height_emu,
+                clearance_emu: spec.clearance_emu,
+                top_and_bottom: matches!(spec.wrap, IrPlaceWrap::TopAndBottom),
+                content,
+            }));
+        return vec![BlockElement::Paragraph(para)];
+    }
     let mut out = Vec::new();
-    for inner in body {
+    for inner in spec.body {
         out.extend(lower_block(inner, doc, ctx));
     }
-    let position = if float { "floating" } else { "placed" };
+    let position = if spec.float { "floating" } else { "placed" };
     ctx.degrade(
         "placed-content",
         DegradationAction::Approximated,
         format!("{position} content is kept as normal paragraphs; its position is not preserved"),
     );
     out
+}
+
+fn anchored_content(
+    body: &[IrBlock],
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) -> Option<AnchoredContent> {
+    if let [IrBlock::Paragraph(para)] = body
+        && let [IrInline::Image(image)] = para.inlines.as_slice()
+        && let InlineElement::Image(data) = lower_image(image, ctx)
+    {
+        return Some(AnchoredContent::Image(data));
+    }
+    let mut lowered = Vec::new();
+    for block in body {
+        lowered.extend(lower_block(block, doc, ctx));
+    }
+    if lowered.is_empty() {
+        return None;
+    }
+    Some(AnchoredContent::Text(lowered))
 }
 
 fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockElement> {
@@ -1963,6 +2025,10 @@ mod tests {
         let mut ir = empty_doc();
         ir.body.push(IrBlock::Place {
             float: true,
+            wrap: IrPlaceWrap::TopAndBottom,
+            clearance_emu: 0,
+            location_hash: None,
+            anchor: None,
             body: vec![IrBlock::Paragraph(text_para("floating"))],
         });
         let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
