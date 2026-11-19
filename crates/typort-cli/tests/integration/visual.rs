@@ -22,6 +22,10 @@ pub(crate) fn typort_to_pdf_via_docx(fixture: &str, label: &str) -> Option<Vec<u
     typort_ooxml::write_docx(&doc, std::io::BufWriter::new(f)).ok()?;
 
     let status = std::process::Command::new("libreoffice")
+        .arg(format!(
+            "-env:UserInstallation=file://{}",
+            tmp_dir.join(format!("lo-profile-{label}")).display()
+        ))
         .args(["--headless", "--convert-to", "pdf", "--outdir"])
         .arg(&tmp_dir)
         .arg(&docx_path)

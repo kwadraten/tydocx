@@ -202,6 +202,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
         cell_margins: None,
         width_twips: None,
         col_widths_twips: None,
+        alignment: None,
     };
     doc.add_table(table);
 
@@ -749,8 +750,21 @@ fn issue_rtl_table_bidi() {
 #[test]
 fn issue_nested_table_alignment() {
     let xml = fixture_doc_xml("issue_nested_table_alignment");
-    assert!(xml.contains("w:tbl"), "should contain at least one table");
+    let tbl_count = xml.matches("<w:tbl>").count();
+    assert!(
+        tbl_count >= 2,
+        "nested table should be emitted, got {tbl_count}"
+    );
+    assert!(
+        xml.contains("Left-aligned inner cell"),
+        "inner table cell text should be present"
+    );
     assert!(xml.contains("Normal right cell"), "outer cell text present");
+    let compact: String = xml.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        compact.contains("<w:tblWw:w=\"5000\"w:type=\"pct\"/><w:jcw:val=\"center\"/>"),
+        "the align(center)-wrapped inner table should carry w:jc in its tblPr"
+    );
 }
 
 #[test]

@@ -1169,6 +1169,7 @@ fn lower_table(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Table
         cell_margins: table.cell_margins,
         width_twips: None,
         col_widths_twips: None,
+        alignment: table.alignment,
     }
 }
 
@@ -1218,6 +1219,7 @@ fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<Bloc
         cell_margins: None,
         width_twips: None,
         col_widths_twips: None,
+        alignment: None,
     })]
 }
 
@@ -1263,6 +1265,7 @@ fn lower_planned_table(
             right: 0,
         }),
         width_twips: planned.col_widths_twips.as_ref().map(|w| w.iter().sum()),
+        alignment: None,
         col_widths_twips: planned.col_widths_twips.clone(),
     }
 }
@@ -1882,6 +1885,7 @@ mod tests {
             borders: None,
             gutter: false,
             cell_margins: None,
+            alignment: None,
         }));
         let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         let BlockElement::Table(table) = &doc.body.elements[0] else {

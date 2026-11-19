@@ -221,6 +221,7 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
         cell_margins: None,
         width_twips: None,
         col_widths_twips: None,
+        alignment: None,
     }
 }
 

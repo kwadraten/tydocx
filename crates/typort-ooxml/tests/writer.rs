@@ -471,6 +471,7 @@ mod tests {
             cell_margins: None,
             width_twips: None,
             col_widths_twips: None,
+            alignment: None,
         };
         doc.add_table(table);
 

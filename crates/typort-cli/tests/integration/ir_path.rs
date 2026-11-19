@@ -120,6 +120,19 @@ fn without_lines<'a>(xml: &'a str, needles: &[&str]) -> Vec<&'a str> {
         .collect()
 }
 
+/// Every `DOCUMENTED` entry must still differ — a fixture that stops
+/// differing belongs in `IDENTICAL`, where it gets a byte-equality pin.
+#[test]
+fn ir_path_documented_fixtures_still_differ() {
+    for fixture in DOCUMENTED {
+        let (new_xml, legacy_xml) = convert_both(fixture);
+        assert_ne!(
+            new_xml, legacy_xml,
+            "{fixture}: no longer differs from legacy — move to IDENTICAL"
+        );
+    }
+}
+
 #[test]
 fn ir_path_documented_diffs() {
     for fixture in ["aligned_equations", "numbered_eq"] {
@@ -371,11 +384,36 @@ fn ir_path_documented_diffs() {
     // `nested_table_test` joined this group in step 4: deleting recovery
     // removed the legacy scraped duplicate ("Inner AInner B"), leaving
     // `w:tblCellMar` as the only diff.
+    {
+        // Step 5: the realize path now carries `align` wrapper alignment onto
+        // `IrTable`, so the centered figure's table emits `w:jc` inside
+        // `w:tblPr`; the legacy path has no table-level alignment. The shared
+        // cell-margin diff is unchanged.
+        let (new_xml, legacy_xml) = convert_both("figure_caption");
+        assert_eq!(
+            count(&new_xml, "<w:jc w:val=\"center\"/>"),
+            count(&legacy_xml, "<w:jc w:val=\"center\"/>") + 1,
+            "figure_caption: tblPr alignment is the one extra center marker"
+        );
+        let needles = [
+            "w:tblCellMar",
+            "w:top w:w=",
+            "w:left w:w=",
+            "w:bottom w:w=",
+            "w:right w:w=",
+            "<w:jc w:val=\"center\"/>",
+        ];
+        assert_eq!(
+            without_lines(&new_xml, &needles),
+            without_lines(&legacy_xml, &["<w:jc w:val=\"center\"/>"]),
+            "figure_caption: cell margins and tblPr jc are the only diffs"
+        );
+    }
+
     for fixture in [
         "rowspan_test",
         "edge_complex_table",
         "footnote_in_table",
-        "figure_caption",
         "nested_table_test",
     ] {
         let (new_xml, legacy_xml) = convert_both(fixture);

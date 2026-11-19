@@ -385,6 +385,45 @@ classification (e.g. in `sum_i a_i = S`, the `= S` stays outside the n-ary).
 - No extensible arrows.
 - Word forces the Cambria Math font in math zones.
 
+## Conformance oracles
+
+The step-5 conformance suite (`tests/integration/conformance.rs`,
+`tests/integration/numbering.rs`) pins the backend's structural contract
+rather than individual features:
+
+- **Canonical fingerprint** (`typort-ooxml/src/canonical.rs`): a
+  namespace-aware canonicalization of a generated XML part — qualified
+  element names, attributes sorted, per-instance ids (`w:id`, `paraId`,
+  `rsid*`) dropped — so comparisons measure the tree, not serialization
+  noise. References (`w:numId`, `r:embed`) are kept. The semantic digest is
+  the same tree minus attributes: element classes plus text.
+- **Paragraph census (REACH):** over the whole fixture corpus, every
+  non-empty IR paragraph's text must appear somewhere in the package
+  (`word/document.xml` for body text, `word/footnotes.xml` for the
+  Paged-sourced footnote bodies), and every non-empty `document.xml`
+  paragraph must trace to IR text or a named generated prefix (numbering,
+  markers, field results). This pins D8: no silent drops. Paragraphs in
+  header/footer parts are sourced from the companion `PagedDocument` —
+  the realize pairs carry no page furniture — and account to the named
+  `page-furniture` source instead.
+- **IR variant coverage:** every `IrBlock`/`IrInline` variant must be
+  reached by at least one fixture — the census is only meaningful if the
+  corpus exercises the whole inventory.
+- **Round-trip and strict validation** (`#[ignore]`d; LibreOffice and
+  python-docx are the available oracles — there is no Word in CI or the dev
+  environment): every fixture docx must open under python-docx and survive
+  a LibreOffice conversion; the round-trip test additionally asserts every
+  element class survives or is a named LibreOffice rewrite
+  (`w:fldSimple` → `w:fldChar`/`w:hyperlink`, `w:tblBorders` → per-cell
+  `w:tcBorders`, empty `w:footnotePr` elided) and the paragraph-text
+  multiset is preserved. This environment's LibreOffice lacks the
+  `libreoffice-math` component, so it imports OMML as nothing — `m:*`
+  classes are unobservable on reopen and exempted as an oracle
+  limitation.
+- **Preservation:** `preserve_inert_constructs` pins that constructs typort
+  emits but does not further model (HYPERLINK `w:fldSimple`, heading
+  bookmarks + REF fields, footnote references) survive a save + reopen.
+
 ## The retired seam: `convert/recovery/` (deleted)
 
 The legacy path had a recovery layer that did, in miniature, the very

@@ -34,6 +34,11 @@ pub(super) fn write_table<W: Write>(
                     .with_attribute(("w:type", "pct"))
                     .write_empty()?;
             }
+            if let Some(alignment) = table.alignment {
+                tpr.create_element("w:jc")
+                    .with_attribute(("w:val", alignment.ooxml_value()))
+                    .write_empty()?;
+            }
             tpr.create_element("w:tblBorders")
                 .write_inner_content(|bdr| {
                     // Per-side thicknesses: from detected `borders` when present

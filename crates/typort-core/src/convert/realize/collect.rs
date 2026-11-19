@@ -22,9 +22,10 @@ use typst_library::layout::grid::Celled;
 use typst_library::layout::grid::GridCell;
 use typst_library::layout::grid::resolve::{Cell, CellGrid, Entry, Line};
 use typst_library::layout::{
-    Abs, Angle, Axes, BlockBody, BlockElem, ColbreakElem, ColumnsElem, GridElem, HAlignment,
-    HideElem, Length, Margin, MoveElem, PadElem, PageElem, PagebreakElem, Parity, PlaceElem,
-    Region, Rel, RotateElem, ScaleElem, Sides, Size, Sizing, SkewElem, Spacing, VAlignment, VElem,
+    Abs, AlignElem, Angle, Axes, BlockBody, BlockElem, ColbreakElem, ColumnsElem, GridElem,
+    HAlignment, HideElem, Length, Margin, MoveElem, PadElem, PageElem, PagebreakElem, Parity,
+    PlaceElem, Region, Rel, RotateElem, ScaleElem, Sides, Size, Sizing, SkewElem, Spacing,
+    VAlignment, VElem,
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
@@ -609,6 +610,9 @@ impl Collector<'_> {
             apply_pad_insets(&mut blocks, pad, styles);
             return Ok(blocks);
         }
+        if let Some(align) = content.to_packed::<AlignElem>() {
+            return self.collect_align_blocks(align, &ListCtx::default(), styles, engine, locator);
+        }
         if let Some((construct, transparent)) = transparent_container_body(content) {
             self.degradations.push(Degradation {
                 span: Some(content.span()),
@@ -762,6 +766,28 @@ impl Collector<'_> {
         self.collect_body_blocks(content, &ListCtx::default(), styles, engine, locator)
     }
 
+    /// `align(..)` is block-level but keeps its element form inside container
+    /// bodies (the show rule only runs inside fragment realization). Descend
+    /// into the body with the alignment folded into the chain, the same way
+    /// the built-in `ALIGN_RULE` (`body.aligned(alignment)`) applies it.
+    fn collect_align_blocks(
+        &mut self,
+        align: &AlignElem,
+        list_ctx: &ListCtx,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrBlock>> {
+        let aligned = AlignElem::alignment.set(align.alignment.get(styles)).wrap();
+        self.collect_body_blocks(
+            &align.body,
+            list_ctx,
+            styles.chain(&aligned),
+            engine,
+            locator,
+        )
+    }
+
     /// Collect one content node's block-level children. Root
     /// `StyledElem`/`ParElem`/`BlockElem` wrappers are descended here — not
     /// in `content_children` — so a `StyledElem`'s `styles` stay chained for
@@ -793,6 +819,9 @@ impl Collector<'_> {
                 }
                 _ => Ok(Vec::new()),
             };
+        }
+        if let Some(align) = content.to_packed::<AlignElem>() {
+            return self.collect_align_blocks(align, list_ctx, styles, engine, locator);
         }
         let children = flatten_sequences(content_children(content));
         self.collect_body_children(&children, list_ctx, styles, engine, locator)
@@ -1185,6 +1214,18 @@ impl Collector<'_> {
         if let Some(line) = child.to_packed::<LineElem>() {
             return Ok(line_blocks(line, styles, child.span()));
         }
+        self.collect_container_element(child, styles, engine, locator)
+    }
+
+    /// Container and wrapper elements: `block`, `align`, transparent
+    /// transforms, `hide`, and the `par` body that carries plain paragraphs.
+    fn collect_container_element(
+        &mut self,
+        child: &Content,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrBlock>> {
         if let Some(block) = child.to_packed::<BlockElem>() {
             if let Some(body) = block_body_content(block, styles) {
                 let mut blocks = self.collect_content_blocks(body, styles, engine, locator)?;
@@ -1193,6 +1234,9 @@ impl Collector<'_> {
                 return Ok(blocks);
             }
             return self.collect_layouter_block(child, styles, engine, locator);
+        }
+        if let Some(align) = child.to_packed::<AlignElem>() {
+            return self.collect_align_blocks(align, &ListCtx::default(), styles, engine, locator);
         }
         if let Some((construct, transparent)) = transparent_container_body(child) {
             self.degradations.push(Degradation {
@@ -1772,6 +1816,7 @@ impl Collector<'_> {
                 borders: None,
                 gutter: false,
                 cell_margins: None,
+                alignment: None,
             }));
         };
         if let Some(grid) = table.grid.as_ref()
@@ -1913,6 +1958,7 @@ impl Collector<'_> {
             borders: table_borders_from_grid(grid),
             gutter: table_gutter(table, styles),
             cell_margins: table_cell_margins(table, styles),
+            alignment: alignment_from_styles(styles),
         })
     }
 
@@ -2181,6 +2227,7 @@ impl Collector<'_> {
             borders: None,
             gutter: table_gutter(table, styles),
             cell_margins: table_cell_margins(table, styles),
+            alignment: alignment_from_styles(styles),
         })
     }
 
@@ -2809,6 +2856,7 @@ fn is_block_element(content: &Content) -> bool {
         || content.to_packed::<PagebreakElem>().is_some()
         || content.to_packed::<ColbreakElem>().is_some()
         || content.to_packed::<BlockElem>().is_some()
+        || content.to_packed::<AlignElem>().is_some()
         || content.to_packed::<ParElem>().is_some()
         || content.to_packed::<ColumnsElem>().is_some()
         || shape_parts(content).is_some()
@@ -3478,6 +3526,7 @@ struct PageSnapshot {
     columns: u32,
     header_pt: f64,
     footer_pt: f64,
+    flipped: bool,
     numbering: Option<Numbering>,
 }
 
@@ -3506,6 +3555,7 @@ impl PageSnapshot {
             columns: u32::try_from(styles.get(PageElem::columns).get()).unwrap_or(u32::MAX),
             header_pt: styles.resolve(PageElem::header_ascent).abs.to_pt(),
             footer_pt: styles.resolve(PageElem::footer_descent).abs.to_pt(),
+            flipped: styles.get(PageElem::flipped),
             numbering: styles.get_cloned(PageElem::numbering),
         }
     }
@@ -3521,14 +3571,20 @@ impl PageSnapshot {
             columns: u32::try_from(styles.get(PageElem::columns).get()).unwrap_or(u32::MAX),
             header_pt: styles.resolve(PageElem::header_ascent).abs.to_pt(),
             footer_pt: styles.resolve(PageElem::footer_descent).abs.to_pt(),
+            flipped: styles.get(PageElem::flipped),
             numbering: styles.get_cloned(PageElem::numbering),
         }
     }
 
     fn to_page_settings(&self) -> PageSettings {
+        let (width_pt, height_pt) = if self.flipped {
+            (self.height_pt, self.width_pt)
+        } else {
+            (self.width_pt, self.height_pt)
+        };
         PageSettings {
-            width_twips: page::pt_to_twips(self.width_pt),
-            height_twips: page::pt_to_twips(self.height_pt),
+            width_twips: page::pt_to_twips(width_pt),
+            height_twips: page::pt_to_twips(height_pt),
             margin_top: page::pt_to_twips(self.top_pt),
             margin_bottom: page::pt_to_twips(self.bottom_pt),
             margin_left: page::pt_to_twips(self.left_pt),
@@ -3972,5 +4028,10 @@ pub(crate) fn location_hash64(location: Location) -> u64 {
 
 fn page_content_height_pt(styles: StyleChain<'_>) -> f64 {
     let snapshot = PageSnapshot::resolve(styles);
-    (snapshot.height_pt - snapshot.top_pt - snapshot.bottom_pt).max(0.0)
+    let height_pt = if snapshot.flipped {
+        snapshot.width_pt
+    } else {
+        snapshot.height_pt
+    };
+    (height_pt - snapshot.top_pt - snapshot.bottom_pt).max(0.0)
 }

@@ -2641,6 +2641,7 @@ dependencies = [
  "clap",
  "time",
  "typort-core",
+ "typort-ir",
  "typort-ooxml",
  "typst",
  "typst-layout",

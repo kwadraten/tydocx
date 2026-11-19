@@ -289,6 +289,8 @@ pub struct IrTable {
     pub borders: Option<TableBorders>,
     pub gutter: bool,
     pub cell_margins: Option<TableCellMargins>,
+    /// `align(..)` folded around the table — `w:jc` in `w:tblPr`.
+    pub alignment: Option<Alignment>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
