@@ -6,7 +6,10 @@ use super::WriteCtx;
 use super::image::write_image_inline;
 use super::package::write_value_element;
 use super::run::{write_inline, write_text_run};
-use crate::document::{Document, FootnoteEntryStyle, FootnoteFormat, ImageData, InlineElement};
+use crate::document::{
+    AnchoredContent, BlockElement, CellContent, Document, FootnoteEntryStyle, FootnoteFormat,
+    ImageData, InlineElement, Paragraph, Table,
+};
 
 /// Write `w:footnotePr` element with optional circled-number format and
 /// per-page restart. `restart_each_page` mirrors Typst: the footnote counter
@@ -80,6 +83,7 @@ pub(super) fn generate_footnotes_xml(
     ctx: &WriteCtx,
     footnote_image_base: usize,
     has_drawings: bool,
+    has_math: bool,
 ) -> io::Result<()> {
     let mut elem = writer
         .create_element("w:footnotes")
@@ -91,6 +95,12 @@ pub(super) fn generate_footnotes_xml(
             "xmlns:r",
             "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
         ));
+    if has_math {
+        elem = elem.with_attribute((
+            "xmlns:m",
+            "http://schemas.openxmlformats.org/officeDocument/2006/math",
+        ));
+    }
     if has_drawings {
         elem = elem
             .with_attribute((
@@ -185,6 +195,52 @@ pub(super) fn generate_footnotes_xml(
     Ok(())
 }
 
+/// Whether any footnote holds OMML math; gates the `xmlns:m` declaration on
+/// `w:footnotes` — an undeclared `m:` prefix makes the part malformed XML.
+pub(super) fn footnotes_have_math(doc: &Document) -> bool {
+    doc.footnotes
+        .iter()
+        .any(|f| f.content.iter().any(inline_has_math))
+}
+
+fn inline_has_math(inline: &InlineElement) -> bool {
+    match inline {
+        InlineElement::Math { .. } => true,
+        InlineElement::AnchoredFloat(float) => match &float.content {
+            AnchoredContent::Text(blocks) => blocks.iter().any(block_has_math),
+            AnchoredContent::Image(_) => false,
+        },
+        _ => false,
+    }
+}
+
+fn para_has_math(para: &Paragraph) -> bool {
+    para.inlines.iter().any(inline_has_math)
+}
+
+fn table_has_math(table: &Table) -> bool {
+    table.rows.iter().any(|row| {
+        row.cells.iter().any(|cell| {
+            if cell.content.is_empty() {
+                cell.paragraphs.iter().any(para_has_math)
+            } else {
+                cell.content.iter().any(|item| match item {
+                    CellContent::Paragraph(p) => para_has_math(p),
+                    CellContent::Table(t) => table_has_math(t),
+                })
+            }
+        })
+    })
+}
+
+fn block_has_math(block: &BlockElement) -> bool {
+    match block {
+        BlockElement::Paragraph(p) => para_has_math(p),
+        BlockElement::Table(t) => table_has_math(t),
+        BlockElement::BibliographyBlock { paragraphs } => paragraphs.iter().any(para_has_math),
+    }
+}
+
 /// Write `word/_rels/footnotes.xml.rels`: the relationships for footnote
 /// images. Relationship ids restart at `rId1` (this part has its own
 /// namespace); the media target keeps the document-wide image number so it
@@ -205,7 +261,7 @@ pub(super) fn generate_footnote_rels(
             for (k, img) in footnote_images.iter().enumerate() {
                 let n = footnote_image_base + k + 1;
                 let ext = img.format.extension();
-                let target = format!("../media/image{n}.{ext}");
+                let target = format!("media/image{n}.{ext}");
                 rel += 1;
                 w.create_element("Relationship")
                     .with_attribute(("Id", format!("rId{rel}").as_str()))
@@ -217,7 +273,7 @@ pub(super) fn generate_footnote_rels(
                     .write_empty()?;
                 if img.svg.is_some() {
                     rel += 1;
-                    let svg_target = format!("../media/image{n}.svg");
+                    let svg_target = format!("media/image{n}.svg");
                     w.create_element("Relationship")
                         .with_attribute(("Id", format!("rId{rel}").as_str()))
                         .with_attribute((

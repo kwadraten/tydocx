@@ -17,6 +17,7 @@ typort-ooxml.workspace = true
 typst.workspace = true
 
 [dev-dependencies]
+typort-ir.workspace = true
 zip.workspace = true
 # `PagedDocument` moved out of `typst::layout` into the `typst-layout` crate in
 # typst 0.15; the visual-regression test compiles to it directly.

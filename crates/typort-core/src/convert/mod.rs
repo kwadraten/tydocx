@@ -31,7 +31,7 @@ mod table_width;
 mod tables;
 mod text_norm;
 
-pub use realize::{convert_ir, export_ir};
+pub use realize::{DocxDocument, convert_ir, export_ir, export_ir_with_ir};
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;

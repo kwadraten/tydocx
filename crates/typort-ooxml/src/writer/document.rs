@@ -177,10 +177,17 @@ fn write_section_page_settings<W: Write>(
     page_numbering: Option<&PageNumberFormat>,
     page_number_start: Option<u32>,
 ) -> io::Result<()> {
-    w.create_element("w:pgSz")
+    let pg_sz = w
+        .create_element("w:pgSz")
         .with_attribute(("w:w", settings.width_twips.to_string().as_str()))
-        .with_attribute(("w:h", settings.height_twips.to_string().as_str()))
-        .write_empty()?;
+        .with_attribute(("w:h", settings.height_twips.to_string().as_str()));
+    if settings.width_twips > settings.height_twips {
+        pg_sz
+            .with_attribute(("w:orient", "landscape"))
+            .write_empty()?;
+    } else {
+        pg_sz.write_empty()?;
+    }
     let pg_mar = w
         .create_element("w:pgMar")
         .with_attribute(("w:top", settings.margin_top.to_string().as_str()))

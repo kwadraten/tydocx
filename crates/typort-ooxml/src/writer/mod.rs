@@ -25,7 +25,7 @@ use citation::{
     generate_custom_xml_item_props, generate_custom_xml_rels, generate_custom_xml_sources,
 };
 use document::generate_document_xml;
-use footnotes::{generate_footnote_rels, generate_footnotes_xml};
+use footnotes::{footnotes_have_math, generate_footnote_rels, generate_footnotes_xml};
 use header_footer::{generate_footer_xml, generate_header_xml, generate_page_number_footer_xml};
 use image::{body_has_drawing, collect_footnote_images, collect_images, footnotes_have_drawing};
 use numbering::generate_numbering_xml;
@@ -173,6 +173,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
                 &ctx,
                 footnote_image_base,
                 footnotes_have_drawing(doc),
+                footnotes_have_math(doc),
             )
         })?)?;
         if !footnote_images.is_empty() {

@@ -794,11 +794,10 @@ fn edge_academic_template_structure() {
 
 #[test]
 fn edge_landscape_pages_orientation() {
-    // IR path (step 4): section breaks come from `ir.sections`. The
-    // `#set page(flipped:)` orientation change does not yet reach the
-    // `PageSnapshot` chain — a pre-existing IR gap, see
-    // docs/fallback-registry.md — so the `w:orient`/`w:sectPr` assertions
-    // stay dropped until it is closed.
+    // `PageSnapshot` carries `flipped`; a `#set page(flipped:)` transition is
+    // an `IrSection` boundary lowered to a mid-body `w:sectPr`, and the
+    // writer emits `w:orient="landscape"` whenever the page is wider than
+    // tall (the same rule Word uses).
     let xml = fixture_doc_xml("edge_landscape_pages");
     assert!(
         xml.contains("Portrait Section"),
@@ -811,6 +810,15 @@ fn edge_landscape_pages_orientation() {
     assert!(
         xml.contains("Back to Portrait"),
         "return-to-portrait heading should be present"
+    );
+    let sect_count = xml.matches("<w:sectPr>").count() + xml.matches("<w:sectPr ").count();
+    assert!(
+        sect_count >= 3,
+        "flipped transitions should produce section breaks, got {sect_count}"
+    );
+    assert!(
+        xml.contains("w:orient=\"landscape\""),
+        "landscape sections should carry w:orient"
     );
 }
 

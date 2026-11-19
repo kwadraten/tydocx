@@ -963,6 +963,9 @@ pub struct Table {
     /// Absolute column widths in twips (`w:tblGrid` + `w:tblLayout
     /// w:type="fixed"`). `None` keeps percentage-based auto layout.
     pub col_widths_twips: Option<Vec<u32>>,
+    /// Table-level alignment (`w:jc` in `w:tblPr`) — the horizontal part of
+    /// an `align(..)` wrapper around the table. `None` = Word's default left.
+    pub alignment: Option<Alignment>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

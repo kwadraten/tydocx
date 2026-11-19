@@ -5,6 +5,8 @@
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
+pub mod ir;
+
 /// The path to `tests/fixtures/<fixture>.typ`.
 pub fn fixture_path(fixture: &str) -> PathBuf {
     PathBuf::from(format!("../../tests/fixtures/{fixture}.typ"))
@@ -90,6 +92,48 @@ pub fn fixture_document_with_font_dirs_and_options(
         .document
 }
 
+/// Compile `tests/fixtures/<fixture>.typ` once and return both the patched
+/// IR (what `lower` actually consumed) and the full conversion outcome.
+pub fn fixture_ir_and_outcome(
+    fixture: &str,
+) -> (typort_ir::IrDocument, typort_core::ConvertOutcome) {
+    let world = typort_core::TyportWorld::new(&fixture_path(fixture)).unwrap();
+    let docx_doc = typst::compile::<typort_core::convert::DocxDocument>(&world)
+        .output
+        .unwrap();
+    let paged = typst::compile::<typst_layout::PagedDocument>(&world)
+        .output
+        .ok();
+    let (outcome, ir) = typort_core::convert::export_ir_with_ir(
+        &docx_doc,
+        paged.as_ref(),
+        &world,
+        &typort_core::ConvertOptions::default(),
+    );
+    (ir, outcome)
+}
+
+/// Every `tests/fixtures/**/*.typ` name, relative without the extension, in
+/// sorted order (`conformance/conf-overline` for subdirectory fixtures).
+pub fn all_fixtures() -> Vec<String> {
+    fn walk(dir: &Path, prefix: &str, names: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("fixture directory") {
+            let entry = entry.expect("fixture entry");
+            let name = entry.file_name().into_string().expect("utf-8 name");
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, &format!("{prefix}{name}/"), names);
+            } else if let Some(stem) = name.strip_suffix(".typ") {
+                names.push(format!("{prefix}{stem}"));
+            }
+        }
+    }
+    let mut names = Vec::new();
+    walk(Path::new("../../tests/fixtures"), "", &mut names);
+    names.sort();
+    names
+}
+
 /// The parts produced by one fixture conversion.
 pub struct FixturePackage {
     parts: Vec<(String, Vec<u8>)>,
@@ -169,11 +213,6 @@ pub fn fixture_part_with_font_dirs(fixture: &str, part: &str, font_dirs: &[PathB
     fixture_package_from_document(&fixture_document_with_font_dirs(fixture, font_dirs))
         .part_text(part)
         .to_owned()
-}
-
-/// The directory containing a fixture-relative path.
-pub fn fixture_dir(path: impl AsRef<Path>) -> PathBuf {
-    PathBuf::from("../../tests/fixtures").join(path)
 }
 
 /// Convert `tests/fixtures/<fixture>.typ` and return `word/document.xml`.

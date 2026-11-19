@@ -56,9 +56,15 @@ not a deletion list.
   enumerated per fixture in `~/workspace/devin-step4-summary.md`; rulings
   are IR-correct or old-path bug throughout. The one case where the scrape
   held text the IR path genuinely lacks today is
-  `issue_nested_table_alignment` (an `align(center)`-wrapped table nested
-  in a table cell is dropped by collection — pre-existing IR gap,
-  unchanged by the deletion).
+  `issue_nested_table_alignment` — **CLOSED (step 5):** the raw table
+  cell's `body` holds an un-`show`n `AlignElem` (sequence children realize
+  to it directly, not to `StyledElem`), so `collect_standalone` /
+  `collect_body_blocks` / `collect_content_element` now descend
+  `AlignElem` via `collect_align_blocks`, folding its alignment into the
+  chained styles. The folded alignment is captured onto
+  `IrTable::alignment` / `Table::alignment` and emitted as `w:jc` inside
+  `w:tblPr`. The fixture's test asserts the inner table, its cell text,
+  and the centered `w:tblPr/w:jc`.
 - **Went with it:** `page/sections.rs` (section detection — see below),
   `stats::proportional_index{,_rounded}`, `units::pt_to_eighth_pt`,
   `Paragraph::page_from_paged`, and the recovery half of `text_norm.rs`
@@ -96,11 +102,15 @@ not a deletion list.
   `section-break` degradation on `issue_c1_section_columns`. The
   legacy-targeted tests were retargeted to `convert()` in
   `tests/integration/structure.rs`.
-- **Known IR gap (pre-existing):** `#set page(flipped: …)` changes are not
-  in the `PageSnapshot` chain, so `edge_landscape_pages` gets no
-  `w:orient="landscape"` sections on either path now. The fixture's test
-  keeps the heading assertions and drops the orientation assertions until
-  the gap is closed.
+- **`flipped` gap — CLOSED (step 5):** `PageSnapshot` now carries
+  `flipped` (`styles.get(PageElem::flipped)`). The snapshot's `PartialEq`
+  turns a `#set page(flipped:)` change into an `IrSection` boundary;
+  `to_page_settings` swaps the resolved width/height exactly as
+  typst-layout's `layout_page_run_impl` does (unconditionally, so the
+  margin axes are unaffected), and the sectPr writer emits
+  `w:orient="landscape"` whenever `w:w > w:h` — the same rule Word applies.
+  `edge_landscape_pages` now produces three `w:sectPr` with landscape
+  orientation on the flipped section, and its test asserts it.
 
 ### `apply_styles_from_paged`
 - **What:** per-run styles and heading alignment patched from Paged
@@ -725,3 +735,69 @@ pre-cleanup redundant size override).
   layout, while `auto` rows are measured per row from their own cell
   bodies; C1 still flattens grids to paragraphs with the
   `grid-layout` degradation.
+
+## Numbering checklist (step 5, word-layout semantics)
+
+The word-layout numbering model from the SuperDoc survey
+(`~/workspace/superdoc-backend-survey.md`, AGPL-referenced semantics only —
+the proprietary `@superdoc/docx-engine` was not run, read, or used as an
+oracle) was turned into a checklist over the L2 numbering writer
+(`typort-ooxml/src/writer/numbering.rs`). Tests live in
+`crates/typort-cli/tests/integration/numbering.rs`. Every item came back
+pinned; no defect was found, so nothing needed fixing or registering:
+
+- **abstractId-scoped counters — PINNED.** OOXML counters are scoped to the
+  `w:abstractNumId`, so two lists sharing abstract 1 would continue each
+  other's numbering. The writer allocates a distinct `w:num` per top-level
+  list, each carrying a level-0 `w:startOverride` that resets the shared
+  counter (`numbering_counters_are_abstract_scoped_so_each_list_restarts`,
+  plus the older `separate_ordered_lists_each_restart_at_one` /
+  `enum_custom_start_keeps_numbering` pins).
+- **`startOverride` scoping — PINNED.** Overrides live inside
+  `w:num → w:lvlOverride(w:ilvl=0) → w:startOverride`, never on the shared
+  `w:abstractNum` (`numbering_start_override_is_scoped_to_the_num_instance`).
+- **`lvlRestart` — PINNED (intentional absence).** No `w:lvlRestart` is
+  emitted; OOXML's default for an absent element restarts a level whenever
+  ANY higher level increments, which is exactly Typst's enum semantics for
+  nested lists
+  (`numbering_levels_restart_on_any_higher_level_by_default`).
+- **Ancestor-start fallback — PINNED.** Every `w:lvl` (abstract and
+  `lvlOverride` alike) declares `w:start`, so an item first appearing at a
+  deeper `w:ilvl` has a defined ancestor start
+  (`numbering_every_level_declares_an_ancestor_start`).
+- **firstLine vs hanging marker placement — PINNED.** Numbered paragraphs
+  place the marker with `w:ind w:left + w:hanging` (marker hangs left of the
+  body edge); `w:firstLine` is never used for marker placement
+  (`numbering_markers_hang_left_of_the_text_not_first_line`).
+
+## Conformance suite findings (step 5)
+
+The strict-validation harness (every fixture: python-docx opens it,
+LibreOffice converts it, degradation entries are non-empty) caught two real
+package defects, both fixed:
+
+- **Footnote media relationships resolved outside the package.** Targets in
+  `word/_rels/footnotes.xml.rels` were `../media/imageN.ext`, which resolve
+  relative to `word/` to `/media/imageN.ext` — outside `word/media/` where
+  the bytes live. python-docx refused the package. Targets are now
+  `media/imageN.ext` (`writer/footnotes.rs`; pinned by the harness).
+- **`word/footnotes.xml` used `m:oMath` without declaring `xmlns:m`.**
+  Fixtures with math inside footnotes produced malformed XML that
+  LibreOffice could not load. The root now declares
+  `xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"`
+  exactly when `footnotes_have_math` finds OMML in a footnote body.
+
+Named oracle limitations the conformance suite records (not defects):
+
+- **`libreoffice-math` absent in this environment.** LibreOffice without
+  the Math component imports OMML as nothing — the `m:*` markup is
+  well-formed (xmlns declared, `m:oMath` beside `w:r`, per ECMA-376) yet
+  LibreOffice renders no formula even in PDF export. Round-trip tests
+  exempt `m:*` classes and `m:t` text for this oracle limitation; the
+  emitted OMML is pinned by non-oracle tests instead.
+- **LibreOffice output rewrites, not drops.** On docx→docx conversion
+  LibreOffice rewrites `w:fldSimple` hyperlinks into `w:hyperlink` +
+  external relationship (REF/TOC fields into `w:fldChar` runs), normalizes
+  table-level `w:tblBorders` to per-cell `w:tcBorders` (`w:left`/`w:right`
+  to `w:start`/`w:end`), and elides empty `w:footnotePr`. The round-trip
+  test accepts each rewrite only when the equivalent form is present.

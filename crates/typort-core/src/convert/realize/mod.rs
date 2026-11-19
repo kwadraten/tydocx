@@ -111,6 +111,15 @@ impl Output for DocxDocument {
     }
 }
 
+impl DocxDocument {
+    /// The collected styled IR before lowering — the conformance suite
+    /// audits element coverage against it.
+    #[must_use]
+    pub fn ir(&self) -> &IrDocument {
+        &self.ir
+    }
+}
+
 impl Introspector for DocxDocument {
     fn query(&self, selector: &Selector) -> EcoVec<Content> {
         self.introspector.query(selector)
@@ -416,6 +425,19 @@ pub fn export_ir(
     world: &TyportWorld,
     options: &ConvertOptions,
 ) -> ConvertOutcome {
+    export_ir_with_ir(docx_doc, paged_doc, world, options).0
+}
+
+/// `export_ir` plus the patched IR it lowered — the conformance suite audits
+/// element coverage against the post-patch IR, which is what `lower`
+/// consumed.
+#[must_use]
+pub fn export_ir_with_ir(
+    docx_doc: &DocxDocument,
+    paged_doc: Option<&PagedDocument>,
+    world: &TyportWorld,
+    options: &ConvertOptions,
+) -> (ConvertOutcome, IrDocument) {
     let mut ir = docx_doc.ir.clone();
     let mut degradations: Vec<Degradation> =
         docx_doc.degradations.iter().map(core_degradation).collect();
@@ -508,7 +530,7 @@ pub fn export_ir(
         );
     }
 
-    ConvertOutcome::new(doc, degradations)
+    (ConvertOutcome::new(doc, degradations), ir)
 }
 
 fn assign_numbering_starts(
