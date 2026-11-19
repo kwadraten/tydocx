@@ -82,6 +82,21 @@ flowchart TD
     CRATES --> MATH["typort-math/ — Typst 数学 → OMML 转换"]
 ```
 
+## 前置依赖
+
+从源码构建会打包 OpenSSL（`Cargo.toml` 中的 `vendor-openssl`）。
+在 Fedora 44 上，打包的 OpenSSL 构建需要 Perl `Time::Piece`，基础安装里没有：
+
+```bash
+sudo dnf install perl-Time-Piece
+```
+
+改用系统 OpenSSL：
+
+```bash
+OPENSSL_NO_VENDOR=1 cargo build --workspace
+```
+
 ## 构建与测试
 
 ```bash
