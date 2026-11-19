@@ -92,8 +92,8 @@ pub enum DegradationAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Degradation {
     /// Where the construct sits in the source, when known. Span-less
-    /// degradations (e.g. found by the recovery layer) carry a page hint in
-    /// the message instead; a span is never fabricated.
+    /// degradations carry a page hint in the message instead; a span is
+    /// never fabricated.
     pub span: Option<Span>,
     /// What was degraded, e.g. `"floating-graphic"`. Stable identifiers, not
     /// prose: the CLI prints them verbatim and the dedup keys on them.

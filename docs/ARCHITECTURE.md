@@ -65,8 +65,9 @@ semantic HTML representation:
   never inferred back from rendered glyphs.
 - **Layout-only constructs vanish.** `#align(center)[...]`, `#place(...)`, some
   `#grid(...)` layouts, and `#line()` rules have no HTML element, so they are
-  *absent from the DOM*. The legacy path recovered them by diffing rendered text
-  lines against the model (`convert/recovery/`). In the realize path, elements
+  *absent from the DOM*. The legacy path used to recover them by diffing rendered
+  text lines against the model (`convert/recovery/` — deleted in step 4; the
+  equivalence baseline now runs without it). In the realize path, elements
   that only exist after layout (a table's synthesized `grid`, a figure body's
   caption) are resolved by **fragment re-realization**: the enclosing body is
   realized a second time as a `Fragment` with the same engine and a locator
@@ -165,11 +166,10 @@ Two design properties worth knowing:
 The legacy path (`convert_legacy` → `export`) is the same shape with a
 different skeleton: it compiles `HtmlDocument` + `PagedDocument` and walks
 the HTML tags (`walk_tags`) through pipeline phases 2–5 (page + style,
-HTML body walk, headers/footers, recovery and post-processing). It stays
-as the fallback and the equivalence baseline; its recovery passes are
-deliberately **not** run by the realize path (see
-`docs/fallback-registry.md` for what that costs and when each piece can
-be ported or deleted).
+HTML body walk, headers/footers, post-processing). It stays
+as the fallback and the equivalence baseline; its recovery passes were
+deleted in step 4 once the realize path proved it covers the same content
+natively (the per-item evidence is in `docs/fallback-registry.md`).
 
 ## Crate layout
 
@@ -222,15 +222,9 @@ they exercise that public API as integration tests.
 | `convert/page/mod.rs` | Paged-style facade: declares responsibility modules and re-exports their caller-facing API. |
 | `convert/page/units.rs`, `convert/page/style.rs` | Word-unit conversion and document-style detection from rendered frames. |
 | `convert/page/source_ast.rs`, `convert/page/hanging_indent.rs`, `convert/page/reachable.rs` | Authoritative source-AST `set`-rule parsing (including scoped hanging indents) and reachable local-source collection. |
-| `convert/page/sections.rs`, `convert/page/margin.rs` | Section changes, page settings, body/margin zones, headers, footers, and page numbering from Paged geometry. |
+| `convert/page/margin.rs` | Page settings, body/margin zones, headers, footers, and page numbering from Paged geometry. |
 | `convert/page/run_style.rs`, `convert/page/language.rs` | Per-run rendered-style overrides, measured per-level heading sizes, redundant heading-property suppression, BCP-47 helpers, and localized CJK font names. |
-| `convert/recovery/mod.rs` | Orchestrates recovery of layout-only content HTML dropped and re-exports the recovery passes. |
-| `convert/recovery/lines.rs` | Extracts positioned rendered lines and run/x-cluster data from paged frames. |
-| `convert/recovery/deduplication.rs` | Builds the emitted-text corpus and decides which rendered lines are already represented. |
-| `convert/recovery/insertion.rs` | Places genuinely missing rendered lines into the document model. |
-| `convert/recovery/horizontal_rules.rs` | Recovers source-declared horizontal rules and maps emitted elements to paged locations. |
-| `convert/recovery/table_rules.rs` | Derives each table's border style from its own paged tag bracket. |
-| `convert/text_norm.rs` | Shared walk/recovery normalisation for visual markers, CJK spacing/fragments, math italics, whitespace, and citation markers. |
+| `convert/text_norm.rs` | CJK-space normalisation shared by the HTML walk (the recovery-side normalisers went with `convert/recovery/`). |
 | `convert/coalesce.rs` | Final pass: merges same-line paragraphs, coalesces adjacent runs with identical effective `rPr`, and folds whitespace-only runs. |
 | `convert/table_width.rs` | Turns a `TableElem`'s declared column `TrackSizings` (fr/rel/auto) into per-cell `w:tcW` percentages. |
 | `convert/table_align.rs` | Faithful table-cell alignment from the semantic `TableElem`: horizontal → cell-paragraph `w:jc`, vertical → `w:vAlign`. |
@@ -391,36 +385,40 @@ classification (e.g. in `sum_i a_i = S`, the `= S` stays outside the n-ary).
 - No extensible arrows.
 - Word forces the Cambria Math font in math zones.
 
-## The fragile seam: `convert/recovery/`
+## The retired seam: `convert/recovery/` (deleted)
 
-The honest part of this document. The recovery layer is where typort does, in
-miniature, the very PDF→Word inference it set out to avoid — because some content
-(`#align(center)`, `#place`, grids) reaches the model *only* as geometry.
+The legacy path had a recovery layer that did, in miniature, the very
+PDF→Word inference typort set out to avoid — because some content
+(`#align(center)`, `#place`, grids) reached the HTML-based model *only* as
+geometry. `recovery/mod.rs::recover_missing_content` orchestrated it:
+`lines.rs` extracted every rendered text line with its position,
+`deduplication.rs` **text-diffed** it against what already made it into the
+model, and `insertion.rs` inserted genuinely-missing lines at the
+geometrically-correct slot. `horizontal_rules.rs` and `table_rules.rs` held
+the two rule-shape paths, and `page/sections.rs` inferred section breaks
+from rendered page-size changes.
 
-`recovery/mod.rs::recover_missing_content` orchestrates this seam:
-`recovery/lines.rs` extracts every rendered text line with its position,
-`recovery/deduplication.rs` **text-diffs** it against what already made it into
-the model, and `recovery/insertion.rs` inserts genuinely-missing lines at the
-geometrically-correct slot. `recovery/horizontal_rules.rs` and
-`recovery/table_rules.rs` contain the two rule-shape paths. Correctness depends on:
-
-- **Text normalization matching** across two very different pipelines. The shared
-  normalisers in `convert/text_norm.rs` strip CJK spaces, math italics, visual
-  markers, whitespace, citation markers, and identify CJK fragments.
-- **Geometry and text thresholds** collected as documented constants with their
-  owning responsibility under `convert/page/` and at the top of the responsible
-  `convert/recovery/*.rs` module. Those constants are the authoritative tuning
-  references for the paged-style and recovery heuristics.
-
-These heuristics are individually justified but collectively brittle: both false
-negatives (real content skipped) and false positives (content duplicated) are
-possible. Most of the project's known edge-case bugs live here. **Anyone touching
-this directory should add a fixture-based regression test for the specific case.**
-
-The realize path does not run recovery at all — it reads semantics from the
-pairs instead of reconstructing them from geometry. What that costs (and
-when each recovery piece can be ported or deleted) is recorded in
+The realize path never ran any of it — it reads semantics from the pairs
+instead of reconstructing them from geometry. In step 4 the whole module
+was deleted after the fixture corpus proved every behavior has a native
+realize-path equivalent: layout-only blocks, placed content, `#block`/`#rect`
+text, `#rotate`/`#move`/`#scale` bodies, grids, shapes, and context/layout
+output are collected from the pairs (`realize/collect.rs`), `#line()` rules
+come from the `LineElem` pair (`line_blocks`), table borders from the
+realized grid strokes (`table_borders_from_grid`), and section breaks from
+the collected `PageSnapshot` chains (`ir.sections` → `lower_body` /
+`attach_section_break` in `typort-ir`). The geometry constants and the
+element→page map went with it; the remaining per-item evidence and the
+three pre-existing IR gaps the legacy scrape used to mask
+(`#set page(flipped:)` orientation sections, `page(foreground:)` text, and
+a `align(center)`-wrapped table inside a table cell) are recorded in
 `docs/fallback-registry.md`.
+
+The same brittleness warning still applies to the surviving Paged-geometry
+heuristics under `convert/page/` (per-run styles, margin zones, footnote
+bodies, image sizes): geometry → semantics inference can false-positive and
+false-negative. **Anyone touching those heuristics should add a
+fixture-based regression test for the specific case.**
 
 ## Language neutrality (how it stays universal)
 
@@ -433,9 +431,10 @@ pattern to follow:
    `#bibliography(...)`, not by matching a `参考文献`/`References` heading. A
    hand-written reference list is, to Typst, ordinary text — and is converted as
    such.
-2. **Figure/table captions** are deduplicated during recovery against the text
-   the semantic figure path already emitted, not by matching `表 `/`图 `/`Table `/
-   `Figure ` prefixes.
+2. **Figure/table captions** were once deduplicated during recovery by
+   matching `表 `/`图 `/`Table `/`Figure ` prefixes; the dedup that replaced it
+   compared semantic emitted text, and with recovery deleted each caption is
+   simply emitted once by the element's own walk.
 3. **Document language** (`w:lang`) is derived from `#set text(lang:, region:)`,
    not guessed from the presence of CJK glyphs.
 

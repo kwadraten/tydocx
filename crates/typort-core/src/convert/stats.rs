@@ -1,4 +1,4 @@
-//! Small statistical helpers shared by paged-style and recovery heuristics.
+//! Small statistical helpers shared by the paged-style heuristics.
 
 use std::cmp::Reverse;
 
@@ -28,19 +28,4 @@ pub(super) fn standard_deviation(values: &[f64]) -> Option<f64> {
         .sum::<f64>()
         / count;
     Some(variance.sqrt())
-}
-
-/// Map an index proportionally with integer truncation.
-pub(super) fn proportional_index(index: usize, source_len: usize, target_len: usize) -> usize {
-    index.saturating_mul(target_len) / source_len.max(1)
-}
-
-/// Map an index proportionally, rounding to the nearest target index.
-pub(super) fn proportional_index_rounded(
-    index: usize,
-    source_len: usize,
-    target_len: usize,
-) -> usize {
-    let product = index.saturating_mul(target_len);
-    product.saturating_add(source_len / 2) / source_len.max(1)
 }

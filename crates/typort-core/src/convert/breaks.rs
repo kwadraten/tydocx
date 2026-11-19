@@ -102,7 +102,7 @@ pub(super) fn apply_breaks_from_source(world: &TyportWorld, doc: &mut Document) 
 
     // 3. Each break inserts before the first keyed element positioned after
     //    it — i.e. after everything at or before the break. Elements without
-    //    a key (recovery-inserted paragraphs, images) never anchor a break;
+    //    a key (images, synthesized paragraphs) never anchor a break;
     //    they ride with their keyed neighbours.
     let mut inserts: Vec<(usize, BreakKind)> = breaks
         .into_iter()
@@ -279,7 +279,7 @@ fn resolve_source_bool(expr: ast::Expr<'_>, bool_bindings: &HashMap<String, bool
 
 /// The latest source position among an element's runs, as a `PosKey` — the
 /// element "ends" there in document order. `None` when no run resolves into a
-/// file on the include chain (e.g. recovery-inserted content, or content
+/// file on the include chain (e.g. synthesized content, or content
 /// produced by an imported template function).
 fn element_end_key(
     element: &BlockElement,

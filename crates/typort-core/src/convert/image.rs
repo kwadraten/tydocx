@@ -263,8 +263,8 @@ fn collect_figure_canvases(
 
 /// True if a frame (recursively) contains a Bézier curve shape — the signature
 /// of vector line art. Tables and horizontal rules use only straight `Line`
-/// geometry, so this never matches a table grid. Used by recovery to keep
-/// canvas-internal text out of the recovered-line corpus.
+/// geometry, so this never matches a table grid. Used to spot figure canvases
+/// for rasterization.
 pub(super) fn frame_has_curve(frame: &Frame) -> bool {
     frame.items().any(|(_, item)| match item {
         FrameItem::Shape(shape, _) => {
