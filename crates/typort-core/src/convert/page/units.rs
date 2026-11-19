@@ -15,13 +15,6 @@ pub(in crate::convert) fn pt_to_half_pt(pt: f64) -> u32 {
     (pt * 2.0).round().max(0.0) as u32
 }
 
-/// Convert a stroke thickness in points to Word eighth-points, rounded.
-/// See [`pt_to_twips`] for the cast rationale.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub(in crate::convert) fn pt_to_eighth_pt(pt: f64) -> u32 {
-    (pt * 8.0).round().max(0.0) as u32
-}
-
 pub(super) fn numeric_to_twips(n: typst_syntax::ast::Numeric<'_>) -> u32 {
     pt_to_twips(numeric_to_pt(n))
 }

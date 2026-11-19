@@ -556,11 +556,6 @@ pub struct Paragraph {
     /// Explicit `<w:ind w:hanging>` override (twips) for list-item paragraphs;
     /// `None` inherits the numbering level's hanging indent.
     pub list_hanging_twips: Option<u32>,
-    /// 1-based page number this paragraph was recovered from (from the paged
-    /// frame it was scraped out of). `Some` only for content reinserted by the
-    /// recovery pass; lets the element→page map use the real page instead of a
-    /// proportional guess. Not emitted to OOXML.
-    pub page_from_paged: Option<usize>,
     /// Exact line height in twips: `w:spacing w:line` + `w:lineRule="exact"`.
     /// Timetable whitespace cells pin 1pt paragraphs so Word does not inflate
     /// empty rows to its minimum.

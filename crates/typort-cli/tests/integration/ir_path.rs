@@ -29,6 +29,7 @@ const IDENTICAL: &[&str] = &[
     "issue_odd_even_headers",
     "issue_first_page_header",
     "issue_c1_header_style",
+    "two_ordered_lists",
 ];
 
 const DOCUMENTED: &[&str] = &[
@@ -39,7 +40,6 @@ const DOCUMENTED: &[&str] = &[
     "complex_paper",
     "nested_table_test",
     "mixed_table_borders",
-    "two_ordered_lists",
     "bibliography_basic",
     "bibliography_multiple",
     "math_test",
@@ -175,7 +175,10 @@ fn ir_path_documented_diffs() {
 
     {
         let (new_xml, legacy_xml) = convert_both("general_elements");
-        assert!(legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""));
+        // Step 4: the legacy `#line` rule came from
+        // `insert_horizontal_rules_from_paged` (deleted); the IR path emits it
+        // natively through `line_blocks` from the `LineElem` pair.
+        assert!(!legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""));
         assert!(
             new_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""),
             "#line resolves through its context wrapper to a paragraph rule"
@@ -233,7 +236,9 @@ fn ir_path_documented_diffs() {
 
     {
         let (new_xml, legacy_xml) = convert_both("memo");
-        assert!(legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""));
+        // Step 4: same `insert_horizontal_rules_from_paged` removal as
+        // `general_elements` — IR keeps the `#line` rule natively.
+        assert!(!legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""));
         assert!(
             new_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""),
             "#line resolves through its context wrapper to a paragraph rule"
@@ -247,13 +252,17 @@ fn ir_path_documented_diffs() {
     }
 
     {
+        // Step 4: the legacy centered/bold counts dropped — the recovered
+        // duplicate author/table/layout paragraphs `recover_missing_content`
+        // injected from Paged geometry are gone. The IR path emits that
+        // content natively from the `align`/`block` pairs.
         let (new_xml, legacy_xml) = convert_both("complex_paper");
         assert_eq!(count(&new_xml, "w:jc w:val=\"center\""), 5);
-        assert_eq!(count(&legacy_xml, "w:jc w:val=\"center\""), 2);
+        assert_eq!(count(&legacy_xml, "w:jc w:val=\"center\""), 0);
         assert_eq!(count(&new_xml, "w:jc w:val=\"left\""), 20);
         assert_eq!(count(&legacy_xml, "w:jc w:val=\"left\""), 24);
         assert_eq!(count(&new_xml, "<w:b/>"), 15);
-        assert_eq!(count(&legacy_xml, "<w:b/>"), 20);
+        assert_eq!(count(&legacy_xml, "<w:b/>"), 16);
         assert!(
             new_xml.contains(" 本文利用2012"),
             "space after 摘要 label kept"
@@ -274,33 +283,31 @@ fn ir_path_documented_diffs() {
     }
 
     {
+        // Step 4: the legacy recovered duplicate ("A borderless table\u{a0}1:")
+        // is gone with `recover_missing_content`; the remaining diff is table
+        // borders — the IR path derives them from the realized grid strokes
+        // (`table_borders_from_grid`: borderless → nil, three-line → thick
+        // top/bottom + header row separator + `w:tblHeader`), while the
+        // legacy path now falls back to the writer's uniform grid.
         let (new_xml, legacy_xml) = convert_both("mixed_table_borders");
-        assert_eq!(count(&legacy_xml, "w:jc w:val=\"center\""), 1);
-        assert_eq!(count(&new_xml, "w:jc w:val=\"center\""), 0);
-        assert!(legacy_xml.contains("A borderless table\u{a0}1:"));
-        assert!(!new_xml.contains("A borderless table\u{a0}1:"));
-    }
-    {
-        let (new_xml, legacy_xml) = convert_both("nested_table_test");
-        assert_eq!(count(&legacy_xml, "w:jc w:val=\"center\""), 1);
-        assert_eq!(count(&new_xml, "w:jc w:val=\"center\""), 0);
-        assert!(legacy_xml.contains("Inner AInner B"));
-        assert!(!new_xml.contains("Inner AInner B"));
-    }
-    {
-        let (new_xml, legacy_xml) = convert_both("two_ordered_lists");
-        assert_eq!(count(&legacy_xml, "w:jc w:val=\"center\""), 1);
-        assert_eq!(count(&new_xml, "w:jc w:val=\"center\""), 0);
-        assert!(legacy_xml.contains("1.one2.two"));
-        assert!(!new_xml.contains("1.one2.two"));
+        assert!(new_xml.contains("w:val=\"nil\""));
+        assert!(!legacy_xml.contains("w:val=\"nil\""));
+        assert!(new_xml.contains("<w:tblHeader/>"));
+        assert!(!legacy_xml.contains("<w:tblHeader/>"));
+        assert!(new_xml.contains("w:sz=\"8\""));
+        assert!(!legacy_xml.contains("w:sz=\"8\""));
     }
     {
         let (new_xml, legacy_xml) = convert_both("toc_test");
-        assert_eq!(count(&legacy_xml, "w:jc w:val=\"center\""), 5);
-        assert_eq!(count(&new_xml, "w:jc w:val=\"center\""), 0);
-        assert!(legacy_xml.contains(">Contents<"));
-        assert!(!new_xml.contains(">Contents<"));
+        // Step 4: the legacy scraped duplicate TOC entries ("Contents",
+        // rendered "Heading .... 1" lines) are gone; both paths emit the
+        // TOC field. The remaining diff is semantic heading numbering:
+        // the IR path emits `w:numPr` list numbering while the legacy
+        // path literalizes the "1." / "2.1." prefixes into run text.
+        assert_eq!(count(&new_xml, "<w:numPr>"), 4);
+        assert_eq!(count(&legacy_xml, "<w:numPr>"), 0);
         assert!(new_xml.contains(" TOC "), "new path emits the TOC field");
+        assert!(legacy_xml.contains(" TOC "), "legacy emits the TOC field");
     }
 
     for (fixture, anchor, author) in [
@@ -361,11 +368,15 @@ fn ir_path_documented_diffs() {
         assert_eq!(count(&new_xml, "w:left=\"0\""), 0);
     }
 
+    // `nested_table_test` joined this group in step 4: deleting recovery
+    // removed the legacy scraped duplicate ("Inner AInner B"), leaving
+    // `w:tblCellMar` as the only diff.
     for fixture in [
         "rowspan_test",
         "edge_complex_table",
         "footnote_in_table",
         "figure_caption",
+        "nested_table_test",
     ] {
         let (new_xml, legacy_xml) = convert_both(fixture);
         assert!(

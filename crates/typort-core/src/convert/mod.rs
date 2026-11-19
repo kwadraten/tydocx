@@ -23,7 +23,6 @@ mod lists;
 pub mod page;
 mod postprocess;
 pub mod realize;
-mod recovery;
 mod smallcaps;
 mod source;
 mod stats;
@@ -198,7 +197,7 @@ pub fn export(
     apply_page_and_style(world, paged_doc, &mut doc, &mut degradations);
 
     // 3. Walk the HTML body.
-    let body = walk_body(
+    walk_body(
         world,
         html_doc,
         paged_doc,
@@ -215,7 +214,6 @@ pub fn export(
         world,
         html_doc,
         paged_doc,
-        body,
         &mut doc,
         options.compat,
         &mut degradations,
@@ -267,14 +265,14 @@ fn apply_page_and_style(
     // genuine three column documents are all covered by the source parse.
 }
 
-fn walk_body<'a>(
+fn walk_body(
     world: &TyportWorld,
-    html_doc: &'a HtmlDocument,
+    html_doc: &HtmlDocument,
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
     compat: CompatMode,
     degradations: &mut Vec<Degradation>,
-) -> &'a HtmlElement {
+) {
     // From the PagedDocument: on-page image display sizes keyed by content
     // hash (content itself comes from each <img>'s src data-URL during the
     // walk), and drawing-canvas rasters keyed by their figure's Location.
@@ -324,8 +322,6 @@ fn walk_body<'a>(
 
     // Detect footnote format (circled numbers).
     footnote::detect_footnote_format(&body.children, doc);
-
-    body
 }
 
 fn apply_headers_and_footers(
@@ -334,8 +330,8 @@ fn apply_headers_and_footers(
     compat: CompatMode,
     degradations: &mut Vec<Degradation>,
 ) {
-    // Extract headers and footers before content recovery so header/footer text
-    // is not misidentified as missing body content. All margin-zone consumers
+    // Extract headers and footers first so header/footer text is not
+    // misidentified as body content. All margin-zone consumers
     // share the resolved margins (paged default overridden by the source AST),
     // so a small author margin never misfiles body text as header/footer.
     if let Some(paged) = paged_doc {
@@ -545,18 +541,10 @@ fn run_post_passes(
     world: &TyportWorld,
     html_doc: &HtmlDocument,
     paged_doc: Option<&PagedDocument>,
-    body: &HtmlElement,
     doc: &mut Document,
     compat: CompatMode,
     degradations: &mut Vec<Degradation>,
 ) {
-    // Recover missing content from PagedDocument (e.g. #align(center) blocks).
-    if let Some(paged) = paged_doc {
-        recovery::recover_missing_content(paged, doc, compat, degradations);
-        // Set table borders from the rules actually drawn (three-line vs grid).
-        recovery::detect_three_line_tables(paged, doc);
-    }
-
     // Extract title/author from document metadata, falling back to first heading.
     extract_document_metadata(html_doc, doc);
 
@@ -588,21 +576,6 @@ fn run_post_passes(
     // Recover explicit `#pagebreak()`/`#colbreak()` from the source AST.
     breaks::apply_breaks_from_source(world, doc);
 
-    // Build element→page mapping for section break and rule placement.
-    let element_page_map: Vec<usize> = if let Some(paged) = paged_doc {
-        recovery::build_element_page_map(doc, &body.children, paged)
-    } else {
-        Vec::new()
-    };
-
-    // Detect and apply section breaks from page setting changes.
-    if let Some(paged) = paged_doc {
-        let sections = page::detect_section_breaks(paged);
-        if !sections.is_empty() {
-            page::apply_section_breaks(doc, &sections, &element_page_map);
-        }
-    }
-
     // M6 (C1 only): a mid-document columns/margins change starts a new
     // Typst section; C1 keeps a single section, so the change is dropped.
     // Size-only section breaks stay in all modes (compat-modes §1.3).
@@ -611,22 +584,13 @@ fn run_post_passes(
         c1_source_degradations(world, degradations);
     }
 
-    // Insert horizontal rules from geometry (internally gated on a source
-    // `#line()` in any reachable file so unrelated rules aren't invented).
-    let main_src = world.main_source().text();
-    if let Some(paged) = paged_doc {
-        let main_dir = world.main_dir();
-        let sources = page::collect_reachable_source_texts(world.root(), &main_dir, main_src);
-        recovery::insert_horizontal_rules_from_paged(paged, doc, &element_page_map, &sources);
-    }
-
     // Merge consecutive paragraphs that belong to the same visual line.
     if paged_doc.is_some() {
         coalesce::merge_same_line_paragraphs(doc);
     }
 
     // Coalesce adjacent equally-formatted text runs last, after every per-run
-    // style patch and recovery pass has settled.
+    // style patch has settled.
     coalesce::coalesce_runs(doc);
 }
 

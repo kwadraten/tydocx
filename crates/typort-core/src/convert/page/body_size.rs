@@ -1,7 +1,8 @@
-//! The single body-size detection rule shared by the document-style,
-//! run-style, and recovery detectors (#27).
+//! The single body-size detection rule shared by the document-style and
+//! run-style detectors (#27; the third consumer, `recovery/lines.rs`, was
+//! deleted in step 4).
 //!
-//! All three detectors sample the first [`BODY_SIZE_SAMPLE_PAGES`] pages,
+//! Both detectors sample the first [`BODY_SIZE_SAMPLE_PAGES`] pages,
 //! weight sizes by glyph count (not byte length — CJK text would otherwise
 //! count triple), bucket sizes in half-points, and pick the dominant bucket
 //! (ties prefer the smaller size, via [`super::stats::dominant_key`]).
@@ -9,9 +10,9 @@
 //! Before this module, each detector had its own sampling, weighting, and
 //! bucketing — first 3 pages / glyph count / half-points in `style.rs`,
 //! all pages / byte length / half-points in `run_style.rs`, first page /
-//! byte length / tenths of a point in `recovery/lines.rs` — so one document
-//! could yield three different body sizes, and the run-style baseline could
-//! disagree with the document style it is supposed to match.
+//! byte length / tenths of a point in the deleted `recovery/lines.rs` — so
+//! one document could yield three different body sizes, and the run-style
+//! baseline could disagree with the document style it is supposed to match.
 
 use std::collections::HashMap;
 
