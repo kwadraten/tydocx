@@ -6,10 +6,10 @@
 //! to a file (which needs the world) is the caller's job, at the boundary;
 //! these functions only build, deduplicate, and format what they are given.
 //!
-//! The design lives in `docs/compat-modes.md` (§1 modes, §4.1 warning
-//! channel and dedup, §4.2 skip semantics, §7 option shape). Phase 1 adds
-//! the mode gates: C1 skips aspects the intersection cannot express and
-//! reports each skip as a degradation; C2/C3 keep the current output.
+//! The verified mapping lives in `docs/spec-ecma376.md`; live gaps and
+//! deferred C2/C3 targets are in `docs/fallback-registry.md`. C1 skips
+//! aspects the intersection cannot express and reports each skip as a
+//! degradation; C2/C3 keep the richer output.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -18,7 +18,7 @@ use typst_syntax::Span;
 
 use typort_ooxml::document::Document;
 
-/// One of the three compat modes (`docs/compat-modes.md` §1).
+/// One of the three compat modes (`docs/spec-ecma376.md`).
 ///
 /// The modes are capabilities in strict inclusion, not three implementations:
 /// C1 emits the intersection, C2 adds graphical tricks, C3 adds field codes

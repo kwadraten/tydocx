@@ -578,7 +578,7 @@ fn run_post_passes(
 
     // M6 (C1 only): a mid-document columns/margins change starts a new
     // Typst section; C1 keeps a single section, so the change is dropped.
-    // Size-only section breaks stay in all modes (compat-modes §1.3).
+    // Size-only section breaks stay in all modes (spec-ecma376 §Page-level).
     append_transform_bodies(world, doc);
     if compat == CompatMode::C1 {
         c1_source_degradations(world, degradations);

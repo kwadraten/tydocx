@@ -72,7 +72,7 @@ semantic HTML representation:
   caption) are resolved by **fragment re-realization**: the enclosing body is
   realized a second time as a `Fragment` with the same engine and a locator
   derived from the main one, and the fragment's tags carry the synthesized
-  element (`docs/spike-realize.md`, verification loop route (a)).
+  element.
 - **Page-level facts don't exist before pagination.** Page size, margins, columns,
   headers/footers (which live in the page-margin zones), page breaks, and page
   numbering only come into being once the document is laid out — i.e. only from
@@ -87,6 +87,17 @@ semantic HTML representation:
   likewise emits only the OMML, not the equation's rendered text pairs.
   MathML→OMML transliteration is a possible
   future alternative, but the Content tree is the richer source today.
+- **The realize target is `Paged`, not `Html`.** `Target` has no `Docx`
+  variant, so a custom `Output` picks an existing one. Under `Target::Html`,
+  `realize`'s verdict applies the Html-specific built-in show rules
+  (`TABLE_RULE` and ~37 others, registered for Html only): a `TableElem` in
+  the pairs is already rewritten to `<table>` — cells keep only
+  colspan/rowspan; fill, stroke, inset, align, and track widths are gone.
+  Under `Target::Paged` the Paged rules (59 in 0.15.1) rewrite elements into
+  `BlockElem`/`ParElem` containers plus rendered text — the element's fields
+  stay materialized and its identity stays in the tag stream, much closer to
+  DOCX's block model. `Target::Paged` also requires no `Feature::Html` and
+  avoids the "html export is under active development" compile warning.
 
 ### Why Paged alone is not enough
 
@@ -130,7 +141,7 @@ document and a companion `PagedDocument` (`convert_ir`) and hands them to
 is the backend-shaped entry point — callers that already hold compiled
 documents (a host compiler, a test) use it instead of `convert`. The outcome
 pairs the document with its degradation report (`ConvertOutcome { document, degradations }`);
-the compat mode rides in `ConvertOptions` (see `docs/compat-modes.md`). Compilation failures keep
+the compat mode rides in `ConvertOptions` (see `docs/spec-ecma376.md`). Compilation failures keep
 their spans: they are returned as `Vec<SourceDiagnostic>`, never as plain
 strings. The steps are grouped here by purpose; see the numbered comments in
 `crates/typort-core/src/convert/realize/mod.rs` for the exact order.
@@ -204,7 +215,7 @@ they exercise that public API as integration tests.
 |------|----------------|
 | `world.rs` | `TyportWorld`: implements Typst's `World` trait (source, system fonts, `@preview` package download, `Feature::Html`). |
 | `convert/mod.rs` | Entry orchestration: `convert` (the realize path, thin wrapper over `convert_ir`) and `convert_legacy`/`export` (the legacy HtmlDocument pipeline, kept as fallback and equivalence baseline), module declarations/re-exports, `WalkCtx`, equation state, and the legacy pipeline phases. |
-| `convert/realize/mod.rs` | The realize path: `DocxDocument: Output` (`Target::Paged`, collects the IR during `create`), `with_fragment` (fragment re-realization), `convert_ir`/`export_ir` (page/style via a scratch `Document`, patch, pure lowering, path-independent post-passes), and the core↔ir `CompatMode`/`Degradation` boundary conversions. |
+| `convert/realize/mod.rs` | The realize path: `DocxDocument: Output` (`Target::Paged`, collects the IR during `create`), `with_fragment` (fragment re-realization), `convert_ir`/`export_ir` (page/style via a scratch `Document`, patch, pure lowering, path-independent post-passes), and the core↔ir `CompatMode`/`Degradation` boundary conversions. `DocxDocument`'s `introspector()` is an `ElementIntrospector` fed from the pairs' tag stream; the feed **must recurse into `ParElem`/`BlockElem` bodies** for nested `TagElem`s — top-level-only collection leaves `CiteGroup`s undiscovered and fails the final compile round ("citation could not be located"). |
 | `convert/realize/collect.rs` | Pair → `IrDocument` collection: the tag-group walk, label/bibliography pass, footnote markers, and fragment-resolved tables/grids/figures. |
 | `convert/realize/inline.rs` | Pair → `IrInline` collection: runs from `StyleChain`, links, refs, cites, images, math, breaks. |
 | `convert/realize/style.rs` | `StyleChain` → `Run` conversion (weight/style/size/color/font, smart quotes, run-merge key). |
@@ -249,8 +260,9 @@ share.
 - `Run` — a styled text span (bold/italic/underline/color/font/size/script).
 - `Table` / `TableRow` / `TableCell` — colspan/rowspan, shading, borders,
   multi-paragraph cells.
-- `ParagraphStyle` — a **typed enum** (`Heading(n)`, `Normal`, `Quote`, `Code`, …)
-  rather than stringly-typed style IDs.
+- `ParagraphStyle` — a **typed enum** (`Normal` | `Heading(n)`) rather than
+  stringly-typed style IDs. Code blocks ride a `code_block` flag on the
+  paragraph (the `CodeBlock` style), quotes a left indent.
 
 Units are stored in **Word-native form** (half-points for size, twips for
 spacing/indent) so the writer does minimal conversion.
@@ -259,7 +271,9 @@ spacing/indent) so the writer does minimal conversion.
 
 Between the realize pairs and `typort_ooxml::Document` sits a second,
 owned IR — the **Styled Semantic IR** (`crates/typort-ir`). The pairs
-borrow the realize arenas and cannot outlive `create()`, so the collector
+borrow the realize arenas and cannot outlive `create()` — and `create()`
+runs once per round of the compiler's introspection-convergence loop, so it
+keeps no cross-call state — so the collector
 copies them into owned data at once: `IrDocument { info, page, style,
 body, footnotes, citation_sources }`, with `IrBlock` (14 variants:
 Paragraph, Heading, Table, Grid, Figure, List, Enum, Equation, Quote,
@@ -447,10 +461,7 @@ come from the `LineElem` pair (`line_blocks`), table borders from the
 realized grid strokes (`table_borders_from_grid`), and section breaks from
 the collected `PageSnapshot` chains (`ir.sections` → `lower_body` /
 `attach_section_break` in `typort-ir`). The geometry constants and the
-element→page map went with it; the remaining per-item evidence and the
-three pre-existing IR gaps the legacy scrape used to mask
-(`#set page(flipped:)` orientation sections, `page(foreground:)` text, and
-a `align(center)`-wrapped table inside a table cell) are recorded in
+element→page map went with it; the remaining live gaps are recorded in
 `docs/fallback-registry.md`.
 
 The same brittleness warning still applies to the surviving Paged-geometry
