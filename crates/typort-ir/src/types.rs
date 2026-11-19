@@ -139,6 +139,19 @@ pub enum IrBlock {
     },
     Place {
         float: bool,
+        /// Word wrap mode implied by the float's declared alignment. Typst
+        /// floats must anchor `top` or `bottom` (`auto` resolves to one of
+        /// those at layout), so `TopAndBottom` is the normal case; `Square`
+        /// covers a defensive fallback only.
+        wrap: IrPlaceWrap,
+        /// `place(clearance:)` in EMU → `wp:anchor` `distT`/`distB`.
+        clearance_emu: u64,
+        /// Hash of the place's introspection `Location`; matches the paged
+        /// float group, which carries the same location as its frame parent.
+        location_hash: Option<u64>,
+        /// Page-absolute geometry of the rendered float, filled by the
+        /// paged-frame patch (`realize::place`). `None` until measured.
+        anchor: Option<IrAnchor>,
         body: Vec<IrBlock>,
     },
     PageBreak {
@@ -156,6 +169,27 @@ pub enum IrBlock {
 pub enum IrSectionBreakType {
     Odd,
     Even,
+}
+
+/// Word wrap mode for a floating `wp:anchor`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IrPlaceWrap {
+    /// `wp:wrapTopAndBottom` — the float occupies a band at the top or
+    /// bottom of its container and text flows above/below it.
+    TopAndBottom,
+    /// `wp:wrapSquare` — text wraps on all four sides.
+    Square,
+}
+
+/// Page-absolute geometry of a rendered float, measured from the paged frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IrAnchor {
+    /// Offset from the page's left edge (`relativeFrom="page"`), EMU.
+    pub x_emu: i64,
+    /// Offset from the page's top edge (`relativeFrom="page"`), EMU.
+    pub y_emu: i64,
+    pub width_emu: u64,
+    pub height_emu: u64,
 }
 
 /// Only properties the OOXML `Paragraph` can carry are represented here;

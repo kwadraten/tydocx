@@ -10,7 +10,9 @@ use super::fields::{
     write_field_ref, write_hyperlink, write_toc_field,
 };
 use super::footnotes::write_footnote_ref;
-use super::image::{image_rel_id, svg_rel_id, write_anchored_line, write_image_inline};
+use super::image::{
+    image_rel_id, svg_rel_id, write_anchored_float, write_anchored_line, write_image_inline,
+};
 use super::math::write_math_inline;
 use super::package::{write_font_triple, write_size_pair};
 use crate::document::{DocumentStyle, InlineElement, Run};
@@ -81,6 +83,11 @@ pub(super) fn write_inline<W: Write>(
             let n = ctx.shape_id_counter.get() + 1;
             ctx.shape_id_counter.set(n);
             write_anchored_line(writer, line, n)
+        }
+        InlineElement::AnchoredFloat(float) => {
+            let n = ctx.shape_id_counter.get() + 1;
+            ctx.shape_id_counter.set(n);
+            write_anchored_float(writer, float, n, ctx)
         }
         InlineElement::ColumnBreak => write_column_break(writer),
         InlineElement::FieldToc { max_depth } => write_toc_field(writer, *max_depth),

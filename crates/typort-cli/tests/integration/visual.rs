@@ -13,7 +13,7 @@ fn typst_to_pdf(typ_path: &Path) -> Vec<u8> {
 }
 
 /// Convert .typ → .docx → PDF (via LibreOffice), return PDF bytes.
-fn typort_to_pdf_via_docx(fixture: &str, label: &str) -> Option<Vec<u8>> {
+pub(crate) fn typort_to_pdf_via_docx(fixture: &str, label: &str) -> Option<Vec<u8>> {
     let doc = fixture_document(fixture);
     let tmp_dir = std::env::temp_dir().join("typort_visual_test");
     std::fs::create_dir_all(&tmp_dir).ok()?;

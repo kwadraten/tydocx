@@ -186,6 +186,37 @@ pub struct AnchoredLine {
     pub color: Option<String>,
 }
 
+/// Floating content anchored at a page-absolute position (`wp:anchor`), used
+/// for Typst `#place(.., float: true)`. The paragraph carrying this element
+/// keeps the float's logical position in document order (accessibility);
+/// the drawing itself holds the rendered position and wrap behavior.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchoredFloat {
+    /// Page-absolute position (`relativeFrom="page"` on both axes), EMU.
+    pub x_emu: i64,
+    pub y_emu: i64,
+    /// Drawing extent, EMU.
+    pub width_emu: u64,
+    pub height_emu: u64,
+    /// `place(clearance:)` mapped to `wp:anchor@distT`/`distB`, EMU.
+    pub clearance_emu: u64,
+    /// `wp:wrapTopAndBottom` when true, `wp:wrapSquare` when false. Typst
+    /// floats anchor at the top or bottom of their container, so the
+    /// top-and-bottom form is the normal case.
+    pub top_and_bottom: bool,
+    pub content: AnchoredContent,
+}
+
+/// What a `wp:anchor` draws: a picture or a text box.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnchoredContent {
+    /// A `pic:pic` — a floated image.
+    Image(ImageData),
+    /// A `wps:txbx` text box holding real block content so the float stays
+    /// editable text rather than a raster.
+    Text(Vec<BlockElement>),
+}
+
 /// A single inline element within a paragraph.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InlineElement {
@@ -240,6 +271,10 @@ pub enum InlineElement {
     /// A floating line shape anchored to this position in the text
     /// (`wp:anchor`); used for the overline trick.
     AnchoredLine(AnchoredLine),
+    /// A floating image or text box anchored to the page at this position
+    /// (`wp:anchor`); used for `#place(.., float: true)`. Its carrier
+    /// paragraph holds a 1pt mark in the flow.
+    AnchoredFloat(AnchoredFloat),
     /// A column break (`w:br type="column"`) — `#colbreak()` in a multi-column page.
     ColumnBreak,
     /// A Table of Contents field code (`TOC \o "1-N" \h \z \u`).
@@ -549,7 +584,7 @@ impl Paragraph {
     }
 
     /// Apply `f` to every text run in the paragraph, including hyperlink
-    /// display runs.
+    /// display runs and runs inside anchored text boxes.
     pub fn for_each_run_mut(&mut self, f: &mut dyn FnMut(&mut Run)) {
         for inline in &mut self.inlines {
             match inline {
@@ -557,6 +592,15 @@ impl Paragraph {
                 InlineElement::Hyperlink { runs, .. } => {
                     for run in runs {
                         f(run);
+                    }
+                }
+                InlineElement::AnchoredFloat(float) => {
+                    if let AnchoredContent::Text(blocks) = &mut float.content {
+                        for element in blocks {
+                            for_each_paragraph_in_block_mut(element, &mut |p| {
+                                p.for_each_run_mut(f);
+                            });
+                        }
                     }
                 }
                 _ => {}
@@ -572,6 +616,15 @@ impl Paragraph {
                 InlineElement::Hyperlink { runs, .. } => {
                     for run in runs {
                         f(run);
+                    }
+                }
+                InlineElement::AnchoredFloat(float) => {
+                    if let AnchoredContent::Text(blocks) = &float.content {
+                        for element in blocks {
+                            for_each_paragraph_in_block(element, &mut |p| {
+                                p.for_each_run(f);
+                            });
+                        }
                     }
                 }
                 _ => {}

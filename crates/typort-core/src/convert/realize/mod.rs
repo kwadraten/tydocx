@@ -2,6 +2,7 @@ mod collect;
 mod inline;
 mod overline;
 mod patch;
+mod place;
 mod style;
 
 use std::collections::HashMap;
@@ -478,6 +479,7 @@ pub fn export_ir(
         degradations.extend(patch_degradations.iter().map(core_degradation));
         if options.compat != CompatMode::C1 {
             overline::patch_overlines(&mut ir, paged, world);
+            place::patch_floats(&mut ir, paged);
         }
     }
 

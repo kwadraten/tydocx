@@ -5,11 +5,12 @@ use typort_ir::{
     Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrBorder,
     IrCellBorderFlags, IrCellBorders, IrDocument, IrDocumentInfo, IrEnum, IrEnumItem, IrEquation,
     IrFigureKind, IrGrid, IrGridLine, IrHeadingNumbering, IrInline, IrList, IrListItem,
-    IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrRaw, IrSection,
-    IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrTrackSize, IrVMerge,
-    PageSettings, TableBorders, TableCellMargins,
+    IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrPlaceWrap, IrRaw,
+    IrSection, IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrTrackSize,
+    IrVMerge, PageSettings, TableBorders, TableCellMargins,
 };
 use typort_ooxml::document::{Alignment, Run, VerticalAlign};
+use typst_library::World;
 use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
 use typst_library::foundations::{
@@ -45,7 +46,7 @@ use super::inline::{
     smart_quotes_for, spacing_twips,
 };
 use super::page;
-use super::style::{StyleDefaults, defaults_from_root, run_from_styles};
+use super::style::{StyleDefaults, defaults_from_root, monospace_families, run_from_styles};
 use super::with_fragment;
 use crate::convert::table_align::paint_to_shd_hex;
 use crate::convert::table_width::{TableWidthCtx, track_widths_pct};
@@ -129,6 +130,7 @@ fn defaults_from_pairs(pairs: &[Pair<'_>], root_styles: StyleChain<'_>) -> Style
             .into_iter()
             .max_by_key(|(_, weight)| *weight)
             .map_or(fallback.font_east_asia, |(font, _)| font),
+        monospace_families: Vec::new(),
     }
 }
 
@@ -141,7 +143,8 @@ pub fn collect_document(
     source: Option<Source>,
     original: &Content,
 ) -> SourceResult<(IrDocument, CollectorState)> {
-    let defaults = defaults_from_pairs(pairs, root_styles);
+    let mut defaults = defaults_from_pairs(pairs, root_styles);
+    defaults.monospace_families = monospace_families(engine.world.book(), &defaults.body_font);
     let mut layouter_index = HashMap::new();
     index_content_tree(original, &mut layouter_index);
     let mut collector = Collector {
@@ -488,7 +491,9 @@ impl Collector<'_> {
             ]);
         }
         if let Some(place) = inner.to_packed::<PlaceElem>() {
-            return Ok(vec![self.collect_place(place, styles, engine, locator)?]);
+            return Ok(vec![
+                self.collect_place(place, inner, styles, engine, locator)?,
+            ]);
         }
         if let Some(image) = inner.to_packed::<ImageElem>() {
             return Ok(self.image_paragraph(image, styles, engine));
@@ -624,7 +629,9 @@ impl Collector<'_> {
             })]);
         }
         if let Some(place) = content.to_packed::<PlaceElem>() {
-            return Ok(vec![self.collect_place(place, styles, engine, locator)?]);
+            return Ok(vec![
+                self.collect_place(place, content, styles, engine, locator)?,
+            ]);
         }
         if let Some(text) = content.to_packed::<TextElem>() {
             let mut para = IrParagraph::default();
@@ -1113,7 +1120,9 @@ impl Collector<'_> {
             ]);
         }
         if let Some(place) = child.to_packed::<PlaceElem>() {
-            return Ok(vec![self.collect_place(place, styles, engine, locator)?]);
+            return Ok(vec![
+                self.collect_place(place, child, styles, engine, locator)?,
+            ]);
         }
         if let Some(pagebreak) = child.to_packed::<PagebreakElem>() {
             return Ok(vec![Self::collect_pagebreak(pagebreak, styles)]);
@@ -2315,13 +2324,22 @@ impl Collector<'_> {
     fn collect_place(
         &mut self,
         place: &PlaceElem,
+        content: &Content,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
         let body = self.collect_content_blocks(&place.body, styles, engine, locator)?;
+        let wrap = match place.alignment.get(styles) {
+            Smart::Custom(align) if align.y() == Some(VAlignment::Horizon) => IrPlaceWrap::Square,
+            _ => IrPlaceWrap::TopAndBottom,
+        };
         Ok(IrBlock::Place {
             float: place.float.get(styles),
+            wrap,
+            clearance_emu: typort_ir::pt_to_emu(place.clearance.resolve(styles).to_pt()),
+            location_hash: content.location().map(location_hash64),
+            anchor: None,
             body,
         })
     }

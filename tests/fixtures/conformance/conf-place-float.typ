@@ -1,5 +1,5 @@
-// Conformance M3: #place with float has no wp:anchor output — the writer
-// only emits wp:inline; placed content survives only via recovery.
+// Conformance M3: #place(.., float: true) → wp:anchor; text float carries its
+// content as editable runs in wps:txbxContent.
 #place(top + right, float: true)[*Floated callout*]
 
 #lorem(40)

@@ -269,6 +269,34 @@ covered by the C1 degradation named below (integration tests live in
 - **C2 target:** `wp:anchor` with page-relative `positionH`/`positionV`
   offsets, text in `txbxContent`.
 
+### Floating `#place` (M3)
+- **Done (batch 10):** `IrBlock::Place` carries the float's wrap mode,
+  `clearance` in EMU, and the `Location` hash; the companion-Paged patch
+  `realize/place.rs::patch_floats` measures each rendered float group
+  (its `FrameParent` carries the place's `Location`) into a page-absolute
+  `IrAnchor`. The lowering emits an `InlineElement::AnchoredFloat` on a
+  1pt-mark carrier paragraph, so logical/document order is unchanged
+  while the drawing renders where Typst placed it. The writer emits
+  `wp:anchor` with `relativeFrom="page"` on both axes, `wrapTopAndBottom`,
+  and `distT`/`distB` from `place(clearance:)`; a lone image body anchors
+  as `pic:pic` (raster + the existing SVG `mc:AlternateContent`), any
+  other body as a `wps:txbx` text box holding real lowered blocks.
+  `scope: "parent"` floats are anchored wherever they rendered — column
+  semantics are not modeled.
+- **Remaining degradation:** a float the patch cannot measure (no
+  matching paged group) keeps the flow fallback and reports
+  `placed-content`; C1 takes the same path. Non-float `#place` is
+  unchanged (U1/T-03 above).
+
+### Monospace detection (upstream #26)
+- **Done (batch 10):** `run_from_styles` no longer matches `"mono"`/
+  `"courier"` substrings in the declared family name. The collector
+  builds `StyleDefaults::monospace_families` from the font book's
+  `FontFlags::MONOSPACE` (excluding the sampled body font, so a monospace
+  body face is not rewritten to the code font), matching the legacy
+  path's flag-based `detect_code_font`. Runs in a flag-verified mono
+  family lower with `run.monospace` → the `code_font` `w:rFonts`.
+
 ### `#rect` / drawn color bands (M5, T-04)
 - **Current:** `IrBlock::Shape`/`IrInline::Shape` drops the drawing; its
   text body is kept as paragraphs; C1 reports `shape`.
