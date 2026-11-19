@@ -565,6 +565,9 @@ pub struct Paragraph {
     /// Timetable whitespace cells pin 1pt paragraphs so Word does not inflate
     /// empty rows to its minimum.
     pub line_twips: Option<u32>,
+    /// Paragraph shading fill (`w:pPr/w:shd w:fill`), a six-digit hex like
+    /// `Run::shading`.
+    pub shading: Option<String>,
 }
 
 impl Paragraph {

@@ -1034,3 +1034,52 @@ fn issue_outline_title_emitted_before_toc() {
         "outline depth 2 reaches the TOC switch"
     );
 }
+
+#[test]
+fn issue_weak_pagebreak_after_content_emits_one_break() {
+    let doc_xml = fixture_doc_xml("issue_pagebreak_weak_after_content");
+    assert_eq!(
+        doc_xml.matches(r#"w:br w:type="page""#).count(),
+        1,
+        "a weak pagebreak after content must emit one hard break:\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let first = texts.iter().position(|t| t.contains("First page."));
+    let second = texts.iter().position(|t| t.contains("Second page."));
+    assert!(first.is_some() && second.is_some() && first < second);
+}
+
+#[test]
+fn issue_consecutive_strong_pagebreaks_emit_two_breaks() {
+    let doc_xml = fixture_doc_xml("issue_pagebreak_consecutive_strong");
+    assert_eq!(
+        doc_xml.matches(r#"w:br w:type="page""#).count(),
+        2,
+        "two consecutive strong pagebreaks must emit two hard breaks (blank page):\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let first = texts.iter().position(|t| t.contains("First page."));
+    let second = texts.iter().position(|t| t.contains("Second page."));
+    assert!(first.is_some() && second.is_some() && first < second);
+}
+
+#[test]
+fn issue_odd_pagebreak_then_set_page_keeps_parity_and_margins() {
+    let doc_xml = fixture_doc_xml("issue_pagebreak_odd_then_set_page");
+    assert_eq!(
+        doc_xml.matches("oddPage").count(),
+        1,
+        "exactly one oddPage section break:\n{doc_xml}"
+    );
+    assert_eq!(
+        doc_xml.matches(r#"<w:pgMar w:top="1417""#).count(),
+        1,
+        "the oddPage break ends the first section, so it carries that section's margins (Typst default 2.5cm), not the new ones:\n{doc_xml}"
+    );
+    assert_eq!(
+        doc_xml.matches(r#"<w:pgMar w:top="1134""#).count(),
+        1,
+        "the following 2cm margins belong to the new section's own sectPr:\n{doc_xml}"
+    );
+    assert!(doc_xml.contains("Second page."));
+}

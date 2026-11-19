@@ -14,8 +14,8 @@ use crate::mode::CompatMode;
 use crate::types::{
     Alignment, HangingIndent, IrAnchor, IrBibEntry, IrBlock, IrCellBorders, IrDocument, IrEnum,
     IrEquation, IrFootnote, IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList,
-    IrNumberingPattern, IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType, IrTable, IrTableCell,
-    IrTableRow, IrVMerge, ParagraphStyle, Run,
+    IrNumberingPattern, IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType, IrShapeKind, IrTable,
+    IrTableCell, IrTableRow, IrVMerge, ParagraphStyle, Run,
 };
 
 #[derive(Debug, Default)]
@@ -178,6 +178,7 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
     };
     let mut current_start = geometry.page_number_start;
     let mut first_break_emitted = false;
+    let mut page = FreshPage::Armed;
     for (index, block) in ir.body.iter().enumerate() {
         while let Some(next) = sections.next_if(|s| s.start_block == index) {
             if !doc.body.elements.is_empty() {
@@ -192,12 +193,24 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
                     },
                 );
                 first_break_emitted = true;
+                page = FreshPage::Unarmed;
             }
             current_settings = next.settings.clone();
             current_numbering = next.numbering.or(current_numbering);
             current_start = next.numbering_start;
         }
+        if let IrBlock::PageBreak { weak, to } = block {
+            let next_transition = match ir.body.get(index + 1) {
+                None | Some(IrBlock::PageBreak { .. }) => true,
+                _ => sections.peek().is_some_and(|s| s.start_block == index + 1),
+            };
+            page = lower_body_break(*weak, *to, page, next_transition, &mut doc.body.elements);
+            continue;
+        }
         let lowered = lower_block(block, doc, ctx);
+        if !lowered.is_empty() {
+            page = FreshPage::No;
+        }
         doc.body.elements.extend(lowered);
     }
     if !ir.sections.is_empty() {
@@ -205,6 +218,34 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
         doc.page_numbering = current_numbering;
         doc.page_number_start = current_start;
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FreshPage {
+    No,
+    Armed,
+    Unarmed,
+}
+
+fn lower_body_break(
+    weak: bool,
+    to: Option<IrSectionBreakType>,
+    page: FreshPage,
+    next_transition: bool,
+    elements: &mut Vec<BlockElement>,
+) -> FreshPage {
+    if weak {
+        if page != FreshPage::No || next_transition {
+            return page;
+        }
+        elements.extend(lower_pagebreak(false, to));
+        return FreshPage::Unarmed;
+    }
+    if to.is_none() && page == FreshPage::Unarmed {
+        return FreshPage::Armed;
+    }
+    elements.extend(lower_pagebreak(false, to));
+    FreshPage::Armed
 }
 
 /// Attach the section-break `w:sectPr` that ends a section to the last
@@ -216,10 +257,40 @@ fn attach_section_break(elements: &mut Vec<BlockElement>, section: SectionBreak)
         while matches!(para.inlines.last(), Some(InlineElement::PageBreak)) {
             para.inlines.pop();
         }
+        if let Some(existing) = &mut para.section_break
+            && matches!(
+                existing.break_type,
+                SectionBreakType::OddPage | SectionBreakType::EvenPage
+            )
+        {
+            existing.page_settings = section.page_settings;
+            existing.title_page = section.title_page;
+            existing.page_numbering = section.page_numbering;
+            existing.page_number_start = section.page_number_start;
+            return;
+        }
         para.section_break = Some(section);
     } else {
         let mut para = Paragraph::new();
         para.section_break = Some(section);
+        para.mark_size_half_pt = Some(2);
+        para.spacing_before = Some(0);
+        para.spacing_after = Some(0);
+        elements.push(BlockElement::Paragraph(para));
+    }
+}
+
+fn shade_shape_block(elements: &mut Vec<BlockElement>, fill_hex: &str) {
+    let mut shaded = false;
+    for el in elements.iter_mut() {
+        if let BlockElement::Paragraph(para) = el {
+            para.shading = Some(fill_hex.to_string());
+            shaded = true;
+        }
+    }
+    if !shaded {
+        let mut para = Paragraph::new();
+        para.shading = Some(fill_hex.to_string());
         para.mark_size_half_pt = Some(2);
         para.spacing_before = Some(0);
         para.spacing_after = Some(0);
@@ -325,22 +396,41 @@ fn lower_block_in(
             ctx,
         ),
         IrBlock::PageBreak { weak, to } => lower_pagebreak(*weak, *to),
-        IrBlock::Shape { kind, span, body } => {
-            if ctx.compat.is_c1() {
-                ctx.degrade_at(
-                    *span,
-                    "shape",
-                    DegradationAction::Skipped,
-                    format!("{kind} dropped"),
-                );
-            }
-            let mut out = Vec::new();
-            for inner in body {
-                out.extend(lower_block(inner, doc, ctx));
-            }
-            out
-        }
+        IrBlock::Shape {
+            kind,
+            span,
+            body,
+            fill_hex,
+        } => lower_shape_block(*kind, *span, body, fill_hex.as_deref(), doc, ctx),
     }
+}
+
+fn lower_shape_block(
+    kind: IrShapeKind,
+    span: Option<typst_syntax::Span>,
+    body: &[IrBlock],
+    fill_hex: Option<&str>,
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) -> Vec<BlockElement> {
+    if ctx.compat.is_c1() {
+        ctx.degrade_at(
+            span,
+            "shape",
+            DegradationAction::Skipped,
+            format!("{kind} dropped"),
+        );
+    }
+    let mut out = Vec::new();
+    for inner in body {
+        out.extend(lower_block(inner, doc, ctx));
+    }
+    if !ctx.compat.is_c1()
+        && let Some(hex) = fill_hex
+    {
+        shade_shape_block(&mut out, hex);
+    }
+    out
 }
 
 fn lower_outline(
@@ -896,21 +986,50 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                     size_half_pt: None,
                 });
             }
-            IrInline::Shape { kind, span, body } => {
-                if ctx.compat.is_c1() {
-                    ctx.degrade_at(
-                        *span,
-                        "shape",
-                        DegradationAction::Skipped,
-                        format!("{kind} dropped"),
-                    );
-                }
-                out.extend(lower_inlines(body, ctx));
-            }
+            IrInline::Shape {
+                kind,
+                span,
+                body,
+                fill_hex,
+            } => out.extend(lower_shape_inlines(
+                *kind,
+                *span,
+                body,
+                fill_hex.as_deref(),
+                ctx,
+            )),
             IrInline::Overline(line) => out.push(InlineElement::AnchoredLine(line.clone())),
         }
     }
     out
+}
+
+fn lower_shape_inlines(
+    kind: IrShapeKind,
+    span: Option<typst_syntax::Span>,
+    body: &[IrInline],
+    fill_hex: Option<&str>,
+    ctx: &mut LowerCtx,
+) -> Vec<InlineElement> {
+    if ctx.compat.is_c1() {
+        ctx.degrade_at(
+            span,
+            "shape",
+            DegradationAction::Skipped,
+            format!("{kind} dropped"),
+        );
+    }
+    let mut inner = lower_inlines(body, ctx);
+    if !ctx.compat.is_c1()
+        && let Some(hex) = fill_hex
+    {
+        for el in &mut inner {
+            if let InlineElement::Text(run) = el {
+                run.shading = Some(hex.to_string());
+            }
+        }
+    }
+    inner
 }
 
 fn lower_image(image: &IrImage, ctx: &mut LowerCtx) -> InlineElement {
@@ -2167,6 +2286,7 @@ mod tests {
             kind: IrShapeKind::Rectangle,
             span: None,
             body: vec![IrBlock::Paragraph(text_para("inside"))],
+            fill_hex: None,
         });
         let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
         assert!(
@@ -2188,6 +2308,7 @@ mod tests {
             kind: IrShapeKind::Curve,
             span: None,
             body: vec![IrBlock::Paragraph(text_para("inside"))],
+            fill_hex: None,
         });
         let (_, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
         assert!(
@@ -2204,6 +2325,7 @@ mod tests {
             kind: IrShapeKind::Rectangle,
             span: None,
             body: vec![IrBlock::Paragraph(text_para("inside"))],
+            fill_hex: None,
         });
         let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         assert!(degradations.is_empty());
