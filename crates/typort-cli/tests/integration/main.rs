@@ -5,6 +5,7 @@ mod bibliography;
 mod cli;
 mod compat;
 mod conformance;
+mod crop_float;
 mod diagnostics;
 mod floats;
 mod fonts_cjk;

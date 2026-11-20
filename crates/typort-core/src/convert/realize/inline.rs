@@ -936,6 +936,7 @@ pub(crate) fn image_inline(
             .fit
             .as_option()
             .is_some_and(|fit| fit != ImageFit::Cover),
+        src_rect: None,
         alt: image
             .alt
             .as_option()

@@ -219,9 +219,12 @@ bodies — now comes from `StyleChain`s or element identity.
   `wp:wrapNone` (it displaces nothing) and `behindDoc` derived from paint
   order — behind when the page still has content after it. Text bodies
   become editable `wps:txbx` content with a pinned `w:jc`; images become
-  `pic:pic`; a filled `rect` becomes `a:solidFill` on the shape. An
-  unmeasured place keeps the flow fallback and reports `placed-content`;
-  C1 reports at every level.
+  `pic:pic`; a filled `rect` becomes `a:solidFill` on the shape. A body
+  that is a lone table lowers to `w:tblpPr` at the measured position
+  instead (a table cannot live inside `txbxContent`). A placed box that
+  sits entirely inside a side margin anchors `relativeFrom="margin"` so a
+  margin note tracks the text-area edge. An unmeasured place keeps the
+  flow fallback and reports `placed-content`; C1 reports at every level.
 - **Measurement:** `realize/place.rs` reads the place's
   `Tag::Start`/`Tag::End` bracket in the page frame — the items between
   the tags are laid out at their absolute positions, so their union
@@ -229,8 +232,11 @@ bodies — now comes from `StyleChain`s or element identity.
 
 ### Float `scope: "parent"` and unmeasured floats
 - **What:** floating `#place` anchors wherever it rendered — column
-  semantics are not modeled. A float the Paged patch cannot measure keeps
-  the flow fallback and reports `placed-content` (same path at C1).
+  semantics are not modeled. A `figure(scope: "parent", placement:)`
+  float renders page-wide, so the measured anchor/`w:tblpPr` lands at
+  that page position; the `figure_scope_parent` fixture pins this. A
+  float the Paged patch cannot measure keeps the flow fallback and
+  reports `placed-content` (same path at C1).
 
 ### `#rect` and other shapes beyond the fill
 - **Current:** block-level shapes keep their body text; at C2/C3 a solid
@@ -309,12 +315,22 @@ bodies — now comes from `StyleChain`s or element identity.
   edges need OpenType metric overrides Word does not expose — likely stays
   reported.
 
-### Image `fit:` and `alt:`
-- **Current:** `image-fit`/`image-alt` report at C1 and drop silently at
-  C2/C3 (`wp:docPr descr` and `a:srcRect`/`a:stretch` are never emitted);
-  the display size still comes from the measured frame.
-- **C2 target:** `alt` → `wp:docPr descr`; non-cover fit → `srcRect`
-  cropping or `a:stretch` adjustments.
+### Clip-derived crops (`block`/`box(clip:)`, `image(fit:)`)
+- **Current:** the Paged frame walk (`collect_image_sizes`) accumulates the
+  `GroupItem::clip` window enclosing each `FrameItem::Image` — the frame
+  mechanism both `clip:` and `fit:` route through — and compares the visible
+  intersection to the image's own bounds. The difference becomes `a:srcRect`
+  l/t/r/b (thousandths of a percent) on `ImageData.src_rect`; the full bytes
+  stay embedded and the clip window is the `wp:extent`. Nested clips
+  intersect, so `fit: "cover"` inside a clipped block composes. A clip
+  cannot propagate through a group with a non-identity transform — those
+  images keep their full bounds.
+- **Limitation:** placements are keyed by content hash and first occurrence
+  wins — two copies of the same bytes (e.g. an image used cropped and
+  uncropped) share the first placement found on the page.
+- **Remaining:** `fit: "contain"` letterboxes — it needs extent math, not
+  `srcRect`, and is still dropped silently at C2/C3 (`+ "image-fit"` at C1);
+  `alt:` → `wp:docPr descr` is still unwritten (`+ "image-alt"` at C1).
 
 ### Grid lowering limits
 - **What:** a grid wider than 63 lanes is split at lane boundaries into

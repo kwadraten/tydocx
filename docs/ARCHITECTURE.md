@@ -33,7 +33,7 @@ of authority:
 | Source | Produced by | Carries | Used for |
 |--------|-------------|---------|----------|
 | **Realize pairs** | `typst::compile::<DocxDocument>` (`Target::Paged`, via `typst-realize`) | element identity + document order + the `StyleChain` that applies to each element + an *introspector* | the skeleton *and* the paint: what each thing *is*, what order it comes in, and how it is formatted — including declared `set` values, which live in the chains |
-| **Paged geometry** | `typst::compile::<PagedDocument>` (companion compile) | footnote entry bodies, on-page image display sizes, page dimensions, headers/footers, page numbering | what the pairs cannot carry: footnote bodies, image sizes, page-level facts |
+| **Paged geometry** | `typst::compile::<PagedDocument>` (companion compile) | footnote entry bodies, on-page image display sizes and clip windows, page dimensions, headers/footers, page numbering | what the pairs cannot carry: footnote bodies, image sizes/crops, page-level facts |
 | **Source AST** (narrow exceptions only) | re-parsing the `.typ` text | values consumed before the chain (declared font spelling — `FontFamily::new` lowercases it), values no chain can see (`set` rules inside imported modules that own no content), and facts about consumption (whether a `show` rule re-emitted `it`, `counter(footnote).update(0)`, `counter(page).at(<label>)` targets) | a fill-in under the chain-derived values — never the primary read |
 
 The mental model:
@@ -41,8 +41,8 @@ The mental model:
 > **The realize pairs are the skeleton and the paint** (semantics + order +
 > styles, straight from the evaluator — the `StyleChain` is the authoritative
 > declared value, the same place Typst itself reads it). **Paged supplies
-> only what the pairs cannot** (footnote entry bodies, image display sizes,
-> page-level facts). **The source AST is a gap-fill** for values that provably
+> only what the pairs cannot** (footnote entry bodies, image display sizes
+> and crops, page-level facts). **The source AST is a gap-fill** for values that provably
 > never reach a chain — not a third authority.
 
 The legacy `HtmlDocument` tag-walker path is kept as `convert_legacy` /
@@ -151,7 +151,7 @@ flowchart TD
     INPUT["input.typ"] --> WORLD["TyportWorld (World trait: source, fonts, packages, Feature::Html)"]
     WORLD -->|compile::&lt;DocxDocument&gt; — realize pairs + collect IR| COMPILE["convert_ir(): thin wrapper<br/>1 compile DocxDocument + companion PagedDocument"]
     WORLD -->|compile::&lt;PagedDocument&gt; — geometry + frames| COMPILE
-    COMPILE --> EXPORT["export_ir(docx_doc, paged_doc, world, &options)<br/>2 page + style from Paged + StyleChain overrides (+ narrow AST fill-in)<br/>3 patch: footnote bodies + image sizes from Paged frames<br/>4 pure lowering: IrDocument → typort_ooxml::Document<br/>5 post-passes (paragraph formatting, CJK fonts, run coalescing)"]
+    COMPILE --> EXPORT["export_ir(docx_doc, paged_doc, world, &options)<br/>2 page + style from Paged + StyleChain overrides (+ narrow AST fill-in)<br/>3 patch: footnote bodies + image sizes/crops from Paged frames<br/>4 pure lowering: IrDocument → typort_ooxml::Document<br/>5 post-passes (paragraph formatting, CJK fonts, run coalescing)"]
     EXPORT --> IR["typort_ooxml::Document"]
     IR --> WRITER["writer → XML parts → ZIP"]
     WRITER --> OUT["output.docx"]
@@ -170,7 +170,7 @@ Two design properties worth knowing:
   defines document order. Paged data is matched back onto it — by
   `Location` within the one Paged compile (footnote entry groups, keyed
   by their parent marker location), or by content hash (image display
-  sizes). `Location` is process-local and is never compared across
+  sizes and clip-derived crops). `Location` is process-local and is never compared across
   compiles or persisted. Image bytes need no matching: they travel in
   the pairs' `ImageElem` content.
 
@@ -219,8 +219,8 @@ they exercise that public API as integration tests.
 | `convert/realize/collect.rs` | Pair → `IrDocument` collection: the tag-group walk, label/bibliography pass, footnote markers, and fragment-resolved tables/grids/figures. |
 | `convert/realize/inline.rs` | Pair → `IrInline` collection: runs from `StyleChain`, links, refs, cites, images, math, breaks. |
 | `convert/realize/style.rs` | `StyleChain` → `Run` conversion (weight/style/size/color/font, smart quotes, run-merge key). |
-| `convert/realize/patch.rs` | Companion-Paged patch: footnote entry bodies from frame groups and image display sizes by content hash (with the intrinsic fallback). |
-| `convert/realize/place.rs` | Companion-Paged patch: `#place` geometry — each float's frame group (keyed by the place's `Location` in `FrameParent`) and each non-floating place's `Tag` bracket (the placed items' union bounds between `Tag::Start`/`Tag::End`) become a page-absolute `IrAnchor` for `wp:anchor` emission. Non-floats carry `wp:wrapNone` and a `behindDoc` flag from paint order. |
+| `convert/realize/patch.rs` | Companion-Paged patch: footnote entry bodies from frame groups and image placements (display size + clip-derived `a:srcRect`) by content hash (with the intrinsic fallback). |
+| `convert/realize/place.rs` | Companion-Paged patch: `#place` geometry — each float's frame group (keyed by the place's `Location` in `FrameParent`) and each non-floating place's `Tag` bracket (the placed items' union bounds between `Tag::Start`/`Tag::End`) become a page-absolute `IrAnchor`. At lowering, an anchor feeds `wp:anchor` emission (non-floats carry `wp:wrapNone` and a `behindDoc` flag from paint order; a box fully inside a side margin anchors `relativeFrom="margin"`) or `w:tblpPr` when the body is a lone table. |
 | `convert/block.rs` | Block-level HTML tag walk and dispatch, paragraphs, equations, figures, code blocks, blockquotes, and term lists. |
 | `convert/inline_walk.rs` | HTML inline traversal: formatted spans, links, citations, footnotes, images, and inline equations. |
 | `convert/headings.rs` | Semantic heading conversion, numbering, smart quotes, and inline heading content. |
@@ -242,7 +242,7 @@ they exercise that public API as integration tests.
 | `convert/breaks.rs` | Explicit `#pagebreak()`/`#colbreak()` recovery from the source AST (both are consumed at compile time), positioned by run spans, expanding local function calls, and following `#include` chains. |
 | `convert/bibliography.rs` | Citation data via the semantic `BibliographyElem` (+ re-parsing `.bib`/`.yml` with hayagriva). Takes `&dyn Introspector`, so both conversion paths share it (legacy: HtmlDocument's introspector; realize: DocxDocument's). |
 | `convert/footnote.rs` | Footnote bodies from the HTML `doc-endnotes` section. |
-| `convert/image.rs` | Image content decoded from each `<img>`'s base64 src data-URL (typst-html 0.15 embeds the bytes in the DOM); Paged frames contribute display sizes (by content hash) and drawing-canvas SVG+raster pairs keyed by their figure's `Location`. |
+| `convert/image.rs` | Image content decoded from each `<img>`'s base64 src data-URL (typst-html 0.15 embeds the bytes in the DOM); Paged frames contribute display sizes and clip-derived `a:srcRect` crops (by content hash — the frame walk accumulates `GroupItem::clip` windows, the mechanism both `clip:` and `fit:` route through) and drawing-canvas SVG+raster pairs keyed by their figure's `Location`. |
 | `convert/inline.rs` | Typst Content-AST inline formatting (bold/italic/…) → styled runs. |
 
 ## The IR: `typort_ooxml::Document`

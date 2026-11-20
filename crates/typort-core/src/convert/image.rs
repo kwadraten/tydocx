@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use typort_ooxml::document::{ImageData, ImageFormat};
+use typort_ooxml::document::{ImageData, ImageFormat, SrcRect};
 use typst::foundations::Packed;
 use typst::introspection::Location;
-use typst::layout::{Frame, FrameItem};
+use typst::layout::{Abs, Frame, FrameItem, Point, Rect};
 use typst_html::HtmlFrame;
 use typst_layout::PagedDocument;
 use typst_library::visualize::{ImageElem, ImageFit};
@@ -12,27 +12,46 @@ use typst_syntax::Span;
 
 use crate::compat::{Degradation, DegradationAction};
 
+/// One rendered image's display size and optional crop window.
+pub(super) struct ImagePlacement {
+    /// On-page size of the visible (post-clip) area, EMU.
+    pub size_emu: (u64, u64),
+    /// `a:srcRect` crop derived from an enclosing `Frame::clip` window — the
+    /// way Typst encodes both `block/box(clip:)` and `image(fit: "cover")`.
+    /// The full image bytes stay embedded; Word crops at display time.
+    pub src_rect: Option<SrcRect>,
+}
+
 /// Image CONTENT comes from the HTML `<img>` src data-URL (the semantic
 /// source, see `image_data_from_src`); the paged frames contribute only the
-/// on-page DISPLAY SIZE. This maps a hash of each image's raw bytes to its
-/// layouted size in EMU, so an `<img>` can look up how large Typst actually
-/// drew it. Content and size are matched by bytes, not by position — there is
-/// no ordering to desync.
-pub(super) fn collect_image_sizes(paged: &PagedDocument) -> HashMap<u64, (u64, u64)> {
+/// on-page DISPLAY SIZE and crop geometry. This maps a hash of each image's
+/// raw bytes to its layouted size in EMU, so an `<img>` can look up how large
+/// Typst actually drew it. Content and size are matched by bytes, not by
+/// position — there is no ordering to desync.
+pub(super) fn collect_image_sizes(paged: &PagedDocument) -> HashMap<u64, ImagePlacement> {
     let mut sizes = HashMap::new();
     for page in paged.pages() {
-        collect_frame_image_sizes(&page.frame, &mut sizes);
+        collect_frame_image_sizes(&page.frame, Point::zero(), None, &mut sizes);
     }
     sizes
 }
 
+/// `offset` is the frame's absolute page position; `clip` is the visible
+/// window accumulated from enclosing `GroupItem::clip` curves, in the same
+/// coordinates.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "positive pt sizes rounded to whole pixels"
 )]
-fn collect_frame_image_sizes(frame: &Frame, sizes: &mut HashMap<u64, (u64, u64)>) {
-    for (_, item) in frame.items() {
+fn collect_frame_image_sizes(
+    frame: &Frame,
+    offset: Point,
+    clip: Option<Rect>,
+    sizes: &mut HashMap<u64, ImagePlacement>,
+) {
+    for (pos, item) in frame.items() {
+        let absolute = offset + *pos;
         match item {
             FrameItem::Image(img, size, _) => {
                 let bytes: Option<&[u8]> = match img.kind() {
@@ -41,19 +60,69 @@ fn collect_frame_image_sizes(frame: &Frame, sizes: &mut HashMap<u64, (u64, u64)>
                     typst_library::visualize::ImageKind::Pdf(_) => None,
                 };
                 if let Some(bytes) = bytes {
-                    let emu = (
-                        (size.x.to_pt() * 12700.0) as u64,
-                        (size.y.to_pt() * 12700.0) as u64,
-                    );
+                    let bounds = Rect::from_pos_size(absolute, *size);
+                    let visible = clip.map_or(bounds, |window| intersect(window, bounds));
                     // First occurrence wins: document order matches the HTML.
-                    sizes.entry(hash_bytes(bytes)).or_insert(emu);
+                    sizes.entry(hash_bytes(bytes)).or_insert(ImagePlacement {
+                        size_emu: (
+                            (visible.size().x.to_pt() * 12700.0) as u64,
+                            (visible.size().y.to_pt() * 12700.0) as u64,
+                        ),
+                        src_rect: (visible != bounds).then(|| crop_fractions(bounds, visible)),
+                    });
                 }
             }
             FrameItem::Group(group) => {
-                collect_frame_image_sizes(&group.frame, sizes);
+                // A non-identity transform moves contents off their declared
+                // positions, so a clip window cannot be propagated through it.
+                let sub_clip = if group.transform.is_identity() {
+                    match &group.clip {
+                        Some(curve) => {
+                            let window = offset_rect(curve.bbox(None), absolute);
+                            Some(clip.map_or(window, |outer| intersect(outer, window)))
+                        }
+                        None => clip,
+                    }
+                } else {
+                    None
+                };
+                collect_frame_image_sizes(&group.frame, absolute, sub_clip, sizes);
             }
             _ => {}
         }
+    }
+}
+
+fn intersect(a: Rect, b: Rect) -> Rect {
+    Rect::new(
+        Point::new(a.min.x.max(b.min.x), a.min.y.max(b.min.y)),
+        Point::new(a.max.x.min(b.max.x), a.max.y.min(b.max.y)),
+    )
+}
+
+fn offset_rect(rect: Rect, offset: Point) -> Rect {
+    Rect::new(offset + rect.min, offset + rect.max)
+}
+
+/// The visible window as a fraction of the full image bounds, in `a:srcRect`
+/// units (thousandths of a percent).
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "a crop fraction clamps into 0..=100000"
+)]
+fn crop_fractions(bounds: Rect, visible: Rect) -> SrcRect {
+    let width = bounds.size().x.to_pt();
+    let height = bounds.size().y.to_pt();
+    let side = |num: Abs, den: f64| {
+        (num.to_pt() / den.max(f64::EPSILON) * 100_000.0)
+            .round()
+            .clamp(0.0, 100_000.0) as i32
+    };
+    SrcRect {
+        l: side(visible.min.x - bounds.min.x, width),
+        t: side(visible.min.y - bounds.min.y, height),
+        r: side(bounds.max.x - visible.max.x, width),
+        b: side(bounds.max.y - visible.max.y, height),
     }
 }
 
@@ -74,14 +143,16 @@ pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
 /// the intrinsic dimensions from the decoded data as fallback.
 pub(super) fn image_data_from_src(
     src: &str,
-    sizes: &HashMap<u64, (u64, u64)>,
+    sizes: &HashMap<u64, ImagePlacement>,
 ) -> Option<ImageData> {
     use base64::Engine as _;
 
     let rest = src.strip_prefix("data:")?;
     let (mime, b64) = rest.split_once(";base64,")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
-    let layout_size = sizes.get(&hash_bytes(&bytes)).copied();
+    let placement = sizes.get(&hash_bytes(&bytes));
+    let layout_size = placement.map(|p| p.size_emu);
+    let src_rect = placement.and_then(|p| p.src_rect);
 
     // Intrinsic pixel size → EMU (96 px/inch), used when the paged size is
     // unavailable (e.g. HTML-only conversion).
@@ -104,6 +175,7 @@ pub(super) fn image_data_from_src(
                 svg: None,
                 width_emu: w,
                 height_emu: h,
+                src_rect,
             })
         }
         "image/gif" | "image/webp" => {
@@ -123,6 +195,7 @@ pub(super) fn image_data_from_src(
                 svg: None,
                 width_emu: w,
                 height_emu: h,
+                src_rect,
             })
         }
         // Intentional f32→u32: SVG canvas dimensions are small positive values.
@@ -147,6 +220,7 @@ pub(super) fn image_data_from_src(
                 svg: Some(bytes),
                 width_emu: w,
                 height_emu: h,
+                src_rect,
             })
         }
         _ => None,
@@ -162,9 +236,9 @@ pub fn is_vector_image_src(src: &str) -> bool {
 }
 
 /// In C1, report the aspects of one image the OOXML intersection drops
-/// (U19): a non-cover `fit` (cover is the default Word behavior; the
-/// display size Typst computed is kept, only the fit behavior is lost)
-/// and a non-empty `alt` text (no alt-text slot is written). The image
+/// (U19): a non-cover `fit` (cover derives an `a:srcRect` from the measured
+/// clip; `contain` letterboxes — neither behavior is declared on the OOXML
+/// image) and a non-empty `alt` text (no alt-text slot is written). The image
 /// itself is kept; only these aspects are reported.
 pub(super) fn report_image_aspects(
     image: &Packed<ImageElem>,
@@ -320,6 +394,7 @@ fn rasterize_frame(frame: &Frame) -> Option<ImageData> {
         svg,
         width_emu: (width_pt * 12700.0) as u64,
         height_emu: (height_pt * 12700.0) as u64,
+        src_rect: None,
     })
 }
 

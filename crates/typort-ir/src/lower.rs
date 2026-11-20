@@ -4,8 +4,8 @@ use std::fmt::Write;
 use typort_ooxml::document::{
     AnchorWrap, AnchoredContent, AnchoredFloat, BlockElement, CellBorders, CellContent, Document,
     FirstLineIndent, ImageData, ImageFormat, InlineElement, LevelOverride, ListInfo, Paragraph,
-    SectionBreak, SectionBreakType, Table, TableBorders, TableCell, TableCellMargins, TableRow,
-    VMerge,
+    RelFrom, SectionBreak, SectionBreakType, Table, TableBorders, TableCell, TableCellMargins,
+    TableFloat, TableRow, VMerge,
 };
 
 use crate::degradation::{Degradation, DegradationAction};
@@ -53,6 +53,12 @@ pub struct LowerCtx {
     /// Page height in EMU — likewise grown so top-anchored text is never
     /// clipped by the measured ink height.
     pub page_height_emu: i64,
+    /// Text-area left edge in EMU — the `relativeFrom="margin"` origin; a
+    /// placed box fully left of it is a margin note.
+    pub text_left_emu: i64,
+    /// Text-area right edge in EMU — a placed box fully right of it sits in
+    /// the right margin.
+    pub text_right_emu: i64,
 }
 
 #[derive(Debug, Default)]
@@ -144,6 +150,8 @@ pub fn lower(
         next_anchor_z: 0,
         page_width_emu: i64::from(ir.page.width_twips) * 635,
         page_height_emu: i64::from(ir.page.height_twips) * 635,
+        text_left_emu: i64::from(ir.page.margin_left) * 635,
+        text_right_emu: i64::from(ir.page.width_twips - ir.page.margin_right) * 635,
     };
 
     for footnote in &ir.footnotes {
@@ -719,38 +727,56 @@ struct PlaceSpec<'a> {
 fn lower_place(spec: &PlaceSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
     if !ctx.compat.is_c1()
         && let Some(anchor) = spec.anchor
-        && let Some(content) = anchored_content(spec.body, spec.float, doc, ctx)
     {
-        let mut para = Paragraph::new();
-        para.mark_size_half_pt = Some(2);
-        para.spacing_before = Some(0);
-        para.spacing_after = Some(0);
-        let (x_emu, width_emu, height_emu) = overlay_text_span(anchor, &content, spec.float, ctx);
-        para.inlines
-            .push(InlineElement::AnchoredFloat(AnchoredFloat {
-                x_emu,
-                y_emu: anchor.y_emu,
-                width_emu,
-                height_emu,
-                clearance_emu: if spec.float { spec.clearance_emu } else { 0 },
-                z_order: {
-                    ctx.next_anchor_z += 1;
-                    ctx.next_anchor_z
-                },
-                wrap: if spec.float {
-                    match spec.wrap {
-                        IrPlaceWrap::TopAndBottom => AnchorWrap::TopAndBottom,
-                        IrPlaceWrap::Square => AnchorWrap::Square,
-                    }
+        if let Some(blocks) = floating_table(spec, anchor, doc, ctx) {
+            return blocks;
+        }
+        if let Some(content) = anchored_content(spec.body, spec.float, doc, ctx) {
+            let mut para = Paragraph::new();
+            para.mark_size_half_pt = Some(2);
+            para.spacing_before = Some(0);
+            para.spacing_after = Some(0);
+            let (x_emu, width_emu, height_emu) =
+                overlay_text_span(anchor, &content, spec.float, ctx);
+            // A placed box that sits entirely inside a side margin is a
+            // margin note — anchor it to the text-area edge so it tracks the
+            // margin if the layout changes.
+            let right = anchor
+                .x_emu
+                .saturating_add(i64::try_from(anchor.width_emu).unwrap_or(i64::MAX));
+            let (horz_rel, x_emu) =
+                if right <= ctx.text_left_emu || anchor.x_emu >= ctx.text_right_emu {
+                    (RelFrom::Margin, x_emu - ctx.text_left_emu)
                 } else {
-                    // A non-floating `#place` does not displace flow text;
-                    // paint order (behindDoc) carries the layering instead.
-                    AnchorWrap::None
-                },
-                behind_doc: !spec.float && anchor.behind_doc,
-                content,
-            }));
-        return vec![BlockElement::Paragraph(para)];
+                    (RelFrom::Page, x_emu)
+                };
+            para.inlines
+                .push(InlineElement::AnchoredFloat(AnchoredFloat {
+                    x_emu,
+                    horz_rel,
+                    y_emu: anchor.y_emu,
+                    width_emu,
+                    height_emu,
+                    clearance_emu: if spec.float { spec.clearance_emu } else { 0 },
+                    z_order: {
+                        ctx.next_anchor_z += 1;
+                        ctx.next_anchor_z
+                    },
+                    wrap: if spec.float {
+                        match spec.wrap {
+                            IrPlaceWrap::TopAndBottom => AnchorWrap::TopAndBottom,
+                            IrPlaceWrap::Square => AnchorWrap::Square,
+                        }
+                    } else {
+                        // A non-floating `#place` does not displace flow text;
+                        // paint order (behindDoc) carries the layering instead.
+                        AnchorWrap::None
+                    },
+                    behind_doc: !spec.float && anchor.behind_doc,
+                    content,
+                }));
+            return vec![BlockElement::Paragraph(para)];
+        }
     }
     let mut out = Vec::new();
     for inner in spec.body {
@@ -763,6 +789,91 @@ fn lower_place(spec: &PlaceSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> 
         format!("{position} content is kept as normal paragraphs; its position is not preserved"),
     );
     out
+}
+
+/// A measured `#place`/`figure(placement:)` whose body is a lone `table`
+/// lowers to a `w:tblpPr` floating table — the table stays a real Word table
+/// (editable cells, not a text box) and keeps the measured page position. A
+/// figure caption becomes a borderless grid-spanning row inside the table so
+/// it travels with the float.
+fn floating_table(
+    spec: &PlaceSpec<'_>,
+    anchor: IrAnchor,
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) -> Option<Vec<BlockElement>> {
+    let figure = match spec.body {
+        [IrBlock::Table(table)] => {
+            let mut out = lower_table(table, doc, ctx);
+            out.float = Some(table_float(spec, anchor));
+            return Some(vec![BlockElement::Table(out)]);
+        }
+        [
+            IrBlock::Figure {
+                body,
+                caption,
+                caption_alignment,
+                caption_par,
+                label,
+                caption_first,
+                gap_twips,
+                ..
+            },
+        ] => FigureSpec {
+            body,
+            caption,
+            caption_alignment: *caption_alignment,
+            caption_par: *caption_par,
+            label: label.as_ref(),
+            caption_first: *caption_first,
+            gap_twips: *gap_twips,
+        },
+        _ => return None,
+    };
+    let [IrBlock::Table(table)] = figure.body else {
+        return None;
+    };
+    let mut out = lower_table(table, doc, ctx);
+    out.float = Some(table_float(spec, anchor));
+    if let Some(caption) = figure_caption_para(&figure, ctx) {
+        let cols = out
+            .rows
+            .first()
+            .map_or(1, |row| {
+                row.cells.iter().map(|cell| cell.colspan).sum::<u32>()
+            })
+            .max(1);
+        let row = TableRow {
+            cells: vec![TableCell {
+                paragraphs: vec![caption],
+                content: Vec::new(),
+                colspan: cols,
+                vmerge: VMerge::None,
+                width_pct: Some(5000),
+                vertical_align: None,
+                shading: None,
+                width_twips: None,
+                borders: Some(CellBorders::default()),
+                zero_margins: false,
+            }],
+            height_twips: None,
+            is_header: false,
+        };
+        if figure.caption_first {
+            out.rows.insert(0, row);
+        } else {
+            out.rows.push(row);
+        }
+    }
+    Some(vec![BlockElement::Table(out)])
+}
+
+fn table_float(spec: &PlaceSpec<'_>, anchor: IrAnchor) -> TableFloat {
+    TableFloat {
+        x_twips: i32::try_from(anchor.x_emu / 635).unwrap_or(i32::MAX),
+        y_twips: i32::try_from(anchor.y_emu / 635).unwrap_or(i32::MAX),
+        distance_twips: u32::try_from(spec.clearance_emu / 635).unwrap_or(u32::MAX),
+    }
 }
 
 fn anchored_content(
@@ -978,26 +1089,30 @@ fn lower_heading_block(
     )
 }
 
-fn lower_figure(fig: &FigureSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
-    let mut caption_para: Option<Paragraph> = None;
-    if !fig.caption.is_empty() || fig.label.is_some() {
-        let mut para = Paragraph::new();
-        para.alignment = fig.caption_alignment;
-        apply_par_overrides(&mut para, fig.caption_par, ctx);
-        if let Some(gap) = fig.gap_twips {
-            if fig.caption_first {
-                para.spacing_after = Some(gap);
-            } else {
-                para.spacing_before = Some(gap);
-            }
-        }
-        para.inlines.extend(lower_inlines(fig.caption, ctx));
-        if let Some(name) = fig.label {
-            let id = ctx.next_bookmark();
-            para.add_bookmark_at_start(id, name.clone());
-        }
-        caption_para = Some(para);
+fn figure_caption_para(fig: &FigureSpec<'_>, ctx: &mut LowerCtx) -> Option<Paragraph> {
+    if fig.caption.is_empty() && fig.label.is_none() {
+        return None;
     }
+    let mut para = Paragraph::new();
+    para.alignment = fig.caption_alignment;
+    apply_par_overrides(&mut para, fig.caption_par, ctx);
+    if let Some(gap) = fig.gap_twips {
+        if fig.caption_first {
+            para.spacing_after = Some(gap);
+        } else {
+            para.spacing_before = Some(gap);
+        }
+    }
+    para.inlines.extend(lower_inlines(fig.caption, ctx));
+    if let Some(name) = fig.label {
+        let id = ctx.next_bookmark();
+        para.add_bookmark_at_start(id, name.clone());
+    }
+    Some(para)
+}
+
+fn lower_figure(fig: &FigureSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+    let mut caption_para = figure_caption_para(fig, ctx);
     let mut out = Vec::new();
     if fig.caption_first
         && let Some(para) = caption_para.take()
@@ -1248,6 +1363,7 @@ fn lower_image(image: &IrImage, ctx: &mut LowerCtx) -> InlineElement {
         },
         width_emu: image.width_emu,
         height_emu: image.height_emu,
+        src_rect: image.src_rect,
     })
 }
 
@@ -1345,6 +1461,7 @@ fn lower_table(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Table
         width_twips: None,
         col_widths_twips: None,
         alignment: table.alignment,
+        float: None,
     }
 }
 
@@ -1395,6 +1512,7 @@ fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<Bloc
         width_twips: None,
         col_widths_twips: None,
         alignment: None,
+        float: None,
     })]
 }
 
@@ -1442,6 +1560,7 @@ fn lower_planned_table(
         width_twips: planned.col_widths_twips.as_ref().map(|w| w.iter().sum()),
         alignment: None,
         col_widths_twips: planned.col_widths_twips.clone(),
+        float: None,
     }
 }
 

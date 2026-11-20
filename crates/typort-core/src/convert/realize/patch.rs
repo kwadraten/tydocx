@@ -12,7 +12,9 @@ use typst_library::visualize::ImageKind;
 
 use super::collect::location_hash64;
 use super::style::{contains_cjk, lower_runs_match};
-use crate::convert::image::{collect_image_sizes, extract_figure_rasters, hash_bytes};
+use crate::convert::image::{
+    ImagePlacement, collect_image_sizes, extract_figure_rasters, hash_bytes,
+};
 use crate::convert::page::{effective_style, effective_weight, extract_non_black_color};
 
 pub fn patch_document(
@@ -291,6 +293,7 @@ fn push_frame_image(
         non_cover_fit: false,
         alt: None,
         svg: None,
+        src_rect: None,
     }));
 }
 
@@ -304,7 +307,7 @@ fn push_merged(paragraph: &mut IrParagraph, run: Run) {
     paragraph.inlines.push(IrInline::Text(run));
 }
 
-fn patch_block_images(blocks: &mut [IrBlock], sizes: &HashMap<u64, (u64, u64)>) {
+fn patch_block_images(blocks: &mut [IrBlock], sizes: &HashMap<u64, ImagePlacement>) {
     for block in blocks {
         match block {
             IrBlock::Paragraph(para) => patch_inline_images(&mut para.inlines, sizes),
@@ -385,6 +388,7 @@ fn attach_figure_canvases(
                                 non_cover_fit: false,
                                 alt: None,
                                 svg: data.svg,
+                                src_rect: None,
                             })],
                             ..IrParagraph::default()
                         }),
@@ -434,16 +438,17 @@ fn blocks_have_image(blocks: &[IrBlock]) -> bool {
     })
 }
 
-fn patch_inline_images(inlines: &mut [IrInline], sizes: &HashMap<u64, (u64, u64)>) {
+fn patch_inline_images(inlines: &mut [IrInline], sizes: &HashMap<u64, ImagePlacement>) {
     for inline in inlines {
         match inline {
             IrInline::Image(image) => {
-                if let Some((width, height)) = sizes
+                if let Some(placement) = sizes
                     .get(&image.source_hash)
                     .or_else(|| sizes.get(&hash_bytes(&image.bytes)))
                 {
-                    image.width_emu = *width;
-                    image.height_emu = *height;
+                    image.width_emu = placement.size_emu.0;
+                    image.height_emu = placement.size_emu.1;
+                    image.src_rect = placement.src_rect;
                 } else if let Some((width, height)) = intrinsic_size(&image.bytes) {
                     image.width_emu = width;
                     image.height_emu = height;
