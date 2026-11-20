@@ -185,7 +185,7 @@ a regression of this rule — fix it the same way.
 
 ### Issue tracker
 
-Issues live in GitHub Issues for `dianzuan/typort` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues for `kwadraten/typort` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

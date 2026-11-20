@@ -99,7 +99,7 @@ before. The 0.14 line is no longer supported.
   breaks, headers & footers, page numbering, columns, TOC, figure captions, CJK
   typography, document metadata, `@preview` packages.
 
-[Unreleased]: https://github.com/dianzuan/typort/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kwadraten/typort/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/dianzuan/typort/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/dianzuan/typort/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/dianzuan/typort/releases/tag/v0.1.0
