@@ -6,7 +6,7 @@ use quick_xml::events::BytesText;
 use super::WriteCtx;
 use super::citation::{lang_to_lcid, write_citation_sdt};
 use super::fields::{
-    write_bookmark_end, write_bookmark_start, write_field_page, write_field_pageref,
+    write_bookmark_end, write_bookmark_start, write_field, write_field_page, write_field_pageref,
     write_field_ref, write_hyperlink, write_toc_field,
 };
 use super::footnotes::write_footnote_ref;
@@ -92,12 +92,27 @@ pub(super) fn write_inline<W: Write>(
         InlineElement::ColumnBreak => write_column_break(writer),
         InlineElement::FieldToc { max_depth } => write_toc_field(writer, *max_depth),
         InlineElement::Tab => write_tab(writer),
-        InlineElement::Citation { keys, display_text } => {
+        InlineElement::Citation {
+            keys,
+            display_text,
+            anchor,
+        } => {
             let sdt_id = ctx.citation_id_counter.get();
             ctx.citation_id_counter.set(sdt_id + 1);
             let locale_id = lang_to_lcid(&ctx.doc_style.lang_east_asia);
-            write_citation_sdt(writer, keys, display_text, sdt_id, locale_id)
+            write_citation_sdt(
+                writer,
+                keys,
+                display_text,
+                sdt_id,
+                locale_id,
+                anchor.as_deref(),
+            )
         }
+        InlineElement::Field {
+            instruction,
+            result,
+        } => write_field(writer, instruction, result, ctx.doc_style),
     }
 }
 

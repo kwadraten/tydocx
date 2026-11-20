@@ -3,12 +3,13 @@ use std::io::{self, Write};
 use quick_xml::Writer;
 
 use super::WriteCtx;
+use super::fields::{write_bookmark_end, write_bookmark_start};
 use super::image::write_image_inline;
 use super::package::write_value_element;
 use super::run::{write_inline, write_text_run};
 use crate::document::{
-    AnchoredContent, BlockElement, CellContent, Document, FootnoteEntryStyle, FootnoteFormat,
-    ImageData, InlineElement, Paragraph, Table,
+    AnchoredContent, BlockElement, CellContent, Document, Footnote, FootnoteEntryStyle,
+    FootnoteFormat, ImageData, InlineElement, Paragraph, Table,
 };
 
 /// Write `w:footnotePr` element with optional circled-number format and
@@ -133,73 +134,95 @@ pub(super) fn generate_footnotes_xml(
         let mut image_ordinal = 0_usize;
         let mut rel_ordinal = 0_usize;
         for footnote in &doc.footnotes {
-            let id_str = footnote.id.to_string();
-            w.create_element("w:footnote")
-                .with_attribute(("w:id", id_str.as_str()))
-                .write_inner_content(|fn_w| {
-                    fn_w.create_element("w:p").write_inner_content(|p_w| {
-                        // Paragraph properties with footnote text style
-                        let entry = &ctx.doc_style.footnote_entry;
-                        p_w.create_element("w:pPr").write_inner_content(|ppr| {
-                            ppr.create_element("w:pStyle")
-                                .with_attribute(("w:val", "FootnoteText"))
-                                .write_empty()?;
-                            if let Some(gap) = entry.gap_twips {
-                                let gap = gap.to_string();
-                                ppr.create_element("w:spacing")
-                                    .with_attribute(("w:after", gap.as_str()))
-                                    .write_empty()?;
-                            }
-                            if let Some(indent) = entry.indent_twips {
-                                let indent = indent.to_string();
-                                ppr.create_element("w:ind")
-                                    .with_attribute(("w:firstLine", indent.as_str()))
-                                    .write_empty()?;
-                            }
-                            if let Some(justify) = entry.justify {
-                                ppr.create_element("w:jc")
-                                    .with_attribute((
-                                        "w:val",
-                                        if justify { "both" } else { "left" },
-                                    ))
-                                    .write_empty()?;
-                            }
-                            Ok(())
-                        })?;
-                        // Word generates the marker from the footnote format;
-                        // never emit a literal marker character here.
-                        write_footnote_mark_run(p_w)?;
-                        // Space after reference mark
-                        write_text_run(p_w, " ", true)?;
-                        // Content inlines. Images are intercepted here:
-                        // their relationship lives in
-                        // `word/_rels/footnotes.xml.rels`, not in
-                        // `document.xml.rels`, so the relationship id
-                        // restarts at `rId1` for this part while the
-                        // media file number continues the document-wide
-                        // image numbering.
-                        for inline in &footnote.content {
-                            if let InlineElement::Image(img) = inline {
-                                image_ordinal += 1;
-                                rel_ordinal += 1;
-                                let n = footnote_image_base + image_ordinal;
-                                let rid = format!("rId{rel_ordinal}");
-                                let svg_rid = img.svg.as_ref().map(|_| {
-                                    rel_ordinal += 1;
-                                    format!("rId{rel_ordinal}")
-                                });
-                                write_image_inline(p_w, img, n, &rid, svg_rid.as_deref())?;
-                            } else {
-                                write_inline(p_w, inline, ctx)?;
-                            }
-                        }
-                        Ok(())
-                    })?;
-                    Ok(())
-                })?;
+            write_footnote_entry(
+                w,
+                footnote,
+                ctx,
+                footnote_image_base,
+                &mut image_ordinal,
+                &mut rel_ordinal,
+            )?;
         }
         Ok(())
     })?;
+    Ok(())
+}
+
+/// One `w:footnote` element: the style properties, the Word-generated mark
+/// (wrapped in the NOTEREF bookmark when the footnote was labelled), and the
+/// content inlines. Images are intercepted here: their relationship lives
+/// in `word/_rels/footnotes.xml.rels`, not in `document.xml.rels`, so the
+/// relationship id restarts at `rId1` for this part while the media file
+/// number continues the document-wide image numbering.
+fn write_footnote_entry(
+    w: &mut Writer<&mut Vec<u8>>,
+    footnote: &Footnote,
+    ctx: &WriteCtx,
+    footnote_image_base: usize,
+    image_ordinal: &mut usize,
+    rel_ordinal: &mut usize,
+) -> io::Result<()> {
+    let id_str = footnote.id.to_string();
+    w.create_element("w:footnote")
+        .with_attribute(("w:id", id_str.as_str()))
+        .write_inner_content(|fn_w| {
+            fn_w.create_element("w:p").write_inner_content(|p_w| {
+                // Paragraph properties with footnote text style
+                let entry = &ctx.doc_style.footnote_entry;
+                p_w.create_element("w:pPr").write_inner_content(|ppr| {
+                    ppr.create_element("w:pStyle")
+                        .with_attribute(("w:val", "FootnoteText"))
+                        .write_empty()?;
+                    if let Some(gap) = entry.gap_twips {
+                        let gap = gap.to_string();
+                        ppr.create_element("w:spacing")
+                            .with_attribute(("w:after", gap.as_str()))
+                            .write_empty()?;
+                    }
+                    if let Some(indent) = entry.indent_twips {
+                        let indent = indent.to_string();
+                        ppr.create_element("w:ind")
+                            .with_attribute(("w:firstLine", indent.as_str()))
+                            .write_empty()?;
+                    }
+                    if let Some(justify) = entry.justify {
+                        ppr.create_element("w:jc")
+                            .with_attribute(("w:val", if justify { "both" } else { "left" }))
+                            .write_empty()?;
+                    }
+                    Ok(())
+                })?;
+                // Word generates the marker from the footnote format;
+                // never emit a literal marker character here. A
+                // bookmark around the mark is the NOTEREF target.
+                if let Some(bookmark) = &footnote.bookmark {
+                    write_bookmark_start(p_w, bookmark.id, &bookmark.name)?;
+                }
+                write_footnote_mark_run(p_w)?;
+                if let Some(bookmark) = &footnote.bookmark {
+                    write_bookmark_end(p_w, bookmark.id)?;
+                }
+                // Space after reference mark
+                write_text_run(p_w, " ", true)?;
+                for inline in &footnote.content {
+                    if let InlineElement::Image(img) = inline {
+                        *image_ordinal += 1;
+                        *rel_ordinal += 1;
+                        let n = footnote_image_base + *image_ordinal;
+                        let rid = format!("rId{rel_ordinal}");
+                        let svg_rid = img.svg.as_ref().map(|_| {
+                            *rel_ordinal += 1;
+                            format!("rId{rel_ordinal}")
+                        });
+                        write_image_inline(p_w, img, n, &rid, svg_rid.as_deref())?;
+                    } else {
+                        write_inline(p_w, inline, ctx)?;
+                    }
+                }
+                Ok(())
+            })?;
+            Ok(())
+        })?;
     Ok(())
 }
 

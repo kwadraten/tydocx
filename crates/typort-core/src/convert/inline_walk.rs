@@ -670,7 +670,7 @@ pub(super) fn handle_inline_context_tag(
                 let display = collect_flat_text(&children[i + 1..end]);
                 para.add_field_page(display);
             }
-            page::CounterUse::PageCounterUnsupported => {
+            page::CounterUse::PageTotal | page::CounterUse::PageCounterUnsupported => {
                 ctx.degradations.push(Degradation::new(
                     Some(span),
                     "page-counter-value",

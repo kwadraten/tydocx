@@ -50,7 +50,7 @@ pub struct DocxPosition {
 
 pub struct DocxDocument {
     ir: IrDocument,
-    footnote_markers: Vec<(Location, String)>,
+    footnote_markers: Vec<inline::FootnoteMarker>,
     footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
     footnote_circled: bool,
     degradations: Vec<IrDegradation>,
@@ -450,7 +450,13 @@ pub fn export_ir_with_ir(
         &mut tmp,
         &mut degradations,
     );
-    apply_headers_and_footers(paged_doc, &mut tmp, options.compat, &mut degradations);
+    apply_headers_and_footers(
+        paged_doc,
+        world,
+        &mut tmp,
+        options.compat,
+        &mut degradations,
+    );
     let section_break = !ir.sections.is_empty();
     if options.compat == CompatMode::C1 {
         ir.sections.clear();
@@ -603,7 +609,9 @@ fn ir_plain_text(inlines: &[IrInline]) -> String {
     for inline in inlines {
         match inline {
             IrInline::Text(run) => text.push_str(&run.text),
-            IrInline::Link { body, .. } => text.push_str(&ir_plain_text(body)),
+            IrInline::Link { body, .. } | IrInline::Field { body, .. } => {
+                text.push_str(&ir_plain_text(body));
+            }
             IrInline::Space => text.push(' '),
             _ => {}
         }

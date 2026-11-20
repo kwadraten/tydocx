@@ -156,7 +156,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
 
     zip.start_file("word/settings.xml", options)?;
     zip.write_all(&xml_part(|w| {
-        generate_settings(w, &doc.style, doc.even_and_odd_headers)
+        generate_settings(w, &doc.style, doc.even_and_odd_headers, doc.update_fields)
     })?)?;
 
     zip.start_file("word/document.xml", options)?;

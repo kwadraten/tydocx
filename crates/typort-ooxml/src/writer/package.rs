@@ -276,6 +276,7 @@ pub(super) fn generate_settings(
     writer: &mut Writer<&mut Vec<u8>>,
     style: &DocumentStyle,
     even_and_odd_headers: bool,
+    update_fields: bool,
 ) -> io::Result<()> {
     writer
         .create_element("w:settings")
@@ -293,6 +294,11 @@ pub(super) fn generate_settings(
             }
             if even_and_odd_headers {
                 w.create_element("w:evenAndOddHeaders").write_empty()?;
+            }
+            if update_fields {
+                w.create_element("w:updateFields")
+                    .with_attribute(("w:val", "true"))
+                    .write_empty()?;
             }
             write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
             w.create_element("w:compat").write_inner_content(|c| {

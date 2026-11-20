@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use quick_xml::Writer;
 
-use super::fields::{write_complex_field, write_field_page};
+use super::fields::{write_complex_field, write_field, write_field_page};
 use super::run::write_run;
 use crate::document::{DocumentStyle, HeaderFooter, InlineElement, Paragraph};
 
@@ -79,10 +79,10 @@ fn generate_header_footer_part(
     Ok(())
 }
 
-/// Write a simplified paragraph for headers/footers (text runs and PAGE
-/// fields, with alignment). Only `FieldPage` can reach here today (margin-zone
-/// extraction splits page-number tokens into PAGE fields); any other
-/// non-text inline is still dropped.
+/// Write a simplified paragraph for headers/footers (text runs and fields,
+/// with alignment). `FieldPage` (margin-zone page-number tokens) and `Field`
+/// (C3 running-heading `STYLEREF`s) reach here; any other non-text inline is
+/// still dropped.
 fn write_header_footer_paragraph<W: Write>(
     writer: &mut Writer<W>,
     para: &Paragraph,
@@ -109,6 +109,12 @@ fn write_header_footer_paragraph<W: Write>(
                     size_half_pt,
                 } => {
                     write_field_page(w, display_text, *bold, *size_half_pt)?;
+                }
+                InlineElement::Field {
+                    instruction,
+                    result,
+                } => {
+                    write_field(w, instruction, result, doc_style)?;
                 }
                 _ => {}
             }

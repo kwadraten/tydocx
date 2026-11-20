@@ -299,7 +299,7 @@ pub enum InlineElement {
     /// If `equation_number` is set, the equation is a numbered block equation.
     Math {
         omml_xml: String,
-        equation_number: Option<String>,
+        equation_number: Option<EquationNumber>,
     },
     /// An inline image.
     Image(ImageData),
@@ -360,7 +360,54 @@ pub enum InlineElement {
         keys: Vec<String>,
         /// Rendered display text (e.g., "[1]" or "(Author, 2020)").
         display_text: String,
+        /// Bookmark the marker links to (the bibliography entry), when the
+        /// citation resolved to a rendered entry — the cached result stays
+        /// clickable exactly like a C2 internal link.
+        anchor: Option<String>,
     },
+    /// A generic complex field (`fldChar`/`instrText`/`separate`/`end`).
+    /// `result` is the cached result — the runs the field replaced, so
+    /// disconnecting the field reproduces the literal output exactly.
+    Field {
+        /// Field instruction as written into `w:instrText`
+        /// (e.g. `" NUMPAGES "`, `" STYLEREF \"heading 1\" "`).
+        instruction: String,
+        /// Cached result runs — carry the literal text and its styling.
+        result: Vec<Run>,
+    },
+}
+
+/// How a block equation's number is emitted after the math run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EquationNumber {
+    /// Literal number text, including any pattern affixes ("(1)").
+    Text(String),
+    /// A `SEQ` field covering just the numeral: the pattern's literal
+    /// affixes stay literal text, so "(1)" writes
+    /// `"(" + SEQ field("1") + ")"`. `instruction` is the full field code
+    /// (e.g. `" SEQ equation \\* roman "`).
+    Seq {
+        prefix: String,
+        instruction: String,
+        display: String,
+        suffix: String,
+    },
+}
+
+impl EquationNumber {
+    /// The full displayed number text including affixes ("(1)").
+    #[must_use]
+    pub fn as_text(&self) -> String {
+        match self {
+            Self::Text(text) => text.clone(),
+            Self::Seq {
+                prefix,
+                display,
+                suffix,
+                ..
+            } => format!("{prefix}{display}{suffix}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -560,6 +607,16 @@ pub struct Footnote {
     pub id: u32,
     /// The inline content of the footnote (text runs, math, etc.).
     pub content: Vec<InlineElement>,
+    /// A bookmark wrapping the footnote's reference mark — the target a
+    /// `NOTEREF` field (Typst `counter(footnote).at(<label>)`) points at.
+    pub bookmark: Option<FootnoteBookmark>,
+}
+
+/// A bookmark name + ID pair anchoring a footnote's reference mark.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FootnoteBookmark {
+    pub id: u32,
+    pub name: String,
 }
 
 /// Paragraph hanging-indent behavior.
@@ -677,7 +734,8 @@ impl Paragraph {
         for inline in &mut self.inlines {
             match inline {
                 InlineElement::Text(run) => f(run),
-                InlineElement::Hyperlink { runs, .. } => {
+                InlineElement::Hyperlink { runs, .. }
+                | InlineElement::Field { result: runs, .. } => {
                     for run in runs {
                         f(run);
                     }
@@ -701,7 +759,8 @@ impl Paragraph {
         for inline in &self.inlines {
             match inline {
                 InlineElement::Text(run) => f(run),
-                InlineElement::Hyperlink { runs, .. } => {
+                InlineElement::Hyperlink { runs, .. }
+                | InlineElement::Field { result: runs, .. } => {
                     for run in runs {
                         f(run);
                     }
@@ -749,7 +808,8 @@ impl Paragraph {
                     }
                 }
                 InlineElement::Hyperlink { runs, .. }
-                | InlineElement::InternalLink { runs, .. } => {
+                | InlineElement::InternalLink { runs, .. }
+                | InlineElement::Field { result: runs, .. } => {
                     for run in runs {
                         text.push_str(&run.text);
                     }
@@ -805,7 +865,7 @@ impl Paragraph {
     pub fn add_numbered_math(&mut self, omml_xml: String, number: String) {
         self.inlines.push(InlineElement::Math {
             omml_xml,
-            equation_number: Some(number),
+            equation_number: Some(EquationNumber::Text(number)),
         });
     }
 
@@ -885,8 +945,11 @@ impl Paragraph {
 
     /// Add a citation field (SDT-wrapped CITATION field code).
     pub fn add_citation(&mut self, keys: Vec<String>, display_text: String) {
-        self.inlines
-            .push(InlineElement::Citation { keys, display_text });
+        self.inlines.push(InlineElement::Citation {
+            keys,
+            display_text,
+            anchor: None,
+        });
     }
 }
 
@@ -1148,6 +1211,20 @@ fn for_each_paragraph_in_table(table: &Table, f: &mut dyn FnMut(&Paragraph)) {
             }
         }
     }
+}
+
+/// OOXML bookmark names cap at 40 chars — `w:bookmarkStart@w:name` and the
+/// field instruction pointing at it must truncate identically.
+#[must_use]
+pub fn truncate_bookmark_name(name: &str) -> &str {
+    if name.len() <= 40 {
+        return name;
+    }
+    let mut end = 40;
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    &name[..end]
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1524,6 +1601,9 @@ pub struct Document {
     pub heading_num_instances: Vec<HeadingNumInstance>,
     /// Bibliography sources for Word's citation data store (customXml/item1.xml).
     pub citation_sources: Vec<CitationSource>,
+    /// Emit `<w:updateFields w:val="true"/>` in settings.xml (C3: Word
+    /// refreshes every field on open).
+    pub update_fields: bool,
 }
 
 impl Default for Document {
@@ -1550,6 +1630,7 @@ impl Default for Document {
             list_num_instances: Vec::new(),
             heading_num_instances: Vec::new(),
             citation_sources: Vec::new(),
+            update_fields: false,
         }
     }
 }
@@ -1722,7 +1803,11 @@ impl Document {
     /// Add a footnote and return its ID (starting from 2, since 0 and 1 are reserved by OOXML).
     pub fn add_footnote(&mut self, content: Vec<InlineElement>) -> u32 {
         let id = u32::try_from(self.footnotes.len()).unwrap_or(u32::MAX - 3) + 2;
-        self.footnotes.push(Footnote { id, content });
+        self.footnotes.push(Footnote {
+            id,
+            content,
+            bookmark: None,
+        });
         id
     }
 }

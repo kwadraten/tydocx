@@ -1,6 +1,8 @@
 //! C1 mode gates (Phase 1): each dropped/approximated aspect emits a
-//! `Degradation` with a stable `construct` identifier, and C2/C3 output is
-//! unchanged from the Phase 0 baseline. The default options are C2.
+//! `Degradation` with a stable `construct` identifier, and C2/C3 report no
+//! degradations for them. C2 output is byte-identical to the Phase 0
+//! baseline; C3 adds Word fields whose cached results equal that baseline's
+//! text. The default options are C2.
 
 use crate::common::{
     fixture_outcome_with_options, fixture_package, fixture_package_with_options, paragraph_texts,
@@ -43,26 +45,29 @@ fn assert_clean(fixture: &str) {
 }
 
 #[test]
-fn c2_c3_and_default_convert_identically() {
-    // C1 legitimately differs on gated fixtures (see the tests below), so
-    // the identical-output invariant now covers default/C2/C3 only.
-    let modes = [
-        ConvertOptions::default(),
-        ConvertOptions::new(CompatMode::C2),
-        ConvertOptions::new(CompatMode::C3),
-    ];
-    let first = fixture_package_with_options("complex_paper", &modes[0])
+fn c3_cached_results_match_the_c2_literal() {
+    // C1 legitimately differs on gated fixtures (see the tests below). The
+    // default is C2, so the byte-identical invariant covers default/C2 only;
+    // C3 wraps dynamic values in fields whose cached results are the C2
+    // literal text (spec D1).
+    let default = fixture_package_with_options("complex_paper", &ConvertOptions::default())
         .part_text("word/document.xml")
         .to_owned();
-    for options in &modes[1..] {
-        let package = fixture_package_with_options("complex_paper", options);
-        let xml = package.part_text("word/document.xml");
-        assert_eq!(
-            first, xml,
-            "mode {:?} must convert identically to the default",
-            options.compat
-        );
-    }
+    let c2 = fixture_package_with_options("complex_paper", &ConvertOptions::new(CompatMode::C2))
+        .part_text("word/document.xml")
+        .to_owned();
+    assert_eq!(
+        default, c2,
+        "the default mode is C2 and must convert identically"
+    );
+    let c3 = fixture_package_with_options("complex_paper", &ConvertOptions::new(CompatMode::C3))
+        .part_text("word/document.xml")
+        .to_owned();
+    assert_eq!(
+        paragraph_texts(&c2),
+        paragraph_texts(&c3),
+        "C3 field cached results must equal the C2 literal text"
+    );
 }
 
 #[test]

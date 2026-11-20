@@ -11,6 +11,7 @@ use typst_library::text::{FontStyle, TextItem};
 use typst_library::visualize::ImageKind;
 
 use super::collect::location_hash64;
+use super::inline::FootnoteMarker;
 use super::style::{contains_cjk, lower_runs_match};
 use crate::convert::image::{
     ImagePlacement, collect_image_sizes, extract_figure_rasters, hash_bytes,
@@ -19,7 +20,7 @@ use crate::convert::page::{effective_style, effective_weight, extract_non_black_
 
 pub fn patch_document(
     doc: &mut IrDocument,
-    markers: &[(Location, String)],
+    markers: &[FootnoteMarker],
     collected_bodies: &HashMap<Location, Vec<IrParagraph>>,
     paged: &PagedDocument,
     style: &DocumentStyle,
@@ -30,7 +31,8 @@ pub fn patch_document(
     let ordered = &entries.in_order;
     let mut used: Vec<bool> = vec![false; ordered.len()];
     let mut footnotes = Vec::new();
-    for (index, (location, rendered)) in markers.iter().enumerate() {
+    for (index, marker) in markers.iter().enumerate() {
+        let (location, rendered) = (&marker.location, &marker.rendered);
         let ordinal = u32::try_from(index + 1).unwrap_or(u32::MAX);
         let body = match collected_bodies.get(location) {
             Some(body) => {
@@ -63,6 +65,7 @@ pub fn patch_document(
             Some(body) => footnotes.push(IrFootnote {
                 ordinal,
                 rendered: rendered.clone(),
+                label: marker.label.clone(),
                 body,
             }),
             None => degradations.push(Degradation {
@@ -454,7 +457,9 @@ fn patch_inline_images(inlines: &mut [IrInline], sizes: &HashMap<u64, ImagePlace
                     image.height_emu = height;
                 }
             }
-            IrInline::Link { body, .. } | IrInline::Shape { body, .. } => {
+            IrInline::Link { body, .. }
+            | IrInline::Shape { body, .. }
+            | IrInline::Field { body, .. } => {
                 patch_inline_images(body, sizes);
             }
             _ => {}

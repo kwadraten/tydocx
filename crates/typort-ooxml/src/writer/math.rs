@@ -2,7 +2,9 @@ use std::io::{self, Write};
 
 use quick_xml::Writer;
 
+use super::fields::write_complex_field;
 use super::run::write_text_run;
+use crate::document::EquationNumber;
 
 pub(super) fn write_math_inline<W: Write>(
     writer: &mut Writer<W>,
@@ -31,12 +33,29 @@ pub(super) fn strip_math_para(omml: &str) -> &str {
 /// mimicking the standard Chinese journal equation numbering style.
 pub(super) fn write_equation_number<W: Write>(
     writer: &mut Writer<W>,
-    number: &str,
+    number: &EquationNumber,
 ) -> io::Result<()> {
     // Emit a run with a tab character followed by the equation number
     writer.create_element("w:r").write_inner_content(|w| {
         w.create_element("w:tab").write_empty()?;
         Ok(())
     })?;
-    write_text_run(writer, number, true)
+    match number {
+        EquationNumber::Text(text) => write_text_run(writer, text, true),
+        EquationNumber::Seq {
+            prefix,
+            instruction,
+            display,
+            suffix,
+        } => {
+            if !prefix.is_empty() {
+                write_text_run(writer, prefix, true)?;
+            }
+            write_complex_field(writer, instruction, display, true)?;
+            if !suffix.is_empty() {
+                write_text_run(writer, suffix, true)?;
+            }
+            Ok(())
+        }
+    }
 }

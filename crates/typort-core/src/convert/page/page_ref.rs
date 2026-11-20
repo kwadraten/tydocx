@@ -48,6 +48,10 @@ pub enum CounterUse {
     /// `counter(page).at(here())`, possibly with further chaining
     /// (`.display().first()`, ...). Word recomputes it as a PAGE field.
     CurrentPage,
+    /// Total-page reference: `counter(page).final()`, possibly chained into
+    /// `.first()`/`.at(..)`/`.display(...)` — the document's last page
+    /// number. Word recomputes it as a NUMPAGES field (C3).
+    PageTotal,
     /// A page-counter use Word cannot recompute: arithmetic around it, or
     /// `.at(...)` with a non-label, non-`here()` argument. Stays literal text
     /// and is reported as a degradation.
@@ -69,6 +73,9 @@ pub fn classify_counter_use(source: &Source, span: Span) -> CounterUse {
     if is_current_page_ref(node.clone()) {
         return CounterUse::CurrentPage;
     }
+    if is_page_final_ref(node.clone()) {
+        return CounterUse::PageTotal;
+    }
     if subtree_has_counter(&node, "page") {
         return CounterUse::PageCounterUnsupported;
     }
@@ -76,6 +83,168 @@ pub fn classify_counter_use(source: &Source, span: Span) -> CounterUse {
         return CounterUse::FootnoteCounter;
     }
     CounterUse::Other
+}
+
+/// Resolve the label of a `counter(footnote).at(<label>)` reference from the
+/// source expression a `context` Tag's span points at — the footnote the
+/// reference counts to, for the C3 NOTEREF field. Same callee-chain walk as
+/// [`counter_page_label`].
+#[must_use]
+pub fn counter_footnote_label(source: &Source, span: Span) -> Option<String> {
+    let mut node = source.find(span)?;
+    loop {
+        if let Some(call) = node.cast::<ast::FuncCall>() {
+            if let Some(label) = counter_at_label(call, "footnote") {
+                return Some(label);
+            }
+            node = node.children().next()?;
+        } else if node.cast::<ast::FieldAccess>().is_some() {
+            node = node.children().next()?;
+        } else {
+            return None;
+        }
+    }
+}
+
+/// Which `datetime` value a `context` expression evaluates, for the C3
+/// `DATE`/`TIME` fields. `datetime.today()` is a date; `datetime.now()`
+/// (should Typst expose it) is the time-of-day reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateTimeUse {
+    /// `datetime.today(...)` → ` DATE `.
+    Date,
+    /// `datetime.now(...)` → ` TIME `.
+    Time,
+}
+
+/// Classify the `datetime` reading of the source expression a `context`
+/// Tag's span points at. Only a bare `datetime.today()`/`datetime.now()`
+/// call chain (possibly wrapped in `.display(...)`, `.year()`, ...) counts —
+/// the value must be "today/now at render time", which is what the Word
+/// field recomputes.
+#[must_use]
+pub fn datetime_use(source: &Source, span: Span) -> Option<DateTimeUse> {
+    let mut node = source.find(span)?;
+    loop {
+        if let Some(call) = node.cast::<ast::FuncCall>() {
+            if let Some(use_) = datetime_call(call) {
+                return Some(use_);
+            }
+            node = node.children().next()?;
+        } else {
+            let access = node.cast::<ast::FieldAccess>()?;
+            if is_datetime_access(access) {
+                return Some(DateTimeUse::Date);
+            }
+            node = node.children().next()?;
+        }
+    }
+}
+
+/// Whether this call is `datetime.today(...)`/`datetime.now(...)`.
+fn datetime_call(call: ast::FuncCall<'_>) -> Option<DateTimeUse> {
+    let ast::Expr::FieldAccess(access) = call.callee() else {
+        return None;
+    };
+    let field = access.field().get();
+    let ast::Expr::Ident(target) = access.target() else {
+        return None;
+    };
+    if target.get().as_str() != "datetime" {
+        return None;
+    }
+    match field.as_str() {
+        "today" => Some(DateTimeUse::Date),
+        "now" => Some(DateTimeUse::Time),
+        _ => None,
+    }
+}
+
+/// Whether this field access is `datetime.today` — the no-parens form.
+fn is_datetime_access(access: ast::FieldAccess<'_>) -> bool {
+    access.field().get().as_str() == "today"
+        && matches!(access.target(), ast::Expr::Ident(ident) if ident.get().as_str() == "datetime")
+}
+
+/// Which document-metadata field a `context` expression reads, for the C3
+/// `DOCPROPERTY` field. Walks the callee chain to a `document.<field>` field
+/// access; only the fields typort writes into `docProps/core.xml` map.
+#[must_use]
+pub fn docproperty_use(source: &Source, span: Span) -> Option<&'static str> {
+    let mut node = source.find(span)?;
+    loop {
+        if node.cast::<ast::FuncCall>().is_some() {
+            // `.display()`/`.join(...)`/etc. on the field read — descend into
+            // the callee to reach the field access.
+            node = node.children().next()?;
+        } else {
+            let access = node.cast::<ast::FieldAccess>()?;
+            if let name @ Some(_) = document_field(access) {
+                return name;
+            }
+            node = node.children().next()?;
+        }
+    }
+}
+
+/// The Word `DOCPROPERTY` name of a `document.<field>` field access — the
+/// names typort writes into `docProps/core.xml`.
+fn document_field(access: ast::FieldAccess<'_>) -> Option<&'static str> {
+    if !matches!(access.target(), ast::Expr::Ident(ident) if ident.get().as_str() == "document") {
+        return None;
+    }
+    match access.field().get().as_str() {
+        "title" => Some("Title"),
+        "author" => Some("Author"),
+        "keywords" => Some("Keywords"),
+        "description" => Some("Comments"),
+        "date" => Some("CreateDate"),
+        _ => None,
+    }
+}
+
+/// Whether the expression (walking down its callee chain) reaches
+/// `counter(page).final()` — the document's total page count.
+fn is_page_final_ref(mut node: LinkedNode<'_>) -> bool {
+    loop {
+        if let Some(call) = node.cast::<ast::FuncCall>() {
+            if is_page_final_call(call) {
+                return true;
+            }
+            // Descend into the callee (`.first()` on the final value, ...).
+            let Some(next) = node.children().next() else {
+                return false;
+            };
+            node = next;
+        } else if let Some(access) = node.cast::<ast::FieldAccess>() {
+            if access.field().get().as_str() == "final"
+                && matches!(access.target(), ast::Expr::FuncCall(inner) if is_counter_call(inner, "page"))
+            {
+                return true;
+            }
+            // Descend into the target (`counter(page).final` itself).
+            let Some(next) = node.children().next() else {
+                return false;
+            };
+            node = next;
+        } else {
+            return false;
+        }
+    }
+}
+
+/// Whether this call is `.final(...)` on a `counter(page)` call.
+fn is_page_final_call(call: ast::FuncCall<'_>) -> bool {
+    let ast::Expr::FieldAccess(access) = call.callee() else {
+        return false;
+    };
+    if access.field().get().as_str() != "final" {
+        return false;
+    }
+    let ast::Expr::FuncCall(inner) = access.target() else {
+        return false;
+    };
+    is_counter_call(inner, "page")
 }
 
 /// Whether the expression (walking down its callee chain) is a current-page
@@ -165,7 +334,13 @@ fn subtree_has_counter(node: &LinkedNode<'_>, name: &str) -> bool {
         .any(|child| subtree_has_counter(&child, name))
 }
 fn counter_page_at_label(call: ast::FuncCall<'_>) -> Option<String> {
-    // The callee must be a `.at` field access on a `counter(page)` call.
+    counter_at_label(call, "page")
+}
+
+/// The label argument of a `counter(<name>).at(<label>)` call — the
+/// `<label>` positional arg or `None` for any other shape.
+fn counter_at_label(call: ast::FuncCall<'_>, name: &str) -> Option<String> {
+    // The callee must be a `.at` field access on a `counter(<name>)` call.
     let ast::Expr::FieldAccess(access) = call.callee() else {
         return None;
     };
@@ -175,14 +350,7 @@ fn counter_page_at_label(call: ast::FuncCall<'_>) -> Option<String> {
     let ast::Expr::FuncCall(inner) = access.target() else {
         return None;
     };
-    if !matches!(inner.callee(), ast::Expr::Ident(ident) if ident.get().as_str() == "counter") {
-        return None;
-    }
-    // `counter(page)`: one positional argument, the `page` ident.
-    let mut counter_args = inner.args().items();
-    if !matches!(counter_args.next(), Some(ast::Arg::Pos(ast::Expr::Ident(ident)))
-        if ident.get().as_str() == "page")
-    {
+    if !is_counter_call(inner, name) {
         return None;
     }
     // The `.at(...)` argument must be a label.

@@ -3,9 +3,10 @@ use std::fmt::Write;
 
 use typort_ooxml::document::{
     AnchorWrap, AnchoredContent, AnchoredFloat, BlockElement, CellBorders, CellContent, Document,
-    FirstLineIndent, ImageData, ImageFormat, InlineElement, LevelOverride, ListInfo, Paragraph,
-    RelFrom, SectionBreak, SectionBreakType, Table, TableBorders, TableCell, TableCellMargins,
-    TableFloat, TableRow, VMerge,
+    EquationNumber, FirstLineIndent, FootnoteBookmark, ImageData, ImageFormat, InlineElement,
+    LevelOverride, ListInfo, Paragraph, RelFrom, SectionBreak, SectionBreakType, Table,
+    TableBorders, TableCell, TableCellMargins, TableFloat, TableRow, VMerge,
+    truncate_bookmark_name,
 };
 
 use crate::degradation::{Degradation, DegradationAction};
@@ -13,10 +14,11 @@ use crate::geometry::GeometryInput;
 use crate::grid_plan::{MAX_COLUMNS, PlannedCell, PlannedCellKind, PlannedTable, plan_grid};
 use crate::mode::CompatMode;
 use crate::types::{
-    Alignment, HangingIndent, IrAnchor, IrBibEntry, IrBlock, IrCellBorders, IrDocument, IrEnum,
-    IrEquation, IrFootnote, IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList,
-    IrNumberingPattern, IrParStyle, IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType,
-    IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, ParagraphStyle, Run,
+    Alignment, HangingIndent, IrAnchor, IrBibEntry, IrBlock, IrCaptionSeq, IrCellBorders,
+    IrDocument, IrEnum, IrEquation, IrField, IrFootnote, IrGrid, IrHeadingNumbering, IrImage,
+    IrInline, IrLevelDef, IrList, IrNumberingPattern, IrParStyle, IrParagraph, IrPlaceWrap, IrRaw,
+    IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, ParagraphStyle,
+    Run,
 };
 
 #[derive(Debug, Default)]
@@ -59,6 +61,9 @@ pub struct LowerCtx {
     /// Text-area right edge in EMU — a placed box fully right of it sits in
     /// the right margin.
     pub text_right_emu: i64,
+    /// Labels attached to the document's footnotes — the set a `NOTEREF`
+    /// field may target (only labelled footnotes get a bookmark).
+    pub footnote_labels: std::collections::HashSet<String>,
 }
 
 #[derive(Debug, Default)]
@@ -130,6 +135,7 @@ pub fn lower(
     doc.page_number_footers = geometry.page_number_footers.clone();
     doc.even_and_odd_headers = geometry.even_and_odd_headers;
     doc.title_page = geometry.title_page;
+    doc.update_fields = compat.is_c3();
 
     let mut ctx = LowerCtx {
         compat,
@@ -152,6 +158,11 @@ pub fn lower(
         page_height_emu: i64::from(ir.page.height_twips) * 635,
         text_left_emu: i64::from(ir.page.margin_left) * 635,
         text_right_emu: i64::from(ir.page.width_twips - ir.page.margin_right) * 635,
+        footnote_labels: ir
+            .footnotes
+            .iter()
+            .filter_map(|f| f.label.clone())
+            .collect(),
     };
 
     for footnote in &ir.footnotes {
@@ -167,6 +178,15 @@ pub fn lower(
         }
         let content = lower_footnote_body(footnote, &mut ctx);
         let id = doc.add_footnote(content);
+        if compat.is_c3()
+            && let Some(label) = &footnote.label
+            && let Some(entry) = doc.footnotes.last_mut()
+        {
+            entry.bookmark = Some(FootnoteBookmark {
+                id: ctx.next_bookmark(),
+                name: truncate_bookmark_name(label).to_string(),
+            });
+        }
         ctx.footnote_ids.insert(footnote.ordinal, id);
     }
 
@@ -369,6 +389,7 @@ fn lower_block_in(
             caption,
             caption_alignment,
             caption_par,
+            caption_seq,
             kind: _,
             supplement: _,
             label,
@@ -390,6 +411,7 @@ fn lower_block_in(
                     caption,
                     caption_alignment: *caption_alignment,
                     caption_par: *caption_par,
+                    caption_seq: caption_seq.as_ref(),
                     label: label.as_ref(),
                     caption_first: *caption_first,
                     gap_twips: *gap_twips,
@@ -650,12 +672,47 @@ fn expected_heading_number(
     out
 }
 
+/// The `w:instrText` for an [`IrInline::Field`].
+fn field_instruction(kind: &IrField) -> String {
+    match kind {
+        IrField::NumPages => " NUMPAGES ".to_string(),
+        IrField::NoteRef { label } => {
+            format!(" NOTEREF {} \\h ", truncate_bookmark_name(label))
+        }
+        IrField::Date => " DATE ".to_string(),
+        IrField::Time => " TIME ".to_string(),
+        IrField::StyleRef { level } => format!(" STYLEREF \"Heading {level}\" "),
+        IrField::DocProperty { name } => format!(" DOCPROPERTY {name} "),
+        IrField::Seq { identifier, system } => seq_instruction(identifier, *system),
+    }
+}
+
+fn seq_instruction(identifier: &str, system: crate::types::IrNumeralSystem) -> String {
+    match system.seq_switch() {
+        Some(switch) => format!(" SEQ {identifier} \\* {switch} "),
+        None => format!(" SEQ {identifier} "),
+    }
+}
+
 fn lower_equation(eq: &IrEquation, ctx: &mut LowerCtx) -> Vec<BlockElement> {
     let mut para = Paragraph::new();
     para.alignment = Some(Alignment::Center);
+    let equation_number = eq.number.as_ref().map(|number| {
+        if ctx.compat.is_c3()
+            && let Some(seq) = &number.seq
+        {
+            return EquationNumber::Seq {
+                prefix: seq.prefix.clone(),
+                instruction: seq_instruction(&seq.identifier, seq.system),
+                display: seq.numeral.clone(),
+                suffix: seq.suffix.clone(),
+            };
+        }
+        EquationNumber::Text(number.display.clone())
+    });
     para.inlines.push(InlineElement::Math {
         omml_xml: eq.omml.clone(),
-        equation_number: eq.number.clone(),
+        equation_number,
     });
     if let Some(name) = &eq.bookmark {
         let id = ctx.next_bookmark();
@@ -814,6 +871,7 @@ fn floating_table(
                 caption,
                 caption_alignment,
                 caption_par,
+                caption_seq,
                 label,
                 caption_first,
                 gap_twips,
@@ -824,6 +882,7 @@ fn floating_table(
             caption,
             caption_alignment: *caption_alignment,
             caption_par: *caption_par,
+            caption_seq: caption_seq.as_ref(),
             label: label.as_ref(),
             caption_first: *caption_first,
             gap_twips: *gap_twips,
@@ -1042,6 +1101,7 @@ struct FigureSpec<'a> {
     caption: &'a [IrInline],
     caption_alignment: Option<Alignment>,
     caption_par: IrParStyle,
+    caption_seq: Option<&'a IrCaptionSeq>,
     label: Option<&'a String>,
     caption_first: bool,
     gap_twips: Option<u32>,
@@ -1103,7 +1163,13 @@ fn figure_caption_para(fig: &FigureSpec<'_>, ctx: &mut LowerCtx) -> Option<Parag
             para.spacing_before = Some(gap);
         }
     }
-    para.inlines.extend(lower_inlines(fig.caption, ctx));
+    let mut caption = fig.caption.to_vec();
+    if ctx.compat.is_c3()
+        && let Some(seq) = fig.caption_seq
+    {
+        splice_caption_seq(&mut caption, seq);
+    }
+    para.inlines.extend(lower_inlines(&caption, ctx));
     if let Some(name) = fig.label {
         let id = ctx.next_bookmark();
         para.add_bookmark_at_start(id, name.clone());
@@ -1235,18 +1301,12 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                 }
             }
             IrInline::Cite {
-                keys: _,
+                keys,
                 rendered,
                 target,
-            } => {
-                if let Some(anchor) = target {
-                    out.push(InlineElement::InternalLink {
-                        anchor: anchor.clone(),
-                        runs: vec![Run::new(rendered)],
-                    });
-                } else {
-                    out.push(InlineElement::Text(Run::new(rendered)));
-                }
+            } => out.push(lower_cite(keys, rendered, target.as_ref(), ctx)),
+            IrInline::Field { kind, body, span } => {
+                out.extend(lower_field(kind, body, *span, ctx));
             }
             IrInline::FootnoteMarker { ordinal, rendered } => {
                 if let Some(id) = ctx.footnote_ids.get(ordinal) {
@@ -1384,6 +1444,147 @@ fn lower_run(run: &Run, ctx: &mut LowerCtx) -> Run {
     run
 }
 
+/// Splice the caption numeral at `seq.offset` out of `inlines` into a
+/// `Field { Seq }` inline, so the C3 ` SEQ ` field wraps the numeral. The
+/// offset is verified against the actual text — a mismatch (styled
+/// supplement, custom show rule that reordered the caption) leaves the
+/// caption literal.
+fn splice_caption_seq(inlines: &mut Vec<IrInline>, seq: &IrCaptionSeq) {
+    let numeral_chars: Vec<char> = seq.seq.numeral.chars().collect();
+    let mut pos = 0usize;
+    for (idx, inline) in inlines.iter().enumerate() {
+        let IrInline::Text(run) = inline else {
+            return;
+        };
+        let run_chars: Vec<char> = run.text.chars().collect();
+        if pos > seq.offset {
+            return;
+        }
+        let start = seq.offset - pos;
+        if start + numeral_chars.len() <= run_chars.len() {
+            if run_chars[start..start + numeral_chars.len()] != numeral_chars[..] {
+                return;
+            }
+            let before: String = run_chars[..start].iter().collect();
+            let after: String = run_chars[start + numeral_chars.len()..].iter().collect();
+            let mut numeral_run = run.clone();
+            numeral_run.text.clone_from(&seq.seq.numeral);
+            let mut replacement = Vec::new();
+            if !before.is_empty() {
+                let mut run = run.clone();
+                run.text = before;
+                replacement.push(IrInline::Text(run));
+            }
+            replacement.push(IrInline::Field {
+                kind: IrField::Seq {
+                    identifier: seq.seq.identifier.clone(),
+                    system: seq.seq.system,
+                },
+                body: vec![IrInline::Text(numeral_run)],
+                span: None,
+            });
+            if !after.is_empty() {
+                let mut run = run.clone();
+                run.text = after;
+                replacement.push(IrInline::Text(run));
+            }
+            inlines.splice(idx..=idx, replacement);
+            return;
+        }
+        pos += run_chars.len();
+    }
+}
+
+/// One citation marker: a `CITATION` field at C3, the internal entry link
+/// or literal marker otherwise.
+fn lower_cite(
+    keys: &[String],
+    rendered: &str,
+    target: Option<&String>,
+    ctx: &LowerCtx,
+) -> InlineElement {
+    if ctx.compat.is_c3() {
+        return InlineElement::Citation {
+            keys: keys.to_vec(),
+            display_text: rendered.to_owned(),
+            anchor: target.cloned(),
+        };
+    }
+    if let Some(anchor) = target {
+        return InlineElement::InternalLink {
+            anchor: anchor.clone(),
+            runs: vec![Run::new(rendered)],
+        };
+    }
+    InlineElement::Text(Run::new(rendered))
+}
+
+/// Lower one `IrInline::Field`: at C3 the field code wraps the cached body
+/// runs; otherwise the wrapper unwraps to the same literal (a `NOTEREF`
+/// whose label never landed on a `FootnoteElem` — it has no bookmark to
+/// target — also stays literal). Only the two constructs that reported at
+/// C2 before the field layer keep their degradation.
+fn lower_field(
+    kind: &IrField,
+    body: &[IrInline],
+    span: Option<typst_syntax::Span>,
+    ctx: &mut LowerCtx,
+) -> Vec<InlineElement> {
+    let emit = ctx.compat.is_c3()
+        && field_body_is_literal(body)
+        && match kind {
+            IrField::NoteRef { label } => ctx.footnote_labels.contains(label),
+            _ => true,
+        };
+    if emit {
+        return vec![InlineElement::Field {
+            instruction: field_instruction(kind),
+            result: inline_to_runs(body, ctx),
+        }];
+    }
+    match kind {
+        IrField::NumPages => ctx.degrade_at(
+            span,
+            "page-counter-value",
+            DegradationAction::Literalized,
+            "page-counter value Word cannot recompute (e.g. arithmetic around counter(page)) \
+             kept as literal text"
+                .to_string(),
+        ),
+        IrField::NoteRef { .. } => ctx.degrade_at(
+            span,
+            "footnote-counter-reference",
+            DegradationAction::Literalized,
+            "footnote-counter reference kept as literal text (NOTEREF is a C3 field)".to_string(),
+        ),
+        IrField::Date
+        | IrField::Time
+        | IrField::StyleRef { .. }
+        | IrField::DocProperty { .. }
+        | IrField::Seq { .. } => {}
+    }
+    lower_inlines(body, ctx)
+}
+
+/// Whether a field's cached body converts to runs losslessly — content
+/// [`inline_to_runs`] cannot carry (an image, an equation, a tab) would
+/// silently vanish from the cached result, so the field stays literal.
+fn field_body_is_literal(inlines: &[IrInline]) -> bool {
+    inlines.iter().all(|inline| match inline {
+        IrInline::Image(_)
+        | IrInline::Math { .. }
+        | IrInline::PageBreak
+        | IrInline::ColumnBreak
+        | IrInline::FootnoteMarker { .. }
+        | IrInline::Overline(_)
+        | IrInline::Tab => false,
+        IrInline::Link { body, .. }
+        | IrInline::Shape { body, .. }
+        | IrInline::Field { body, .. } => field_body_is_literal(body),
+        _ => true,
+    })
+}
+
 fn inline_to_runs(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<Run> {
     let mut runs = Vec::new();
     for inline in inlines {
@@ -1404,7 +1605,9 @@ fn inline_to_runs(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<Run> {
                 runs.push(run);
             }
             IrInline::Space => runs.push(Run::new(" ")),
-            IrInline::Link { body, .. } | IrInline::Shape { body, .. } => {
+            IrInline::Link { body, .. }
+            | IrInline::Shape { body, .. }
+            | IrInline::Field { body, .. } => {
                 runs.extend(inline_to_runs(body, ctx));
             }
             IrInline::Overline(_) => {
@@ -2389,6 +2592,7 @@ mod tests {
         ir.footnotes.push(IrFootnote {
             ordinal: 1,
             rendered: "1".to_owned(),
+            label: None,
             body: vec![text_para("note")],
         });
         let mut para = IrParagraph::default();

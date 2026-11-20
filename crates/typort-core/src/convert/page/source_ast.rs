@@ -303,6 +303,151 @@ fn markup_text(node: &typst_syntax::SyntaxNode) -> String {
     text
 }
 
+/// Heading level a `page(header:)`/`page(footer:)` content references, for
+/// the C3 `STYLEREF` field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PageZoneHeadings {
+    /// `Some(level)` when the header zone's whole content is a heading
+    /// query; `None` for static text or mixed markup.
+    pub header: Option<u8>,
+    /// Same for the footer zone.
+    pub footer: Option<u8>,
+}
+
+/// The heading level each page zone's content queries — document-global
+/// `set page(header:/footer:)` rules (same scoping as
+/// [`footnote_counter_reset_in_page_header`]). `Some(level)` is only
+/// returned when the zone content is *purely* the heading query — literal
+/// markup mixed into the zone would be dropped by a `STYLEREF` on update.
+#[must_use]
+pub fn page_zone_heading_levels(source: &str, template_names: &[String]) -> PageZoneHeadings {
+    let root = typst_syntax::parse(source);
+    let mut out = PageZoneHeadings::default();
+    collect_zone_headings(&root, template_names, true, &mut out);
+    out
+}
+
+/// Mirror of [`header_resets_footnote_counter`]'s scoping walk.
+fn collect_zone_headings(
+    node: &typst_syntax::SyntaxNode,
+    template_names: &[String],
+    in_global_scope: bool,
+    out: &mut PageZoneHeadings,
+) {
+    use typst_syntax::SyntaxKind;
+    use typst_syntax::ast;
+
+    match node.kind() {
+        SyntaxKind::ShowRule => return,
+        SyntaxKind::ContentBlock => {
+            for child in node.children() {
+                collect_zone_headings(child, template_names, false, out);
+            }
+            return;
+        }
+        SyntaxKind::LetBinding => {
+            if let Some(binding) = node.cast::<ast::LetBinding<'_>>()
+                && let ast::LetBindingKind::Closure(name) = binding.kind()
+            {
+                let child_global = template_names.iter().any(|t| t == name.as_str());
+                for child in node.children() {
+                    collect_zone_headings(child, template_names, child_global, out);
+                }
+                return;
+            }
+        }
+        _ => {}
+    }
+
+    if in_global_scope {
+        let args = match node.kind() {
+            SyntaxKind::SetRule => node
+                .cast::<ast::SetRule<'_>>()
+                .filter(|set| matches!(set.target(), ast::Expr::Ident(i) if i.as_str() == "page"))
+                .map(ast::SetRule::args),
+            SyntaxKind::FuncCall => node
+                .cast::<ast::FuncCall<'_>>()
+                .filter(|call| matches!(call.callee(), ast::Expr::Ident(i) if i.as_str() == "page"))
+                .map(ast::FuncCall::args),
+            _ => None,
+        };
+        if let Some(args) = args {
+            for arg in args.items() {
+                if let ast::Arg::Named(named) = arg {
+                    let slot = match named.name().as_str() {
+                        "header" => &mut out.header,
+                        "footer" => &mut out.footer,
+                        _ => continue,
+                    };
+                    *slot = zone_heading_level(&named.expr()).or(*slot);
+                }
+            }
+        }
+    }
+
+    for child in node.children() {
+        collect_zone_headings(child, template_names, in_global_scope, out);
+    }
+}
+
+/// `Some(level)` when the zone content is purely a heading query.
+fn zone_heading_level(expr: &typst_syntax::ast::Expr<'_>) -> Option<u8> {
+    use typst_syntax::ast::{self, AstNode};
+    // Literal markup in a content block would be dropped by the STYLEREF
+    // field on update, so only pure code counts.
+    if let ast::Expr::ContentBlock(block) = expr
+        && !markup_text(block.to_untyped()).trim().is_empty()
+    {
+        return None;
+    }
+    heading_query_level(expr.to_untyped())
+}
+
+/// Walk the subtree for `heading` referenced inside a query/context
+/// expression, picking up `where(level: N)` along the way.
+fn heading_query_level(node: &typst_syntax::SyntaxNode) -> Option<u8> {
+    use typst_syntax::SyntaxKind;
+    use typst_syntax::ast;
+
+    let mut has_heading = false;
+    let mut has_queryish = false;
+    let mut level = None;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            SyntaxKind::Contextual => has_queryish = true,
+            SyntaxKind::FuncCall => {
+                if let Some(call) = n.cast::<ast::FuncCall<'_>>()
+                    && matches!(
+                        call.callee(),
+                        ast::Expr::Ident(i)
+                            if matches!(
+                                i.get().as_str(),
+                                "query" | "selector" | "locate" | "counter" | "where"
+                            )
+                    )
+                {
+                    has_queryish = true;
+                }
+            }
+            _ => {}
+        }
+        if let Some(ident) = n.cast::<ast::Ident<'_>>()
+            && ident.get().as_str() == "heading"
+        {
+            has_heading = true;
+        }
+        if let Some(named) = n.cast::<ast::Named<'_>>()
+            && named.name().as_str() == "level"
+            && let ast::Expr::Int(value) = named.expr()
+        {
+            level = u8::try_from(value.get()).ok();
+        }
+        stack.extend(n.children());
+    }
+    (has_heading && has_queryish).then_some(level.unwrap_or(1))
+}
+
 /// Whether the source resets the footnote counter inside a page header
 /// (`#set page(header: …)` containing `counter(footnote).update(N)` with an
 /// integer literal `N`, or the `#page(header: …)` call form).

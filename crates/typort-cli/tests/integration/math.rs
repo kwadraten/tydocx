@@ -209,7 +209,7 @@ fn numbered_equation_document_model_has_numbers() {
     let doc = fixture_document("numbered_eq");
 
     // Find paragraphs with numbered equations
-    let numbered_eqs: Vec<&str> = doc
+    let numbered_eqs: Vec<String> = doc
         .body
         .elements
         .iter()
@@ -221,7 +221,7 @@ fn numbered_equation_document_model_has_numbers() {
                         ..
                     } = inline
                     {
-                        return Some(num.as_str());
+                        return Some(num.as_text());
                     }
                 }
             }

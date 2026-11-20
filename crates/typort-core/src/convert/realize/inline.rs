@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 
 use crate::convert::footnote::parse_circled_number;
-use crate::convert::page::{CounterUse, classify_counter_use, counter_page_label};
+use crate::convert::page::{
+    CounterUse, DateTimeUse, classify_counter_use, counter_footnote_label, counter_page_label,
+    datetime_use, docproperty_use,
+};
 use typort_ir::{
-    Degradation, DegradationAction, HangingIndent, IrFirstLineIndent, IrImage, IrInline,
+    Degradation, DegradationAction, HangingIndent, IrField, IrFirstLineIndent, IrImage, IrInline,
     IrParStyle, IrParagraph,
 };
 use typort_ooxml::document::Alignment;
@@ -34,13 +37,22 @@ use super::with_fragment;
 use crate::convert::image::hash_bytes;
 use crate::convert::table_align::paint_to_shd_hex;
 
+/// A footnote seen in the pair stream: its location (matched against the
+/// paged frame entries), its rendered marker text, and the label a
+/// `counter(footnote).at(<label>)` reference would name.
+pub struct FootnoteMarker {
+    pub location: Location,
+    pub rendered: String,
+    pub label: Option<String>,
+}
+
 pub struct InlineCtx<'a> {
     pub defaults: &'a StyleDefaults,
     pub quoter: SmartQuoter,
     pub prev_char: Option<char>,
     pub label_map: &'a HashMap<Location, String>,
     pub bib_map: &'a HashMap<Location, String>,
-    pub footnote_markers: &'a mut Vec<(Location, String)>,
+    pub footnote_markers: &'a mut Vec<FootnoteMarker>,
     pub degradations: &'a mut Vec<Degradation>,
     pub source: Option<&'a Source>,
     pub block_math_as_inline: bool,
@@ -563,6 +575,19 @@ fn handle_tag_start(
                 });
                 return end + 1;
             }
+            CounterUse::PageTotal => {
+                return push_context_field(
+                    pairs,
+                    i,
+                    location,
+                    IrField::NumPages,
+                    inner.span(),
+                    engine,
+                    locator,
+                    ctx,
+                    out,
+                );
+            }
             CounterUse::PageCounterUnsupported => {
                 ctx.degradations.push(Degradation {
                     span: Some(inner.span()),
@@ -574,6 +599,22 @@ fn handle_tag_start(
                 });
             }
             CounterUse::FootnoteCounter => {
+                if let Some(label) = ctx
+                    .source
+                    .and_then(|source| counter_footnote_label(source, inner.span()))
+                {
+                    return push_context_field(
+                        pairs,
+                        i,
+                        location,
+                        IrField::NoteRef { label },
+                        inner.span(),
+                        engine,
+                        locator,
+                        ctx,
+                        out,
+                    );
+                }
                 ctx.degradations.push(Degradation {
                     span: Some(inner.span()),
                     construct: "footnote-counter-reference",
@@ -583,7 +624,35 @@ fn handle_tag_start(
                         .to_string(),
                 });
             }
-            CounterUse::Other => {}
+            CounterUse::Other => {
+                let field = ctx
+                    .source
+                    .and_then(|source| datetime_use(source, inner.span()))
+                    .map(|use_| match use_ {
+                        DateTimeUse::Date => IrField::Date,
+                        DateTimeUse::Time => IrField::Time,
+                    })
+                    .or_else(|| {
+                        ctx.source.and_then(|source| {
+                            docproperty_use(source, inner.span()).map(|name| IrField::DocProperty {
+                                name: name.to_string(),
+                            })
+                        })
+                    });
+                if let Some(field) = field {
+                    return push_context_field(
+                        pairs,
+                        i,
+                        location,
+                        field,
+                        inner.span(),
+                        engine,
+                        locator,
+                        ctx,
+                        out,
+                    );
+                }
+            }
         }
     }
     if let Some(image) = inner.to_packed::<ImageElem>() {
@@ -605,7 +674,11 @@ fn handle_tag_start(
             Some(text) if text != "0" => text,
             _ => (ctx.footnote_markers.len() + 1).to_string(),
         };
-        ctx.footnote_markers.push((location, rendered.clone()));
+        ctx.footnote_markers.push(FootnoteMarker {
+            location,
+            rendered: rendered.clone(),
+            label: inner.label().map(|label| label.resolve().to_string()),
+        });
         let mut body_ctx = InlineCtx {
             defaults: ctx.defaults,
             quoter: SmartQuoter::new(),
@@ -721,6 +794,56 @@ fn handle_tag_start(
         return end + 1;
     }
     i + 1
+}
+
+/// Consume a `context` tag group's rendered inlines into a generic C3 field:
+/// the group's own realization is the cached result (the C2 literal text),
+/// and `kind` is the field instruction Word recomputes on update.
+#[allow(clippy::too_many_arguments)]
+fn push_context_field(
+    pairs: &[Pair<'_>],
+    start_tag: usize,
+    location: Location,
+    kind: IrField,
+    span: Span,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    ctx: &mut InlineCtx<'_>,
+    out: &mut Vec<IrInline>,
+) -> usize {
+    let end = find_end(pairs, start_tag + 1, location);
+    let body = collect_fragment_inlines(&pairs[start_tag + 1..end], engine, locator, ctx);
+    ctx.prev_char = last_inline_char(&body).or(ctx.prev_char);
+    out.push(IrInline::Field {
+        kind,
+        body,
+        span: Some(span),
+    });
+    end + 1
+}
+
+/// The last rendered character a run of inlines contributes — for the
+/// smart-quote/space state the next text run sees.
+fn last_inline_char(inlines: &[IrInline]) -> Option<char> {
+    for inline in inlines.iter().rev() {
+        match inline {
+            IrInline::Text(run) => {
+                if let ch @ Some(_) = run.text.chars().next_back() {
+                    return ch;
+                }
+            }
+            IrInline::Space => return Some(' '),
+            IrInline::Link { body, .. }
+            | IrInline::Shape { body, .. }
+            | IrInline::Field { body, .. } => {
+                if let ch @ Some(_) = last_inline_char(body) {
+                    return ch;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn next_marker_text(pairs: &[Pair<'_>], start: usize) -> Option<String> {
