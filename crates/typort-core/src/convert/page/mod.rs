@@ -36,7 +36,11 @@ pub(crate) use language::is_cjk_char;
 pub(super) use language::{is_cjk_language, lang_region_to_bcp47};
 pub(super) use margin::header_footer_variant;
 pub(super) use margin::numbering_page_format;
-pub(super) use page_ref::{CounterUse, classify_counter_use, counter_page_label};
-pub(super) use source_ast::detect_page_setting_change;
+pub(super) use page_ref::{
+    CounterUse, DateTimeUse, classify_counter_use, counter_footnote_label, counter_page_label,
+    datetime_use, docproperty_use,
+};
+pub(crate) use source_ast::PageZoneHeadings;
+pub(super) use source_ast::{detect_page_setting_change, page_zone_heading_levels};
 pub(super) use style::apply_footnote_text_size;
 pub(super) use units::pt_to_twips;

@@ -7,6 +7,7 @@ mod compat;
 mod conformance;
 mod crop_float;
 mod diagnostics;
+mod fields;
 mod floats;
 mod fonts_cjk;
 mod footnotes;

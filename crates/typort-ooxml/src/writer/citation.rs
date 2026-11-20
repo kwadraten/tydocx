@@ -32,6 +32,7 @@ pub(super) fn write_citation_sdt<W: Write>(
     display_text: &str,
     sdt_id: u32,
     locale_id: u32,
+    anchor: Option<&str>,
 ) -> io::Result<()> {
     writer.create_element("w:sdt").write_inner_content(|sdt| {
         // SDT properties
@@ -63,17 +64,29 @@ pub(super) fn write_citation_sdt<W: Write>(
                 write_instruction_text_run(content, &instr)?;
                 // fldChar separate
                 write_fld_char(content, "separate")?;
-                // Display text with noProof
-                content.create_element("w:r").write_inner_content(|w| {
-                    w.create_element("w:rPr").write_inner_content(|rpr| {
-                        rpr.create_element("w:noProof").write_empty()?;
+                // Display text with noProof — a `w:hyperlink` keeps the
+                // resolved bibliography-entry link the literal output had.
+                let display_run = |w: &mut Writer<W>| -> io::Result<()> {
+                    w.create_element("w:r").write_inner_content(|r| {
+                        r.create_element("w:rPr").write_inner_content(|rpr| {
+                            rpr.create_element("w:noProof").write_empty()?;
+                            Ok(())
+                        })?;
+                        r.create_element("w:t")
+                            .with_attribute(("xml:space", "preserve"))
+                            .write_text_content(BytesText::new(display_text))?;
                         Ok(())
                     })?;
-                    w.create_element("w:t")
-                        .with_attribute(("xml:space", "preserve"))
-                        .write_text_content(BytesText::new(display_text))?;
                     Ok(())
-                })?;
+                };
+                if let Some(anchor) = anchor {
+                    content
+                        .create_element("w:hyperlink")
+                        .with_attribute(("w:anchor", anchor))
+                        .write_inner_content(display_run)?;
+                } else {
+                    display_run(content)?;
+                }
                 // fldChar end
                 write_fld_char(content, "end")?;
                 Ok(())

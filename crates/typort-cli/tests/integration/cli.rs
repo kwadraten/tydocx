@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::common::fixture_path;
+use crate::common::{fixture_path, paragraph_texts};
 
 fn typort_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_typort"))
@@ -153,10 +153,15 @@ fn cli_compat_modes_produce_identical_output() {
         String::from_utf8_lossy(&result.stderr)
     );
     xmls.push(document_xml(&default_output));
-    // complex_paper carries no gated constructs, so C1 matches C2/C3 here.
+    // complex_paper carries no C1-gated constructs; C3 wraps its dynamic
+    // values in Word fields whose cached results are the C2 literal text.
     assert_eq!(xmls[0], xmls[1], "c1 must match c2 on this fixture");
-    assert_eq!(xmls[1], xmls[2], "c2 must match c3 on this fixture");
-    assert_eq!(xmls[2], xmls[3], "default must match c2");
+    assert_eq!(xmls[1], xmls[3], "default must match c2");
+    assert_eq!(
+        paragraph_texts(&xmls[1]),
+        paragraph_texts(&xmls[2]),
+        "c3 field cached results must equal the c2 literal text"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 

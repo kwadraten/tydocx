@@ -18,10 +18,10 @@ lowerer). Both accept `c1` / `c2` / `c3`; the CLI flag is `--compat`, default
 |-------|------|----------|
 | C1 | minimal | Only constructs inside the Typst/OOXML intersection are emitted. Anything outside it is skipped or literalized and reported as a named degradation. |
 | C2 | graphical | Default. Everything C1 emits, plus Word's graphical vocabulary (anchored floats, numbered-list patterns, cell shading, section breaks, headers/footers) to preserve appearance where the semantic mapping does not reach. |
-| C3 | dynamic | Accepted, and **currently identical to C2**. No C3-only field codes (SEQ, CITATION, STYLEREF, NOTEREF, DATE, DOCPROPERTY, …) are emitted; the only compat gate in lowering is `is_c1()`. The C3 field layer remains design backlog — see [Open items](#open-items). |
+| C3 | dynamic | Everything C2 emits, plus Word **field codes** around the values C2 rendered literally: `w:updateFields` in `settings.xml`, ` NUMPAGES ` for `counter(page).final()`, ` NOTEREF <label> \h ` for `counter(footnote).at(<label>)`, ` DATE `/` TIME ` for `datetime.today()`/`now()`, ` DOCPROPERTY <name> ` for `document.<field>` reads, ` SEQ ` for single-piece figure/table/equation numbering, ` STYLEREF "Heading N" ` for pure heading-query page zones, and ` CITATION <key> \l 1033 ` for `@key`/`#cite`. Every field carries the C2 literal as its cached result, so disconnecting all fields reproduces C2 (D1). |
 
-In the tables below, the "C2/C3" column therefore describes what both levels
-emit today.
+In the tables below, the "C2/C3" column describes what both levels emit; a
+row calls out the C3 form explicitly only where C3 differs from C2.
 
 ## How to read this document
 
@@ -130,9 +130,9 @@ flowchart LR
 
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
-| `#figure` | body + caption paragraph; `gap` → spacing; label → bookmark; supplement + number literal in the caption | same | same |
+| `#figure` | body + caption paragraph; `gap` → spacing; label → bookmark; supplement + number in the caption; C3: a single-piece caption number renders as ` SEQ <Figure\|Table> [\* fmt] ` with the rendered numeral cached | same | C2: literal number / C3: ` SEQ ` field |
 | `figure(placement: top/bottom)` explicit | lone-table body → `w:tblpPr` floating table (caption becomes a grid-spanning row); other bodies → anchored `wps:txbx` at the measured position | body kept in flow + `"figure-placement"`/`"placed-content"` | `w:tblpPr` / anchored `txbx`; unmeasured → flow fallback + `"placed-content"` |
-| `$x$` / `$ x $` | `m:oMath` inline / `m:oMathPara` block; equation numbering `(1)` literal | same | same |
+| `$x$` / `$ x $` | `m:oMath` inline / `m:oMathPara` block; equation numbering `(1)`; C3: a single-piece numbering pattern renders as ` SEQ equation [\* fmt] ` with the rendered numeral cached | same | C2: literal number / C3: ` SEQ ` field |
 | `#image` (raster) | `w:drawing` + `wp:inline` + `a:blip` (`pic:pic`) | same | same |
 | `#image` (SVG) | `mc:AlternateContent`: `asvg:svgBlip` (Choice) + PNG `a:blip` (Fallback) | PNG bytes only + `"vector-image"` | full AlternateContent |
 | `image(fit: "cover")` | `a:srcRect` l/t/r/b derived from the measured clip window; the declared box stays the `wp:extent` and the full bytes stay embedded | same | same |
@@ -158,9 +158,9 @@ flowchart LR
 
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
-| `#bibliography` | `w:sdt` + `w:bibliography` gallery + ` BIBLIOGRAPHY ` field wrapping cached entry paragraphs; `customXml/sources.xml` carries the hayagriva metadata Word's field needs | same | same |
+| `#bibliography` | `w:sdt` + `w:bibliography` gallery + ` BIBLIOGRAPHY ` field wrapping cached entry paragraphs; `customXml/item1.xml` carries the hayagriva metadata Word's field needs | same | same |
 | bibliography entries | collected from the fragment realization (link marker + `BibEntry` pdf-tag body → `bib-N` bookmarks). On the current corpus the entry grid is not surfaced, so the field renders **empty** + `"bibliography-entries"` (all levels; registered gap — see `fallback-registry.md`) | same | same |
-| `@key` / `#cite` | literal rendered marker; when the target entry bookmark resolved it is wrapped in `w:hyperlink w:anchor` — **not** a `CITATION` field (in practice literal today, since entries do not extract) | same | same |
+| `@key` / `#cite` | C3: ` CITATION <key> \l 1033 ` complex field with the rendered marker cached (D2 — the marker stays literal at C1/C2; when the target entry bookmark resolved it is wrapped in `w:hyperlink w:anchor`). `customXml/item1.xml` carries the hayagriva metadata at every level | same | C3 emits the field |
 | `#cite(form:)` | rendered form literal | same | same |
 
 ## Outlines and cross-references
@@ -175,8 +175,9 @@ flowchart LR
 | `@label` with `supplement: auto`/`Page` | ` PAGEREF <label> \h ` | same | same |
 | unresolved label/link target | literal text + `"unresolved-link"` (all levels) | same | same |
 | `context counter(page)` in body text | ` PAGE ` field with cached display text | same | same |
+| `context counter(page).final()` | C3: ` NUMPAGES ` field with the rendered total cached | literal + `"page-counter-value"` | C3 emits the field |
 | arithmetic on `counter(page)` | literal + `"page-counter-value"` (all levels) | same | same |
-| `counter(footnote)` references | literal + `"footnote-counter-reference"` (all levels; a `NOTEREF` field is a C3 backlog item) | same | same |
+| `counter(footnote)` references | literal + `"footnote-counter-reference"` (C1/C2). C3: ` NOTEREF <label> \h ` with the rendered marker cached; the labelled `FootnoteElem` carries a `w:bookmarkStart`/`w:bookmarkEnd` of the label's name — a reference whose label never lands on a footnote stays literal + the same report | same | C3 emits the field |
 | labels on headings/figures/equations | `w:bookmarkStart`/`w:bookmarkEnd` | same | same |
 | `#quote` | left-indented paragraphs; attribution appended | same | same |
 
@@ -190,10 +191,12 @@ flowchart LR
 | `#set align(horizon/bottom)` page | `w:vAlign` in `w:sectPr` | same | same |
 | `#set page(numbering: "…")` | `w:pgNumType w:fmt` per section; unmappable pattern → `"page-numbering-pattern"` and glyph-based detection (all levels) | same | same |
 | page number restart | `w:pgNumType w:start` when the rendered footer numbering diverges | same | same |
-| `#set page(header:/footer:)` | `w:headerReference`/`w:footerReference` (default, first, even) + `w:titlePg`/`w:evenAndOddHeaders`; bare page numbers become ` PAGE ` fields inside the generated part | page-1 zone kept as literal paragraphs + `"header-footer-variant"` | three slots; mid-document variants beyond what the slots express → `"header-footer-variant"` report |
+| `#set page(header:/footer:)` | `w:headerReference`/`w:footerReference` (default, first, even) + `w:titlePg`/`w:evenAndOddHeaders`; bare page numbers become ` PAGE ` fields inside the generated part. C3: a zone whose whole content is a heading query (`query(selector(heading).before(here()))`, `where(level: N)` picked up) renders as ` STYLEREF "Heading N" ` with the extracted heading text cached; mixed-markup zones stay literal | page-1 zone kept as literal paragraphs + `"header-footer-variant"` | three slots; mid-document variants beyond what the slots express → `"header-footer-variant"` report |
 | `#set page(margin: (inside/outside))` two-sided | `w:mirrorMargins` is **not** emitted | + `"mirrored-margins"` | silently kept as resolved left/right |
 | `#set page(foreground:/background:)`, `page(fill:)` | not emitted; in C1 the furniture text is literalized into the body | + `"page-foreground"` literalized | silently dropped |
 | `#set document(title/author/description/keywords/date)` | `docProps/core.xml` (`dc:title`, `dc:creator`, `dc:subject`, `cp:keywords`, `dcterms:created`); title falls back to the first heading | same | same |
+| `context document.<field>` reads | C3: ` DOCPROPERTY <name> ` with the rendered text cached — `title`→`Title`, `author`→`Author`, `keywords`→`Keywords`, `description`→`Comments`, `date`→`CreateDate`; other fields stay literal | same | C3 emits the field |
+| `context datetime.today()`/`now()` (any display form) | C3: ` DATE `/` TIME ` with the rendered text cached — an explicit `.display(format)` keeps its rendered text as the cached result; the field carries no `\@` switch | same | C3 emits the field |
 
 ## Sections, breaks, placement
 
@@ -243,9 +246,10 @@ semantics (literal numbers are text, not `w:numPr`); when a trick cannot be
 measured it falls back to the C1 form plus a report, never a misplaced trick.
 
 **Layering.** `C3 = C2 + fields`, strictly: C1 ⊂ C2 ⊂ C3 — decided 2026-11-16
-(D1). The acceptance invariant for future C3 work: a C3 field's cached result
-must equal the C2 literal output, so disconnecting all fields reproduces C2.
-`w:updateFields` in `settings.xml` is deferred with the field layer (D5).
+(D1). The acceptance invariant, now enforced by the C3 field layer: a C3
+field's cached result equals the C2 literal output, so disconnecting all
+fields reproduces C2. `w:updateFields` in `settings.xml` is emitted at C3
+only (D5 — implemented with the field layer).
 
 **Aspect-level SVG embedding.** The C2 fallback ladder's last resort, when no
 native or shape encoding exists, is embedding the construct as an SVG part
@@ -253,9 +257,10 @@ native or shape encoding exists, is embedding the construct as an SVG part
 the text is no longer in Word's text layer. It must not replace a native
 encoding that exists.
 
-**Citations.** Default output keeps literal markers (+ internal links when
-entries resolve), never `CITATION` fields — the L6/D2 ruling; whether C3
-emits `CITATION` is deferred until the C3 field layer lands (D2).
+**Citations.** C1/C2 output keeps literal markers (+ internal links when
+entries resolve), never `CITATION` fields — the L6/D2 ruling; C3 emits
+` CITATION <key> \l 1033 ` with the literal marker cached (D2, decided when
+the C3 field layer landed).
 
 ## Degradation report
 
@@ -281,12 +286,22 @@ source-AST-set-rule reports.
 Recorded here so future C3 work and known gaps have one permanent home; the
 per-feature *degradation* list above is exhaustive.
 
-- **C3 field layer — not implemented.** The design calls for C3 = C2 + fields
-  Word can recompute: `SEQ` for enum/figure/table numbering, `CITATION` +
-  `customXml` for citations, `STYLEREF` for running headers, `DATE`/`TIME`,
-  `NUMPAGES`, `NOTEREF` for footnote-counter references, `DOCPROPERTY` for
-  `document` metadata, `HYPERLINK` as a field. None of this is emitted today —
-  C3 output is byte-identical to C2 (pinned by the compat tests).
+- **C3 field layer — remainder.** The layer landed: `w:updateFields`,
+  `NUMPAGES`, `NOTEREF` + footnote bookmark, `DATE`, `DOCPROPERTY`, `SEQ`
+  (figure/table/equation captions), `STYLEREF` for pure heading-query page
+  zones, `CITATION` + the pre-existing `customXml` sources part, and the
+  `HYPERLINK` field form (`w:fldSimple`, already emitted at every level).
+  What it deliberately does not cover:
+  - `SECTIONPAGES` — Typst has no per-section total-page construct;
+    `counter(page).final()` is always whole-document, so ` NUMPAGES ` is the
+    only faithful mapping.
+  - `TIME` — `datetime.now()` does not exist in Typst 0.15, so no source
+    expression can feed it; the mapping lands if Typst adds one.
+  - `SEQ` for enums — C2 never emits literal enum numbering (unmapped
+    numeral systems fall back to `w:numPr` decimal, so there is no literal
+    to cache); native `w:numPr` numbering is left alone by design.
+  - `DATE \@ `/`DOCPROPERTY` format switches, and `STYLEREF` for zones
+    mixing the heading query with literal markup.
 - **`enum(reversed:)`** is silently forward-numbered at C2/C3; only C1
   reports it.
 - **`outline(target:)`** non-heading and custom `outline(indent:)` are silently

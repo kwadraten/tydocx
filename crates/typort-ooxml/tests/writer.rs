@@ -1554,7 +1554,9 @@ mod tests {
         assert_eq!(para.inlines.len(), 1);
         assert!(matches!(
             &para.inlines[0],
-            document::InlineElement::Citation { keys, display_text }
+            document::InlineElement::Citation {
+                keys, display_text, ..
+            }
                 if keys == &["Smi20"] && display_text == "(Smith, 2020)"
         ));
     }

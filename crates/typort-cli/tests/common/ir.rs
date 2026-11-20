@@ -38,7 +38,9 @@ fn inline_text(inlines: &[IrInline], out: &mut String, generated: &mut BTreeSet<
                 generated.insert(rendered.clone());
             }
             IrInline::Space => out.push(' '),
-            IrInline::Shape { body, .. } => inline_text(body, out, generated),
+            IrInline::Shape { body, .. } | IrInline::Field { body, .. } => {
+                inline_text(body, out, generated)
+            }
             IrInline::LineBreak | IrInline::Tab | IrInline::PageBreak | IrInline::ColumnBreak => {
                 out.push(' ')
             }
@@ -146,7 +148,7 @@ fn block_texts<'a>(
             }
             IrBlock::Equation(equation) => {
                 if let Some(number) = &equation.number {
-                    generated.insert(number.clone());
+                    generated.insert(number.display.clone());
                 }
             }
             IrBlock::Quote { body } | IrBlock::Place { body, .. } | IrBlock::Shape { body, .. } => {
@@ -324,10 +326,13 @@ fn inline_variant_names<'a>(
             IrInline::Tab => "Tab",
             IrInline::PageField { .. } => "PageField",
             IrInline::Shape { .. } => "Shape",
+            IrInline::Field { .. } => "Field",
             IrInline::Overline(_) => "Overline",
         });
         match inline {
-            IrInline::Link { body, .. } | IrInline::Shape { body, .. } => {
+            IrInline::Link { body, .. }
+            | IrInline::Shape { body, .. }
+            | IrInline::Field { body, .. } => {
                 inline_variant_names(body.iter(), variants);
             }
             _ => {}

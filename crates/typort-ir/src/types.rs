@@ -58,11 +58,42 @@ pub struct IrDocumentInfo {
     pub created: Option<String>,
 }
 
+/// Which Word field code an [`IrInline::Field`] emits at C3.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IrField {
+    /// ` NUMPAGES ` — Typst `context counter(page).final()`.
+    NumPages,
+    /// ` NOTEREF <label> \h ` — `counter(footnote).at(<label>)` where the
+    /// label marks a footnote; that footnote carries the matching bookmark.
+    NoteRef { label: String },
+    /// ` DATE ` — `datetime.today()`.
+    Date,
+    /// ` TIME ` — a `datetime`-shaped time call.
+    Time,
+    /// ` STYLEREF "Heading <level>" ` — a running-header heading
+    /// reference (`context` + a `query(heading)`/`locate` body in a page
+    /// header or footer).
+    StyleRef { level: u8 },
+    /// ` DOCPROPERTY <name> ` — a `context document.<field>` read
+    /// (`document.title`, `document.author`, `document.description`,
+    /// `document.keywords`, `document.date`).
+    DocProperty { name: String },
+    /// ` SEQ <identifier> ` — a single-piece numeral spliced out of literal
+    /// numbering text (figure captions, equation numbers).
+    Seq {
+        identifier: String,
+        system: IrNumeralSystem,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrFootnote {
     pub ordinal: u32,
     pub rendered: String,
     pub body: Vec<IrParagraph>,
+    /// The footnote element's own `<label>`, when one is attached —
+    /// `counter(footnote).at(<label>)` references point at it.
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +144,10 @@ pub enum IrBlock {
         /// (e.g. `#show figure.caption: set par(first-line-indent: 0pt)`);
         /// emitted as `w:ind`/`w:jc` overrides when they differ from Normal.
         caption_par: IrParStyle,
+        /// The numeral's position inside `caption`'s flattened text plus its
+        /// split — the C3 ` SEQ ` field splices it out at lowering, so the
+        /// caption inlines themselves stay byte-identical to C2.
+        caption_seq: Option<IrCaptionSeq>,
         kind: IrFigureKind,
         supplement: Option<String>,
         label: Option<String>,
@@ -292,6 +327,16 @@ pub enum IrInline {
     Tab,
     PageField {
         display_text: String,
+    },
+    /// A Word field (`w:fldChar`/`w:instrText` complex field). `body` holds
+    /// the inlines the field replaces: at C1/C2 it lowers verbatim (the
+    /// field's cached result equals the literal output — D1); at C3 the
+    /// `kind` decides the `w:instrText` field code.
+    Field {
+        kind: IrField,
+        body: Vec<IrInline>,
+        /// Source span, so a pre-C3 fallback degradation keeps its position.
+        span: Option<typst_syntax::Span>,
     },
     Shape {
         kind: IrShapeKind,
@@ -531,6 +576,19 @@ pub enum IrNumeralSystem {
 }
 
 impl IrNumeralSystem {
+    /// The `\*` format switch for a `SEQ` field code (`None` for arabic —
+    /// the field's own default).
+    #[must_use]
+    pub fn seq_switch(self) -> Option<&'static str> {
+        match self {
+            Self::Arabic => None,
+            Self::LowerLatin => Some("alphabetic"),
+            Self::UpperLatin => Some("ALPHABETIC"),
+            Self::LowerRoman => Some("roman"),
+            Self::UpperRoman => Some("ROMAN"),
+        }
+    }
+
     /// OOXML `w:numFmt` value for this system.
     #[must_use]
     pub fn num_fmt(self) -> &'static str {
@@ -597,8 +655,43 @@ fn to_roman(mut number: u64, upper: bool) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrEquation {
     pub omml: String,
-    pub number: Option<String>,
+    pub number: Option<IrEquationNumber>,
     pub bookmark: Option<String>,
+}
+
+/// A block equation's rendered number. `display` holds the full literal text
+/// the pattern produced (affixes included — "(1)"); `seq` splits the numeral
+/// out of it when the pattern is a single piece in a SEQ-mappable system, so
+/// C3 can field-wrap the numeral while the affixes stay literal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrEquationNumber {
+    pub display: String,
+    pub seq: Option<IrSeqSplit>,
+}
+
+/// The caption numeral's location inside a figure caption's flattened text —
+/// spliced out into an `IrInline::Field` only when C3 lowers the caption.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrCaptionSeq {
+    /// Char offset of `seq.numeral` within the caption's visible text.
+    pub offset: usize,
+    /// The numeral split — identifier and numeral system drive the SEQ code.
+    pub seq: IrSeqSplit,
+}
+
+/// A numeral split out of rendered numbering text by its pattern's affixes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrSeqSplit {
+    /// The pattern's prefix inside `display` ("(").
+    pub prefix: String,
+    /// The rendered numeral itself ("1").
+    pub numeral: String,
+    /// The pattern's suffix inside `display` (")").
+    pub suffix: String,
+    /// The numeral system — decides the SEQ field's `\*` switch.
+    pub system: IrNumeralSystem,
+    /// The SEQ identifier (the element's counter name, e.g. "equation").
+    pub identifier: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

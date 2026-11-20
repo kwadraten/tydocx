@@ -99,6 +99,17 @@ that remain, each because no `StyleChain` or pair carries the value:
 - **`counter(page).at(<label>)` targets** — the label is recovered from the
   source span (`counter_page_label`), used only to classify an
   already-realized `RefElem`.
+- **`context` expression classification** — a `ContextElem` pair carries the
+  rendered text but not the expression that produced it, so the C3 fields
+  classify the span's source (`classify_counter_use` adds
+  `counter(page).final()` → ` NUMPAGES `; `counter_footnote_label`,
+  `datetime_use`, `docproperty_use` → ` NOTEREF `/` DATE `/` DOCPROPERTY `).
+  The cached result always comes from the pair's own realization; source
+  only picks the field code.
+- **Heading-query page zones** — a `page(header:/footer:)` query evaluates
+  per page, so nothing in the IR keeps whether a zone's content is purely a
+  heading reference; `page_zone_heading_levels` reads it from source for
+  the C3 ` STYLEREF "Heading N" ` wrap in `apply_headers_and_footers`.
 - **Overline span matching** — `overline.rs` uses source spans to attach
   Paged geometry to IR runs; it reads positions, not style values.
 
@@ -116,7 +127,7 @@ bodies — now comes from `StyleChain`s or element identity.
   `bibliography_multiple`) the grid is not surfaced, so entries come back
   empty: the output carries an empty `<w:bibliography/>` field, no entry
   paragraphs, and no `w:hyperlink` citation anchors, reported as
-  `bibliography-entries`. `customXml/sources.xml` is emitted correctly.
+  `bibliography-entries`. `customXml/item1.xml` is emitted correctly.
   The lowering is correct for a populated entry list; only the entry
   *extraction* is missing.
 - **Retargeted tests** (all run on `convert_legacy` until this closes):
@@ -358,10 +369,35 @@ bodies — now comes from `StyleChain`s or element identity.
   `typort-ir` and has core re-export them (or vice versa).
 
 ### C3 field layer
-- **What:** `--compat c3` is accepted but emits C2-identical output — no
-  C3-only field codes are implemented. The deferred C3 set (`SEQ`,
-  `CITATION`, `STYLEREF`, `DATE`/`TIME`, `NUMPAGES`, `NOTEREF`,
-  `DOCPROPERTY`, `HYPERLINK`) is recorded in `docs/spec-ecma376.md`.
+- **What landed:** `--compat c3` emits `w:updateFields`, ` NUMPAGES `
+  (`counter(page).final()`), ` NOTEREF <label> \h ` (`counter(footnote)`
+  references to labelled footnotes — the footnote carries a matching
+  `w:bookmarkStart`), ` DATE ` (`datetime.today()`), ` DOCPROPERTY `
+  (`document.title`/`author`/`keywords`/`description`/`date` →
+  Title/Author/Keywords/Comments/CreateDate), ` SEQ ` for single-piece
+  figure/table caption numbers and equation numbering, ` STYLEREF
+  "Heading N" ` for page zones whose whole content is a heading query,
+  and ` CITATION <key> \l 1033 ` for `@key`/`#cite` (D2 decided — the
+  marker stays literal at C1/C2). `customXml/item1.xml` carries the
+  hayagriva sources at every level. `#link(url)` was already a
+  `w:fldSimple` ` HYPERLINK ` field at all levels, so the field form was
+  already in place. Every field's cached result is the C2 literal,
+  pinned corpus-wide by `fields::c3_cached_results_reproduce_c2_text`
+  (D1); a field body the cache cannot carry losslessly falls back to the
+  literal runs.
+- **Registered remainder:**
+  - `SECTIONPAGES` — Typst has no per-section total-page construct
+    (`counter(page).final()` is always whole-document), so there is no
+    source expression to feed it.
+  - `TIME` — `datetime.now()` does not exist in Typst 0.15.
+  - `SEQ` for enums — C2 never emits literal enum numbering (unmapped
+    systems fall back to `w:numPr` decimal), so there is no literal to
+    cache; native `w:numPr` numbering must not regress.
+  - `DATE \@ `/`DOCPROPERTY` format switches, multi-piece `SEQ` numbering
+    (`1.1`-style counters), `STYLEREF` for zones that mix the heading
+    query with literal markup, and ` NOTEREF ` for references whose label
+    never lands on a `FootnoteElem` (stays literal +
+    `footnote-counter-reference`, same as C2).
 
 ## Numbering invariants
 

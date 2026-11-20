@@ -30,6 +30,11 @@ impl CompatMode {
     pub const fn is_c1(self) -> bool {
         matches!(self, Self::C1)
     }
+
+    #[must_use]
+    pub const fn is_c3(self) -> bool {
+        matches!(self, Self::C3)
+    }
 }
 
 #[cfg(test)]

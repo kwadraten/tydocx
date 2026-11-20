@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use codex::numeral_systems::NamedNumeralSystem;
 use typort_ir::{
-    Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrBorder,
+    Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrBorder, IrCaptionSeq,
     IrCellBorderFlags, IrCellBorders, IrDocument, IrDocumentInfo, IrEnum, IrEnumItem, IrEquation,
-    IrFigureKind, IrGrid, IrGridLine, IrHeadingNumbering, IrInline, IrList, IrListItem,
-    IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParStyle, IrParagraph, IrPlaceWrap,
-    IrRaw, IrSection, IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow,
-    IrTrackSize, IrVMerge, PageSettings, TableBorders, TableCellMargins,
+    IrEquationNumber, IrFigureKind, IrGrid, IrGridLine, IrHeadingNumbering, IrInline, IrList,
+    IrListItem, IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParStyle, IrParagraph,
+    IrPlaceWrap, IrRaw, IrSection, IrSectionBreakType, IrSeqSplit, IrShapeKind, IrTable,
+    IrTableCell, IrTableRow, IrTrackSize, IrVMerge, PageSettings, TableBorders, TableCellMargins,
 };
 use typort_ooxml::document::{Alignment, Run, VerticalAlign};
 use typst_library::World;
@@ -43,8 +43,8 @@ use typst_syntax::Source;
 use typst_syntax::Span;
 
 use super::inline::{
-    InlineCtx, alignment_from_styles, collect_inlines, collect_paragraph, image_inline,
-    par_style_from_styles, smart_quotes_for, spacing_twips,
+    FootnoteMarker, InlineCtx, alignment_from_styles, collect_inlines, collect_paragraph,
+    image_inline, par_style_from_styles, smart_quotes_for, spacing_twips,
 };
 use super::page;
 use super::style::{StyleDefaults, defaults_from_root, monospace_families, run_from_styles};
@@ -53,7 +53,7 @@ use crate::convert::table_align::paint_to_shd_hex;
 use crate::convert::table_width::{TableWidthCtx, track_widths_pct};
 
 pub struct CollectorState {
-    pub footnote_markers: Vec<(Location, String)>,
+    pub footnote_markers: Vec<FootnoteMarker>,
     pub footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
     pub footnote_circled: bool,
     pub degradations: Vec<Degradation>,
@@ -68,7 +68,7 @@ pub struct Collector<'a> {
     label_map: HashMap<Location, String>,
     bib_map: HashMap<Location, String>,
     bib_entries: Option<Vec<IrBibEntry>>,
-    footnote_markers: Vec<(Location, String)>,
+    footnote_markers: Vec<FootnoteMarker>,
     footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
     footnote_circled: bool,
     degradations: Vec<Degradation>,
@@ -1497,6 +1497,7 @@ impl Collector<'_> {
         let mut caption: Vec<IrInline> = Vec::new();
         let mut caption_alignment: Option<Alignment> = None;
         let mut caption_par = IrParStyle::default();
+        let mut caption_seq: Option<IrCaptionSeq> = None;
         let mut supplement: Option<String> = None;
         let mut caption_first = false;
         let mut body: Vec<IrBlock> = Vec::new();
@@ -1530,6 +1531,20 @@ impl Collector<'_> {
                             caption_par = par_style_from_styles(*s);
                             let mut ctx = self.inline_ctx();
                             caption = collect_inlines(body_c, *s, engine, locator, &mut ctx)?;
+                            if let Some(seq) = caption_number_seq(
+                                caption_elem,
+                                seq_identifier(meta.kind),
+                                *s,
+                                engine,
+                            ) {
+                                // Realize emits `supplement + \u{a0} + numbers
+                                // + separator + body`; the numeral's char
+                                // offset is right after that supplement.
+                                let offset = supplement
+                                    .as_ref()
+                                    .map_or(0, |text| text.chars().count() + 1);
+                                caption_seq = Some(IrCaptionSeq { offset, seq });
+                            }
                         }
                     }
                 } else {
@@ -1555,6 +1570,7 @@ impl Collector<'_> {
             caption,
             caption_alignment,
             caption_par,
+            caption_seq,
             kind: meta.kind,
             supplement,
             label: meta.label.clone(),
@@ -2294,12 +2310,19 @@ impl Collector<'_> {
         })]
     }
 
-    fn equation_number(&self, equation: &EquationElem, styles: StyleChain<'_>) -> Option<String> {
-        let Some(Numbering::Pattern(pattern)) = equation.numbering.get_cloned(styles) else {
+    fn equation_number(
+        &self,
+        equation: &EquationElem,
+        styles: StyleChain<'_>,
+    ) -> Option<IrEquationNumber> {
+        let numbering = equation.numbering.get_cloned(styles)?;
+        let Numbering::Pattern(pattern) = &numbering else {
             return None;
         };
         let nums = vec![self.eq_count];
-        pattern.apply(None, &nums).ok().map(|s| s.to_string())
+        let display = pattern.apply(None, &nums).ok()?.to_string();
+        let seq = single_piece_seq(&numbering, self.eq_count, "equation");
+        Some(IrEquationNumber { display, seq })
     }
 
     fn collect_raw(
@@ -3320,7 +3343,7 @@ fn bold_inlines(inlines: &mut [IrInline]) {
     for inline in inlines {
         match inline {
             IrInline::Text(run) => run.bold = true,
-            IrInline::Link { body, .. } => bold_inlines(body),
+            IrInline::Link { body, .. } | IrInline::Field { body, .. } => bold_inlines(body),
             _ => {}
         }
     }
@@ -3503,6 +3526,69 @@ fn pattern_from_numbering(numbering: &Numbering, full: bool) -> Option<IrNumberi
         pieces,
         suffix: pattern.suffix.to_string(),
         full,
+    })
+}
+
+/// The prefix/numeral/suffix split a single-piece numbering pattern gives a
+/// rendered number — what a `SEQ` field needs: the numeral is the field's
+/// cached result, prefix+suffix stay literal.
+fn single_piece_seq(numbering: &Numbering, number: u64, identifier: &str) -> Option<IrSeqSplit> {
+    let pattern = pattern_from_numbering(numbering, false)?;
+    let [piece] = pattern.pieces.as_slice() else {
+        return None;
+    };
+    Some(IrSeqSplit {
+        prefix: piece.prefix.clone(),
+        numeral: piece.system.render(number),
+        suffix: pattern.suffix.clone(),
+        system: piece.system,
+        identifier: identifier.to_string(),
+    })
+}
+
+/// Word's SEQ identifier for a figure kind — matches Word's own caption
+/// numbering (` SEQ Figure `, ` SEQ Table `).
+fn seq_identifier(kind: IrFigureKind) -> &'static str {
+    match kind {
+        IrFigureKind::Table => "Table",
+        IrFigureKind::Image | IrFigureKind::Other => "Figure",
+    }
+}
+
+/// The SEQ split of a figure caption's number — `None` unless the caption
+/// carries a synthesized counter/numbering/location AND the numbering is a
+/// single-piece pattern. The numeral text is the counter's own display, so
+/// the C3 field's cached result is exactly the C2 literal.
+fn caption_number_seq(
+    caption: &Packed<FigureCaption>,
+    identifier: &str,
+    styles: StyleChain<'_>,
+    engine: &mut Engine,
+) -> Option<IrSeqSplit> {
+    let (Some(Some(numbering)), Some(Some(counter)), Some(Some(location))) = (
+        &caption.numbering,
+        &caption.counter,
+        &caption.figure_location,
+    ) else {
+        return None;
+    };
+    let numbers = counter
+        .display_at(engine, *location, styles, numbering, caption.span())
+        .ok()?;
+    let numeral = plain_text(&numbers);
+    if numeral.is_empty() {
+        return None;
+    }
+    let pattern = pattern_from_numbering(numbering, false)?;
+    let [piece] = pattern.pieces.as_slice() else {
+        return None;
+    };
+    Some(IrSeqSplit {
+        prefix: String::new(),
+        numeral,
+        suffix: String::new(),
+        system: piece.system,
+        identifier: identifier.to_string(),
     })
 }
 

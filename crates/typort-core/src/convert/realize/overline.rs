@@ -82,7 +82,9 @@ fn ir_has_overline(doc: &IrDocument) -> bool {
     fn inlines_have(inlines: &[IrInline]) -> bool {
         inlines.iter().any(|inline| match inline {
             IrInline::Text(run) => run.overline,
-            IrInline::Link { body, .. } | IrInline::Shape { body, .. } => inlines_have(body),
+            IrInline::Link { body, .. }
+            | IrInline::Shape { body, .. }
+            | IrInline::Field { body, .. } => inlines_have(body),
             _ => false,
         })
     }

@@ -207,7 +207,13 @@ pub fn export(
     );
 
     // 4. Apply headers and footers.
-    apply_headers_and_footers(paged_doc, &mut doc, options.compat, &mut degradations);
+    apply_headers_and_footers(
+        paged_doc,
+        world,
+        &mut doc,
+        options.compat,
+        &mut degradations,
+    );
 
     // 5. Run post-processing passes.
     run_post_passes(
@@ -326,6 +332,7 @@ fn walk_body(
 
 fn apply_headers_and_footers(
     paged_doc: Option<&PagedDocument>,
+    world: &TyportWorld,
     doc: &mut Document,
     compat: CompatMode,
     degradations: &mut Vec<Degradation>,
@@ -339,12 +346,22 @@ fn apply_headers_and_footers(
         // The declared page-numbering format (from `#set page(numbering:)`,
         // consumed in `apply_source_overrides`) wins over glyph guessing.
         let declared = doc.page_numbering;
-        let top = page::extract_zone_parts(paged, page::MarginZone::Top, margins, declared);
+        let mut top = page::extract_zone_parts(paged, page::MarginZone::Top, margins, declared);
+        let zones = zone_heading_levels(world, compat);
+        // A pure heading-query header is exactly the case `extract_zone_parts`
+        // calls unrepresentable — the STYLEREF field makes it representable.
+        let header_styleref = zones.header.is_some_and(|level| {
+            styleref_zone(&mut top.default, level)
+                | styleref_zone(&mut top.even, level)
+                | styleref_zone(&mut top.first, level)
+        });
         let header_first_differs = top.title_page;
         let header_even_differs = top.even_and_odd;
         doc.even_and_odd_headers |= top.even_and_odd;
         doc.title_page |= top.title_page;
-        report_zone_unrepresentable(&top, "header", compat, degradations);
+        if !header_styleref {
+            report_zone_unrepresentable(&top, "header", compat, degradations);
+        }
         if doc.header.is_none() {
             doc.header.clone_from(&top.default);
         }
@@ -420,6 +437,53 @@ fn apply_headers_and_footers(
             doc.page_number_footers.first = false;
         }
     }
+}
+
+/// The heading level each margin zone queries, when C3 is active — read from
+/// the source AST (the query renders per page, so nothing else in the IR
+/// keeps the expression).
+fn zone_heading_levels(world: &TyportWorld, compat: CompatMode) -> page::PageZoneHeadings {
+    if compat != CompatMode::C3 {
+        return page::PageZoneHeadings::default();
+    }
+    let main = world.main_source();
+    let template_names = page::extract_show_template_names_from_source(main.text());
+    page::page_zone_heading_levels(main.text(), &template_names)
+}
+
+/// Replace a zone part's paragraphs with a `STYLEREF "Heading N"` field —
+/// each paragraph must be plain text runs (a mixed-content paragraph would
+/// lose literal text on field update and is left alone). Returns whether any
+/// paragraph was wrapped.
+fn styleref_zone(part: &mut Option<HeaderFooter>, level: u8) -> bool {
+    let Some(part) = part else {
+        return false;
+    };
+    let mut wrapped = false;
+    for para in &mut part.paragraphs {
+        if para.inlines.is_empty()
+            || !para
+                .inlines
+                .iter()
+                .all(|i| matches!(i, InlineElement::Text(_)))
+        {
+            continue;
+        }
+        let runs: Vec<Run> = para
+            .inlines
+            .iter()
+            .filter_map(|i| match i {
+                InlineElement::Text(run) => Some(run.clone()),
+                _ => None,
+            })
+            .collect();
+        para.inlines = vec![InlineElement::Field {
+            instruction: format!(" STYLEREF \"Heading {level}\" "),
+            result: runs,
+        }];
+        wrapped = true;
+    }
+    wrapped
 }
 
 /// In C2/C3 a first-page or odd/even zone variant is representable, so only a

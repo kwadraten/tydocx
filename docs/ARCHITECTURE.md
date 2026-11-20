@@ -322,8 +322,9 @@ Rules the equivalence round established (see
   a ref target that is not a document label is a bibliography key, and
   the collector emits `IrInline::Cite` with the full literal marker text
   (`"[1]"`, `"[1], [2]"`) and `target: None` until bibliography entries
-  exist. Citations are literal markers plus internal links, never
-  `CITATION` fields.
+  exist. C1/C2 keep citations as literal markers plus internal links; C3
+  lowers them to `CITATION` fields with the literal marker cached (the
+  hayagriva sources ride in `customXml/item1.xml` at every level).
 - **Footnote markers** in a fragment are single-pass, so an unresolved
   marker reads `"0"` and is replaced by the ordinal; entries are matched
   by `Location` first, then by ordinal order. Footnote entry text is
@@ -344,6 +345,24 @@ Rules the equivalence round established (see
   fragments from a `ContextElem` tag, the label recovered from the
   source AST via the main source threaded into the Collector, and
   emitted as `IrInline::Ref { page_ref: true }` (PAGEREF field).
+- **C3 context fields** — `counter(page).final()`, `counter(footnote)`
+  references, `datetime.today()`, and `document.<field>` reads arrive as
+  `ContextElem` pairs too; the collector classifies the span's source
+  expression and wraps the pair's own rendered inlines in
+  `IrInline::Field`, so the cached result is the C2 literal by
+  construction. `lower` emits the field only at C3 (a `NOTEREF` also
+  requires the label to land on a `FootnoteElem`, which is bookmarked);
+  at C1/C2 the wrapper unwraps to the same literal runs.
+- **C3 numbering and header fields** — figure/table caption numerals
+  (single-piece patterns) are located inside the caption inlines by char
+  offset (`IrCaptionSeq`) and spliced into `IrField::Seq` only when the
+  lowerer emits the caption at C3, so the IR caption stays identical to
+  C2's; equation numbers carry an optional `SEQ` split the
+  lowerer prefers at C3; a page zone whose whole content is a heading
+  query (detected from source, `page_zone_heading_levels`) is wrapped
+  into ` STYLEREF "Heading N" ` by `apply_headers_and_footers`.
+  `Document.update_fields` is set at C3 only, emitting `w:updateFields`
+  in `settings.xml`.
 - **Body defaults** are voted from the leading portion of the document
   only (9,000 glyphs, the pairs-level analogue of the legacy first-3-
   pages rule), so back matter cannot misdetect the body size or font.

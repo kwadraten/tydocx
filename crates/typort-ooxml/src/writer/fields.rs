@@ -3,19 +3,10 @@ use std::io::{self, Write};
 use quick_xml::Writer;
 use quick_xml::events::BytesText;
 
-use super::run::write_text_run;
+use super::run::{write_run, write_text_run};
 use crate::document::{DocumentStyle, Run};
 
-fn truncate_bookmark_name(name: &str) -> &str {
-    if name.len() <= 40 {
-        return name;
-    }
-    let mut end = 40;
-    while !name.is_char_boundary(end) {
-        end -= 1;
-    }
-    &name[..end]
-}
+use crate::document::truncate_bookmark_name;
 
 pub(super) fn write_bookmark_start<W: Write>(
     writer: &mut Writer<W>,
@@ -223,6 +214,24 @@ pub(super) fn write_hyperlink<W: Write>(
             Ok(())
         })?;
     Ok(())
+}
+
+/// Write a generic complex field: `instruction` into `w:instrText`, `result`
+/// runs (with their own styling) as the cached result. Used by the C3 field
+/// layer where the cached result is the literal content the field replaced.
+pub(super) fn write_field<W: Write>(
+    writer: &mut Writer<W>,
+    instruction: &str,
+    result: &[Run],
+    doc_style: &DocumentStyle,
+) -> io::Result<()> {
+    write_fld_char(writer, "begin")?;
+    write_instruction_text_run(writer, instruction)?;
+    write_fld_char(writer, "separate")?;
+    for run in result {
+        write_run(writer, run, doc_style)?;
+    }
+    write_fld_char(writer, "end")
 }
 
 pub(super) fn write_toc_field<W: Write>(writer: &mut Writer<W>, max_depth: u8) -> io::Result<()> {
