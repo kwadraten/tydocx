@@ -90,6 +90,12 @@ that remain, each because no `StyleChain` or pair carries the value:
 - **`counter(footnote).update(0)`** — `CounterUpdateElem::key` is private,
   so the chain cannot identify the counter;
   `detect_footnote_restart_each_page` stays.
+- **`#show footnote.entry: set par(...)`** — the entry element is realized
+  in the page's footnote area, so no pair's `StyleChain` carries its
+  `first-line-indent`/`justify` back to the emitted footnote paragraphs.
+  The show-rule's `set par` args are read from source and pinned per
+  footnote paragraph (the entry would otherwise inherit Normal through
+  `FootnoteText`).
 - **`counter(page).at(<label>)` targets** — the label is recovered from the
   source span (`counter_page_label`), used only to classify an
   already-realized `RefElem`.
@@ -209,10 +215,17 @@ bodies — now comes from `StyleChain`s or element identity.
   text.
 
 ### Absolute (non-float) `#place`
-- **Current:** `IrBlock::Place` without `float:` lowers to normal
-  paragraphs and reports `placed-content` at every level.
-- **C2 target:** `wp:anchor` with page-relative `positionH`/`positionV`
-  offsets, text in `txbxContent`.
+- **Current:** a measured non-float place lowers to a `wp:anchor` with
+  `wp:wrapNone` (it displaces nothing) and `behindDoc` derived from paint
+  order — behind when the page still has content after it. Text bodies
+  become editable `wps:txbx` content with a pinned `w:jc`; images become
+  `pic:pic`; a filled `rect` becomes `a:solidFill` on the shape. An
+  unmeasured place keeps the flow fallback and reports `placed-content`;
+  C1 reports at every level.
+- **Measurement:** `realize/place.rs` reads the place's
+  `Tag::Start`/`Tag::End` bracket in the page frame — the items between
+  the tags are laid out at their absolute positions, so their union
+  bounds are the anchor's page-absolute extent.
 
 ### Float `scope: "parent"` and unmeasured floats
 - **What:** floating `#place` anchors wherever it rendered — column
@@ -221,10 +234,11 @@ bodies — now comes from `StyleChain`s or element identity.
 
 ### `#rect` and other shapes beyond the fill
 - **Current:** block-level shapes keep their body text; at C2/C3 a solid
-  fill becomes `w:shd` paragraph shading (block) or run shading (inline).
-  Stroke, corner radius, and the geometry itself are dropped at every
-  level; bare shapes (no text) emit nothing silently at C2/C3; C1 reports
-  `shape`.
+  fill becomes `w:shd` paragraph shading (block) or run shading (inline),
+  and a *placed* filled `rect` draws as `a:solidFill` on its anchored
+  text-box shape. Stroke, corner radius, and the geometry itself are
+  dropped at every level; bare shapes (no text) emit nothing silently at
+  C2/C3; C1 reports `shape`.
 - **C2 target:** a real DrawingML/VML shape with the body in
   `txbxContent`, or `w:pBdr` for stroked bands.
 

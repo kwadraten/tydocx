@@ -65,6 +65,9 @@ pub struct SourceStyleOverrides {
     pub footnote_indent_twips: Option<u32>,
     pub footnote_indent_em: Option<f64>,
     pub footnote_separator_stroke_eighths: Option<u32>,
+    // `#show footnote.entry: set par(justify:)` — entry-scoped; the footnote
+    // paragraphs pin it so `FootnoteText` does not inherit Normal's `w:jc`.
+    pub footnote_par_justify: Option<bool>,
     // #set text(font: ..., size: ...)
     pub text_font: Option<Vec<String>>,
     pub text_size_half_pt: Option<u32>,
@@ -142,6 +145,7 @@ impl SourceStyleOverrides {
         fill!(footnote_indent_twips);
         fill!(footnote_indent_em);
         fill!(footnote_separator_stroke_eighths);
+        fill!(footnote_par_justify);
         fill!(text_font);
         fill!(text_size_half_pt);
         fill!(text_lang);
@@ -515,6 +519,16 @@ fn collect_global_set_rules(
                 }
                 if syntax_mentions_ident(selector.to_untyped(), "outline") {
                     ovr.show_outline_entry_rule = true;
+                }
+                // `#show footnote.entry: set par(...)` — the entry element is
+                // realized in the page's footnote area, so no StyleChain in
+                // the pairs carries these values back to the footnote text.
+                if syntax_mentions_ident(selector.to_untyped(), "footnote")
+                    && syntax_mentions_ident(selector.to_untyped(), "entry")
+                    && let ast::Expr::SetRule(set) = show.transform()
+                    && matches!(set.target(), ast::Expr::Ident(i) if i.as_str() == "par")
+                {
+                    parse_footnote_entry_par_args(set.args(), ovr);
                 }
             }
             return;
@@ -970,6 +984,49 @@ fn parse_footnote_entry_args(args: typst_syntax::ast::Args<'_>, ovr: &mut Source
                             }
                         }
                     }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The `par` set inside a `#show footnote.entry:` recipe: `first-line-indent`
+/// fills the same `footnote.entry(indent:)` field (both mean "the entry's
+/// first-line indent"); `justify` pins the entry's `w:jc`.
+fn parse_footnote_entry_par_args(
+    args: typst_syntax::ast::Args<'_>,
+    ovr: &mut SourceStyleOverrides,
+) {
+    use typst_syntax::ast::{Arg, DictItem, Expr};
+    for arg in args.items() {
+        let Arg::Named(named) = arg else {
+            continue;
+        };
+        match named.name().as_str() {
+            "first-line-indent" => match named.expr() {
+                Expr::Numeric(n) => {
+                    let (twips, em) = length_amount(n);
+                    ovr.footnote_indent_twips = twips;
+                    ovr.footnote_indent_em = em;
+                }
+                Expr::Dict(dict) => {
+                    for item in dict.items() {
+                        if let DictItem::Named(entry) = item
+                            && entry.name().as_str() == "amount"
+                            && let Expr::Numeric(n) = entry.expr()
+                        {
+                            let (twips, em) = length_amount(n);
+                            ovr.footnote_indent_twips = twips;
+                            ovr.footnote_indent_em = em;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            "justify" => {
+                if let Expr::Bool(b) = named.expr() {
+                    ovr.footnote_par_justify = Some(b.get());
                 }
             }
             _ => {}

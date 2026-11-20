@@ -62,6 +62,8 @@ pub(super) fn write_paragraph<W: Write>(
             || has_spacing
             || has_keep
             || para.mark_size_half_pt.is_some()
+            || para.first_line_indent.is_some()
+            || para.justify.is_some()
         {
             w.create_element("w:pPr").write_inner_content(|ppr| {
                 // Horizontal rule: emit bottom border
@@ -151,6 +153,40 @@ pub(super) fn write_paragraph<W: Write>(
                 // Word's char-based value wins and the zeroing is ignored. When
                 // None, emit exactly the historical attribute set (byte-identical).
                 let zero_chars = ctx.doc_style.first_line_indent_chars.is_some();
+                // A resolved `par.first-line-indent` override folds into
+                // `w:ind`: positive amounts emit `w:firstLine` (+ the
+                // char-based twin for em indents or a `0` that clears a
+                // char-based Normal indent); a negative amount (outdent)
+                // emits `w:hanging` instead, summed into the branch's own
+                // hanging. Indent suppression (post-heading, equation
+                // numbers) zeroes the first-line amount but keeps an outdent.
+                let force_zero = suppress_indent || has_eq_number;
+                let (fl_line, fl_chars, fl_extra_hanging) = match para.first_line_indent {
+                    Some(fl) if fl.twips >= 0 => {
+                        if force_zero {
+                            (0, 0, 0)
+                        } else {
+                            (fl.twips, fl.chars.unwrap_or(0), 0)
+                        }
+                    }
+                    Some(fl) => (
+                        0,
+                        0,
+                        u32::try_from(fl.twips.unsigned_abs()).unwrap_or(u32::MAX),
+                    ),
+                    None => (0, 0, 0),
+                };
+                let fl_line_str = fl_line.to_string();
+                let fl_chars_str = fl_chars.to_string();
+                let fl_hanging_str = fl_extra_hanging.to_string();
+                let has_fl_override = para.first_line_indent.is_some();
+                let fl_first_line_chars =
+                    has_fl_override
+                        .then_some(fl_chars_str.as_str())
+                        .filter(|_| {
+                            para.first_line_indent
+                                .is_some_and(|fl| fl.chars.is_some() || zero_chars)
+                        });
                 if para.left_indent.is_some() || para.right_indent.is_some() {
                     let left_str = para.left_indent.map(|v| v.to_string());
                     let right_str = para.right_indent.map(|v| v.to_string());
@@ -159,9 +195,11 @@ pub(super) fn write_paragraph<W: Write>(
                         Indentation {
                             left: left_str.as_deref(),
                             right: right_str.as_deref(),
-                            first_line_chars: zero_chars.then_some("0"),
-                            first_line: Some("0"),
-                            ..Default::default()
+                            hanging: (fl_extra_hanging > 0).then_some(fl_hanging_str.as_str()),
+                            first_line_chars: fl_first_line_chars.or(zero_chars.then_some("0")),
+                            first_line: has_fl_override
+                                .then_some(fl_line_str.as_str())
+                                .or(Some("0")),
                         },
                     )?;
                 } else if has_hanging {
@@ -173,14 +211,18 @@ pub(super) fn write_paragraph<W: Write>(
                         }
                         HangingIndent::Twips(twips) => twips,
                     };
+                    let total_hanging = bib_indent.saturating_add(fl_extra_hanging);
                     let bib_indent_str = bib_indent.to_string();
+                    let total_hanging_str = total_hanging.to_string();
                     write_indentation(
                         ppr,
                         Indentation {
                             left: Some(bib_indent_str.as_str()),
-                            hanging: Some(bib_indent_str.as_str()),
-                            first_line_chars: zero_chars.then_some("0"),
-                            first_line: Some("0"),
+                            hanging: Some(total_hanging_str.as_str()),
+                            first_line_chars: fl_first_line_chars.or(zero_chars.then_some("0")),
+                            first_line: has_fl_override
+                                .then_some(fl_line_str.as_str())
+                                .or(Some("0")),
                             ..Default::default()
                         },
                     )?;
@@ -190,7 +232,10 @@ pub(super) fn write_paragraph<W: Write>(
                     let list_left = para
                         .list_left_twips
                         .unwrap_or_else(|| two_em_hanging_twips(ctx.doc_style.body_size_half_pt));
-                    let list_hanging = para.list_hanging_twips.unwrap_or(list_left / 2);
+                    let list_hanging = para
+                        .list_hanging_twips
+                        .unwrap_or(list_left / 2)
+                        .saturating_add(fl_extra_hanging);
                     let list_left_str = list_left.to_string();
                     let list_hanging_str = list_hanging.to_string();
                     write_indentation(
@@ -198,15 +243,20 @@ pub(super) fn write_paragraph<W: Write>(
                         Indentation {
                             left: Some(list_left_str.as_str()),
                             hanging: Some(list_hanging_str.as_str()),
+                            first_line_chars: fl_first_line_chars,
+                            first_line: has_fl_override.then_some(fl_line_str.as_str()),
                             ..Default::default()
                         },
                     )?;
-                } else if suppress_indent || has_eq_number {
+                } else if suppress_indent || has_eq_number || has_fl_override {
                     write_indentation(
                         ppr,
                         Indentation {
-                            first_line_chars: zero_chars.then_some("0"),
-                            first_line: Some("0"),
+                            hanging: (fl_extra_hanging > 0).then_some(fl_hanging_str.as_str()),
+                            first_line_chars: fl_first_line_chars.or(zero_chars.then_some("0")),
+                            first_line: has_fl_override
+                                .then_some(fl_line_str.as_str())
+                                .or(Some("0")),
                             ..Default::default()
                         },
                     )?;
@@ -247,10 +297,17 @@ pub(super) fn write_paragraph<W: Write>(
                         .with_attribute(("w:lineRule", "exact"))
                         .write_empty()?;
                 }
-                // Emit alignment
+                // Emit alignment: a declared `align` wins; otherwise the
+                // resolved `par.justify` pins `both`/`left` so a paragraph
+                // never inherits a Normal style justification it did not ask
+                // for (Typst `#linebreak()` lines stay unjustified).
                 if let Some(alignment) = &para.alignment {
                     ppr.create_element("w:jc")
                         .with_attribute(("w:val", alignment.ooxml_value()))
+                        .write_empty()?;
+                } else if let Some(justify) = para.justify {
+                    ppr.create_element("w:jc")
+                        .with_attribute(("w:val", if justify { "both" } else { "left" }))
                         .write_empty()?;
                 }
                 if let Some(sz) = para.mark_size_half_pt {

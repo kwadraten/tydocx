@@ -80,9 +80,9 @@ flowchart LR
 
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
-| `#par(justify:)` | `w:jc` on `Normal` style | same | same |
+| `#par(justify:)` | `w:jc` on `Normal` style; a paragraph whose own chain resolves a different `justify` carries the `w:jc` override (`both`/`left`) | same | same |
 | `#align` / folded alignment | `w:jc` per paragraph | same | same |
-| `#par(first-line-indent:)` | `w:ind w:firstLine` (+ `w:firstLineChars` via `all:`) | same | same |
+| `#par(first-line-indent:)` | `w:ind w:firstLine` (+ `w:firstLineChars` for em amounts) on `Normal`; a paragraph whose chain resolves a different amount carries the `w:ind` override (`0` clears a char-based Normal indent; negative is `w:hanging`) | same | same |
 | `#par(hanging-indent:)` | `w:ind w:hanging` | same | same |
 | `#par(leading:)` | `w:spacing w:line w:lineRule="atLeast"` (cap_height + leading) | same | same |
 | `#par(spacing:)` | `w:spacing w:after` (spacing minus leading compensation) | same | same |
@@ -204,7 +204,7 @@ flowchart LR
 | `#colbreak` | `w:br w:type="column"` | same | same |
 | `#columns(n)[…]` block | body kept flat + `"column-block"` (all levels) | same | same |
 | `#place(float: true)` | `wp:anchor` `w:drawing` with measured page-absolute position; `wrapTopAndBottom` or `wrapSquare`, `distT`/`distB` from `clearance:`, `behindDoc="0"` | body kept in flow + `"placed-content"` report | anchored float; unmeasured → flow fallback + `"placed-content"` |
-| `#place` non-float | body kept in flow | + `"placed-content"` | + `"placed-content"` (report) |
+| `#place` non-float | `wp:anchor` measured the same way: `wp:wrapNone`, `behindDoc` from paint order (behind when the page paints more content after the place); text in editable `wps:txbx` (`w:jc` pinned), images as `pic:pic`, a filled `rect` as `a:solidFill` on the shape | + `"placed-content"` | anchored overlay; unmeasured → flow fallback + `"placed-content"` |
 | `float(dx:/dy:)` offsets | included in the anchor position | n/a | same |
 
 ## Shapes, lines, transforms

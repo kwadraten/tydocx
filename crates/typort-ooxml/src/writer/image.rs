@@ -8,8 +8,8 @@ use super::paragraph::write_paragraph;
 use super::table::write_table;
 use super::{DocParts, WriteCtx};
 use crate::document::{
-    AnchoredContent, AnchoredFloat, AnchoredLine, BlockElement, CellContent, Document, ImageData,
-    InlineElement, Paragraph, Table,
+    AnchorWrap, AnchoredContent, AnchoredFloat, AnchoredLine, BlockElement, CellContent, Document,
+    ImageData, InlineElement, Paragraph, Table,
 };
 
 /// Collect all images from the document model in order of appearance.
@@ -59,7 +59,9 @@ fn collect_images_from_para<'a>(para: &'a Paragraph, images: &mut Vec<&'a ImageD
             InlineElement::Image(img) => images.push(img),
             InlineElement::AnchoredFloat(float) => match &float.content {
                 AnchoredContent::Image(img) => images.push(img),
-                AnchoredContent::Text(blocks) => collect_images_from_blocks(blocks, images),
+                AnchoredContent::Text { blocks, .. } => {
+                    collect_images_from_blocks(blocks, images);
+                }
             },
             _ => {}
         }
@@ -370,7 +372,7 @@ pub(super) fn write_anchored_float<W: Write>(
                 write_anchor_run(writer, float, n, Some(&image), ctx)
             }
         }
-        AnchoredContent::Text(_) => write_anchor_run(writer, float, n, None, ctx),
+        AnchoredContent::Text { .. } => write_anchor_run(writer, float, n, None, ctx),
     }
 }
 
@@ -382,6 +384,7 @@ fn write_anchor_run<W: Write>(
     ctx: &WriteCtx,
 ) -> io::Result<()> {
     let dist = float.clearance_emu.to_string();
+    let behind = if float.behind_doc { "1" } else { "0" };
     writer.create_element("w:r").write_inner_content(|w| {
         w.create_element("w:drawing").write_inner_content(|dw| {
             dw.create_element("wp:anchor")
@@ -390,8 +393,8 @@ fn write_anchor_run<W: Write>(
                 .with_attribute(("distL", "0"))
                 .with_attribute(("distR", "0"))
                 .with_attribute(("simplePos", "0"))
-                .with_attribute(("relativeHeight", "0"))
-                .with_attribute(("behindDoc", "0"))
+                .with_attribute(("relativeHeight", float.z_order.to_string().as_str()))
+                .with_attribute(("behindDoc", behind))
                 .with_attribute(("locked", "0"))
                 .with_attribute(("layoutInCell", "1"))
                 .with_attribute(("allowOverlap", "1"))
@@ -446,12 +449,18 @@ fn write_float_geometry<W: Write>(
         .with_attribute(("r", "0"))
         .with_attribute(("b", "0"))
         .write_empty()?;
-    if float.top_and_bottom {
-        an.create_element("wp:wrapTopAndBottom").write_empty()?;
-    } else {
-        an.create_element("wp:wrapSquare")
-            .with_attribute(("wrapText", "bothSides"))
-            .write_empty()?;
+    match float.wrap {
+        AnchorWrap::TopAndBottom => {
+            an.create_element("wp:wrapTopAndBottom").write_empty()?;
+        }
+        AnchorWrap::Square => {
+            an.create_element("wp:wrapSquare")
+                .with_attribute(("wrapText", "bothSides"))
+                .write_empty()?;
+        }
+        AnchorWrap::None => {
+            an.create_element("wp:wrapNone").write_empty()?;
+        }
     }
     an.create_element("wp:docPr")
         .with_attribute(("id", id_str.as_str()))
@@ -487,7 +496,15 @@ fn write_float_geometry<W: Write>(
                             })?;
                         Ok(())
                     }
-                    AnchoredContent::Text(blocks) => write_float_textbox(gd, blocks, &cx, &cy, ctx),
+                    AnchoredContent::Text { blocks, fill_hex } => write_float_textbox(
+                        gd,
+                        blocks,
+                        fill_hex.as_deref(),
+                        &cx,
+                        &cy,
+                        float.wrap == AnchorWrap::None,
+                        ctx,
+                    ),
                 })?;
             Ok(())
         })?;
@@ -497,19 +514,23 @@ fn write_float_geometry<W: Write>(
 fn graphic_data_uri(content: &AnchoredContent) -> &'static str {
     match content {
         AnchoredContent::Image(_) => "http://schemas.openxmlformats.org/drawingml/2006/picture",
-        AnchoredContent::Text(_) => {
+        AnchoredContent::Text { .. } => {
             "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
         }
     }
 }
 
 /// A `wps:wsp` text box (`txBox="1"` + `wps:txbx` + `w:txbxContent`) holding
-/// real block content, so a text float stays editable rather than raster.
+/// real block content, so a text float stays editable rather than raster. A
+/// `fill_hex` fills the whole shape — a placed `rect(fill:)` draws as a solid
+/// box, not as shading on individual text lines.
 fn write_float_textbox<W: Write>(
     gd: &mut Writer<W>,
     blocks: &[BlockElement],
+    fill_hex: Option<&str>,
     cx: &str,
     cy: &str,
+    no_wrap: bool,
     ctx: &WriteCtx,
 ) -> io::Result<()> {
     gd.create_element("wps:wsp")
@@ -539,6 +560,14 @@ fn write_float_textbox<W: Write>(
                         pg.create_element("a:avLst").write_empty()?;
                         Ok(())
                     })?;
+                if let Some(hex) = fill_hex {
+                    sp.create_element("a:solidFill").write_inner_content(|sf| {
+                        sf.create_element("a:srgbClr")
+                            .with_attribute(("val", hex))
+                            .write_empty()?;
+                        Ok(())
+                    })?;
+                }
                 Ok(())
             })?;
             wsp.create_element("wps:txbx").write_inner_content(|tx| {
@@ -557,18 +586,33 @@ fn write_float_textbox<W: Write>(
                     })?;
                 Ok(())
             })?;
-            // `a:spAutoFit` over a fixed height: Word line heights can exceed
-            // the measured frame, and clipping is worse than a taller box.
-            wsp.create_element("wps:bodyPr")
+            // Floats get `a:spAutoFit` over a fixed height: Word line heights
+            // can exceed the measured frame, and clipping is worse than a
+            // taller box. A non-floating `#place` is measured at ink bounds —
+            // `wrap="none"` stops Word re-breaking lines the author never
+            // wrapped, and `a:noAutofit` keeps the extent a placed `rect`
+            // declares (autofit would shrink a fill-only box to nothing).
+            let el = wsp
+                .create_element("wps:bodyPr")
+                .with_attribute(("wrap", if no_wrap { "none" } else { "square" }))
                 .with_attribute(("lIns", "0"))
                 .with_attribute(("tIns", "0"))
                 .with_attribute(("rIns", "0"))
                 .with_attribute(("bIns", "0"))
-                .with_attribute(("anchor", "t"))
-                .write_inner_content(|bp| {
+                .with_attribute(("anchor", "t"));
+            if no_wrap {
+                el.with_attribute(("vertOverflow", "overflow"))
+                    .with_attribute(("horzOverflow", "overflow"))
+                    .write_inner_content(|bp| {
+                        bp.create_element("a:noAutofit").write_empty()?;
+                        Ok(())
+                    })?;
+            } else {
+                el.write_inner_content(|bp| {
                     bp.create_element("a:spAutoFit").write_empty()?;
                     Ok(())
                 })?;
+            }
             Ok(())
         })?;
     Ok(())

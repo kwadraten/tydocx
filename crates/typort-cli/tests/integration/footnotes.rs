@@ -478,3 +478,21 @@ fn issue_fn_semibold_weight_emits_bold_in_footnotes_part() {
         "a weight-630 footnote run must serialize as <w:b/>:\n{run}"
     );
 }
+
+#[test]
+fn footnote_entry_par_show_rule_pins_indent_and_justify() {
+    // `#show footnote.entry: set par(first-line-indent: 0pt, justify: false)`
+    // is entry-scoped: the footnote paragraphs must pin both values or they
+    // inherit Normal's 2em indent and `both` justification via FootnoteText.
+    let package = fixture_package("footnote_entry_par");
+    let fn_xml = package.part_text("word/footnotes.xml");
+    let entry = footnote_block(&fn_xml, 2);
+    assert!(
+        entry.contains(r#"<w:ind w:firstLine="0"/>"#),
+        "the entry pins firstLine=0 against Normal's indent:\n{entry}"
+    );
+    assert!(
+        entry.contains(r#"<w:jc w:val="left"/>"#),
+        "the entry pins jc=left against Normal's both:\n{entry}"
+    );
+}

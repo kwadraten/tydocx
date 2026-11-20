@@ -187,9 +187,11 @@ pub struct AnchoredLine {
 }
 
 /// Floating content anchored at a page-absolute position (`wp:anchor`), used
-/// for Typst `#place(.., float: true)`. The paragraph carrying this element
-/// keeps the float's logical position in document order (accessibility);
-/// the drawing itself holds the rendered position and wrap behavior.
+/// for Typst `#place` — both `float: true` (text wraps around it) and the
+/// non-floating overlay form (content paints over/under the page's flow). The
+/// paragraph carrying this element keeps the float's logical position in
+/// document order (accessibility); the drawing itself holds the rendered
+/// position and wrap behavior.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnchoredFloat {
     /// Page-absolute position (`relativeFrom="page"` on both axes), EMU.
@@ -200,11 +202,34 @@ pub struct AnchoredFloat {
     pub height_emu: u64,
     /// `place(clearance:)` mapped to `wp:anchor@distT`/`distB`, EMU.
     pub clearance_emu: u64,
-    /// `wp:wrapTopAndBottom` when true, `wp:wrapSquare` when false. Typst
-    /// floats anchor at the top or bottom of their container, so the
-    /// top-and-bottom form is the normal case.
-    pub top_and_bottom: bool,
+    /// How the page's text interacts with the drawing.
+    pub wrap: AnchorWrap,
+    /// `wp:anchor@behindDoc` — the drawing paints behind the page's text.
+    /// Typst paints non-floating placed content over earlier items and under
+    /// later ones; `true` is the two-layer approximation for placements that
+    /// precede other content on the page.
+    pub behind_doc: bool,
+    /// `wp:anchor@relativeHeight` — z-order within the drawing layer.
+    /// Anchors are numbered in document order so a later `#place` stacks
+    /// over an earlier one the way Typst's paint order does; equal values
+    /// leave stacking to renderer fallbacks.
+    pub z_order: u32,
     pub content: AnchoredContent,
+}
+
+/// The `wp:anchor` wrap element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorWrap {
+    /// `wp:wrapTopAndBottom` — a float occupies a band at the top or bottom
+    /// of its container; text flows above/below it. Typst floats anchor top
+    /// or bottom, so this is the normal float case.
+    TopAndBottom,
+    /// `wp:wrapSquare` — text wraps on all four sides.
+    Square,
+    /// `wp:wrapNone` — text does not interact with the drawing at all. This
+    /// is the non-floating `#place` form: Typst lays the placed frame over
+    /// (or under) the flow without displacing it.
+    None,
 }
 
 /// What a `wp:anchor` draws: a picture or a text box.
@@ -214,7 +239,12 @@ pub enum AnchoredContent {
     Image(ImageData),
     /// A `wps:txbx` text box holding real block content so the float stays
     /// editable text rather than a raster.
-    Text(Vec<BlockElement>),
+    Text {
+        blocks: Vec<BlockElement>,
+        /// `a:solidFill` on the shape itself — a placed `rect(fill:)` draws
+        /// as a filled box, not as text-line shading.
+        fill_hex: Option<String>,
+    },
 }
 
 /// A single inline element within a paragraph.
@@ -501,6 +531,18 @@ pub enum HangingIndent {
     Twips(u32),
 }
 
+/// A paragraph-level `w:ind` first-line-indent override — the resolved
+/// `par.first-line-indent` when it differs from the Normal style's value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirstLineIndent {
+    /// `w:firstLine` amount in twips; negative values emit `w:hanging`
+    /// instead (an outdent).
+    pub twips: i64,
+    /// `w:firstLineChars` (`em × 100`) for pure-em indents — emitted so Word
+    /// measures the indent in characters rather than twentieths of a point.
+    pub chars: Option<i64>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -518,6 +560,14 @@ pub struct Paragraph {
     pub num_pr: Option<ListInfo>,
     /// Paragraph alignment (left, center, right, justify).
     pub alignment: Option<Alignment>,
+    /// The paragraph's resolved `par.first-line-indent`, carried only when it
+    /// differs from the Normal style's value — an explicit `w:ind` override.
+    /// Negative `twips` is an outdent and emits `w:hanging` instead.
+    pub first_line_indent: Option<FirstLineIndent>,
+    /// The paragraph's resolved `par.justify`, carried only when it differs
+    /// from the Normal style's `body_alignment` — an explicit `w:jc` override
+    /// (`both` / `left`). Ignored when `alignment` already emits `w:jc`.
+    pub justify: Option<bool>,
     /// Suppress first-line indent (e.g., first paragraph after a heading).
     pub suppress_indent: bool,
     /// Hanging indent for bibliography entries or source-authored paragraph rules.
@@ -593,7 +643,7 @@ impl Paragraph {
                     }
                 }
                 InlineElement::AnchoredFloat(float) => {
-                    if let AnchoredContent::Text(blocks) = &mut float.content {
+                    if let AnchoredContent::Text { blocks, .. } = &mut float.content {
                         for element in blocks {
                             for_each_paragraph_in_block_mut(element, &mut |p| {
                                 p.for_each_run_mut(f);
@@ -617,7 +667,7 @@ impl Paragraph {
                     }
                 }
                 InlineElement::AnchoredFloat(float) => {
-                    if let AnchoredContent::Text(blocks) = &float.content {
+                    if let AnchoredContent::Text { blocks, .. } = &float.content {
                         for element in blocks {
                             for_each_paragraph_in_block(element, &mut |p| {
                                 p.for_each_run(f);
@@ -1190,6 +1240,11 @@ pub struct FootnoteEntryStyle {
     /// Gap between consecutive footnotes (twips) — `w:spacing w:after` on
     /// footnote paragraphs. Typst `footnote.entry(gap:)`.
     pub gap_twips: Option<u32>,
+    /// The entry's declared `par.justify`, pinned as `w:jc` so a footnote
+    /// does not inherit the Normal style's justification — `FootnoteText`
+    /// is `w:basedOn` Normal and `#show footnote.entry: set par(justify:)`
+    /// reaches no chain the entry paragraphs see.
+    pub justify: Option<bool>,
     /// Separator rule thickness in eighths of a point (`w:sz`), declared via a
     /// `line(...)` separator's `stroke` thickness.
     pub separator_stroke_eighths: Option<u32>,

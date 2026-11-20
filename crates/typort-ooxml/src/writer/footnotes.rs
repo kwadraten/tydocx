@@ -156,6 +156,14 @@ pub(super) fn generate_footnotes_xml(
                                     .with_attribute(("w:firstLine", indent.as_str()))
                                     .write_empty()?;
                             }
+                            if let Some(justify) = entry.justify {
+                                ppr.create_element("w:jc")
+                                    .with_attribute((
+                                        "w:val",
+                                        if justify { "both" } else { "left" },
+                                    ))
+                                    .write_empty()?;
+                            }
                             Ok(())
                         })?;
                         // Word generates the marker from the footnote format;
@@ -207,7 +215,7 @@ fn inline_has_math(inline: &InlineElement) -> bool {
     match inline {
         InlineElement::Math { .. } => true,
         InlineElement::AnchoredFloat(float) => match &float.content {
-            AnchoredContent::Text(blocks) => blocks.iter().any(block_has_math),
+            AnchoredContent::Text { blocks, .. } => blocks.iter().any(block_has_math),
             AnchoredContent::Image(_) => false,
         },
         _ => false,

@@ -508,7 +508,7 @@ pub fn export_ir_with_ir(
         degradations.extend(patch_degradations.iter().map(core_degradation));
         if options.compat != CompatMode::C1 {
             overline::patch_overlines(&mut ir, paged, world);
-            place::patch_floats(&mut ir, paged);
+            place::patch_places(&mut ir, paged);
         }
     }
 

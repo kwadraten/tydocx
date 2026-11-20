@@ -386,14 +386,15 @@ fn ir_path_documented_diffs() {
     // `w:tblCellMar` as the only diff.
     {
         // Step 5: the realize path now carries `align` wrapper alignment onto
-        // `IrTable`, so the centered figure's table emits `w:jc` inside
-        // `w:tblPr`; the legacy path has no table-level alignment. The shared
+        // `IrTable` and through the chain onto the figure's paragraphs — the
+        // `w:tblPr` jc plus the centered cells and caption. The legacy path
+        // has no table-level or paragraph-level alignment here. The shared
         // cell-margin diff is unchanged.
         let (new_xml, legacy_xml) = convert_both("figure_caption");
         assert_eq!(
             count(&new_xml, "<w:jc w:val=\"center\"/>"),
-            count(&legacy_xml, "<w:jc w:val=\"center\"/>") + 1,
-            "figure_caption: tblPr alignment is the one extra center marker"
+            count(&legacy_xml, "<w:jc w:val=\"center\"/>") + 5,
+            "figure_caption: tblPr + cell/caption alignment are the extra center markers"
         );
         let needles = [
             "w:tblCellMar",
@@ -422,6 +423,10 @@ fn ir_path_documented_diffs() {
             "{fixture}: realize path emits cell margins; legacy does not"
         );
         assert!(!legacy_xml.contains("<w:tblCellMar>"));
+        // `w:jc w:val="left"` is the paragraph-local `par.justify` pin: cell
+        // paragraphs resolve justify=false while the detected Normal style
+        // declares `both`, so the realize path pins what Typst resolved —
+        // the legacy path has no paragraph-level chain values to compare.
         assert_eq!(
             without_lines(
                 &new_xml,
@@ -430,11 +435,12 @@ fn ir_path_documented_diffs() {
                     "w:top w:w=",
                     "w:left w:w=",
                     "w:bottom w:w=",
-                    "w:right w:w="
+                    "w:right w:w=",
+                    "<w:jc w:val=\"left\"/>"
                 ]
             ),
             without_lines(&legacy_xml, &[]),
-            "{fixture}: cell margins are the only diff"
+            "{fixture}: cell margins and par.justify pins are the only diffs"
         );
     }
 

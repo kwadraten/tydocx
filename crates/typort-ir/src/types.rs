@@ -109,6 +109,10 @@ pub enum IrBlock {
         body: Vec<IrBlock>,
         caption: Vec<IrInline>,
         caption_alignment: Option<Alignment>,
+        /// `par` settings resolved on the caption body's `StyleChain`
+        /// (e.g. `#show figure.caption: set par(first-line-indent: 0pt)`);
+        /// emitted as `w:ind`/`w:jc` overrides when they differ from Normal.
+        caption_par: IrParStyle,
         kind: IrFigureKind,
         supplement: Option<String>,
         label: Option<String>,
@@ -182,7 +186,8 @@ pub enum IrPlaceWrap {
     Square,
 }
 
-/// Page-absolute geometry of a rendered float, measured from the paged frame.
+/// Page-absolute geometry of a rendered float or non-floating placement,
+/// measured from the paged frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IrAnchor {
     /// Offset from the page's left edge (`relativeFrom="page"`), EMU.
@@ -191,6 +196,12 @@ pub struct IrAnchor {
     pub y_emu: i64,
     pub width_emu: u64,
     pub height_emu: u64,
+    /// `wp:anchor@behindDoc` — the content paints behind the page's text.
+    /// For non-floating `#place` content this follows Typst's paint order
+    /// relative to the body text layer: it goes behind when text still
+    /// paints after it on the page. Floats keep `false` — Word displaces
+    /// flow text for them anyway.
+    pub behind_doc: bool,
 }
 
 /// Only properties the OOXML `Paragraph` can carry are represented here;
@@ -204,6 +215,11 @@ pub struct IrParagraph {
     pub inlines: Vec<IrInline>,
     pub style: Option<ParagraphStyle>,
     pub alignment: Option<Alignment>,
+    /// `par` settings resolved on the element's own `StyleChain`; the lowerer
+    /// emits them as `w:ind`/`w:jc` overrides wherever they differ from the
+    /// document-global Normal style. `IrParStyle::default()` (no resolved
+    /// values) emits nothing — the paragraph inherits Normal, as before.
+    pub par: IrParStyle,
     pub suppress_indent: bool,
     pub hanging_indent: Option<HangingIndent>,
     pub left_indent: Option<u32>,
@@ -217,6 +233,30 @@ pub struct IrParagraph {
     /// `w:spacing w:after` override (twips) — `block(above:|below:|spacing:)`.
     pub spacing_after: Option<u32>,
     pub bookmark: Option<String>,
+}
+
+/// `par` element settings resolved on an element's own `StyleChain` — the
+/// values Typst actually laid the paragraph out with, not just source-declared
+/// overrides. `None` fields mean "not resolved" (synthetic paragraphs that
+/// never had a chain), and emit no override.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IrParStyle {
+    /// `par.first-line-indent`, resolved at the chain's font size.
+    pub first_line_indent: Option<IrFirstLineIndent>,
+    /// `par.justify` — `true` = justified (`w:jc both`), `false` = left.
+    pub justify: Option<bool>,
+}
+
+/// `par.first-line-indent` expressed the way OOXML wants it: a twip amount
+/// plus, for pure-em amounts, the char-based value Word prefers for East-Asian
+/// indents (`round(em × 100)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IrFirstLineIndent {
+    /// `w:firstLine` amount in twips; negative values are an outdent and emit
+    /// `w:hanging` instead.
+    pub twips: i64,
+    /// `w:firstLineChars` for pure-em indents (`em × 100`).
+    pub chars: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

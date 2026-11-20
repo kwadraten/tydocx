@@ -858,6 +858,7 @@ mod tests {
                     )],
                     style: None,
                     alignment: None,
+                    par: crate::types::IrParStyle::default(),
                     suppress_indent: false,
                     hanging_indent: None,
                     left_indent: None,

@@ -256,6 +256,7 @@ fn apply_footnote_entry(ovr: &page::SourceStyleOverrides, doc: &mut Document, bo
     if let Some(eighths) = ovr.footnote_separator_stroke_eighths {
         doc.style.footnote_entry.separator_stroke_eighths = Some(eighths);
     }
+    doc.style.footnote_entry.justify = ovr.footnote_par_justify;
 }
 
 pub(super) fn apply_source_overrides(
