@@ -5,9 +5,9 @@ use typort_ir::{
     Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrBorder,
     IrCellBorderFlags, IrCellBorders, IrDocument, IrDocumentInfo, IrEnum, IrEnumItem, IrEquation,
     IrFigureKind, IrGrid, IrGridLine, IrHeadingNumbering, IrInline, IrList, IrListItem,
-    IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParagraph, IrPlaceWrap, IrRaw,
-    IrSection, IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrTrackSize,
-    IrVMerge, PageSettings, TableBorders, TableCellMargins,
+    IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParStyle, IrParagraph, IrPlaceWrap,
+    IrRaw, IrSection, IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow,
+    IrTrackSize, IrVMerge, PageSettings, TableBorders, TableCellMargins,
 };
 use typort_ooxml::document::{Alignment, Run, VerticalAlign};
 use typst_library::World;
@@ -15,7 +15,7 @@ use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
 use typst_library::foundations::{
     Content, ContextElem, Datetime, Element, LocatableSelector, NativeElement, Packed,
-    SequenceElem, Smart, StyleChain, StyledElem, Value,
+    SequenceElem, Smart, StyleChain, StyledElem, Styles, Value,
 };
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::grid::Celled;
@@ -44,7 +44,7 @@ use typst_syntax::Span;
 
 use super::inline::{
     InlineCtx, alignment_from_styles, collect_inlines, collect_paragraph, image_inline,
-    smart_quotes_for, spacing_twips,
+    par_style_from_styles, smart_quotes_for, spacing_twips,
 };
 use super::page;
 use super::style::{StyleDefaults, defaults_from_root, monospace_families, run_from_styles};
@@ -575,6 +575,7 @@ impl Collector<'_> {
         match image_inline(image, styles, engine, &mut ctx) {
             Some(inline) => vec![IrBlock::Paragraph(IrParagraph {
                 inlines: vec![inline],
+                par: par_style_from_styles(styles),
                 ..IrParagraph::default()
             })],
             None => Vec::new(),
@@ -652,7 +653,10 @@ impl Collector<'_> {
             ]);
         }
         if let Some(text) = content.to_packed::<TextElem>() {
-            let mut para = IrParagraph::default();
+            let mut para = IrParagraph {
+                par: par_style_from_styles(styles),
+                ..IrParagraph::default()
+            };
             let run = run_from_styles(&text.text, styles, &self.defaults, Some(content.span()));
             para.inlines.push(IrInline::Text(run));
             return Ok(vec![IrBlock::Paragraph(para)]);
@@ -1301,6 +1305,7 @@ impl Collector<'_> {
             body,
             label: child.label().map(|l| l.resolve().to_string()),
             alignment: alignment_from_styles(styles),
+            par: par_style_from_styles(styles),
             span: child.span().id().map(|_| child.span()),
             outlined,
         }))
@@ -1328,6 +1333,7 @@ impl Collector<'_> {
         let inlines = collect_inlines(child, styles, engine, locator, &mut ctx)?;
         Ok(vec![IrBlock::Paragraph(IrParagraph {
             inlines,
+            par: par_style_from_styles(styles),
             ..IrParagraph::default()
         })])
     }
@@ -1393,6 +1399,7 @@ impl Collector<'_> {
             body,
             label: inner.label().map(|l| l.resolve().to_string()),
             alignment,
+            par: par_style_from_styles(styles),
             span: inner.span().id().map(|_| inner.span()),
             outlined,
         }))
@@ -1483,6 +1490,7 @@ impl Collector<'_> {
     ) -> SourceResult<IrBlock> {
         let mut caption: Vec<IrInline> = Vec::new();
         let mut caption_alignment: Option<Alignment> = None;
+        let mut caption_par = IrParStyle::default();
         let mut supplement: Option<String> = None;
         let mut caption_first = false;
         let mut body: Vec<IrBlock> = Vec::new();
@@ -1513,6 +1521,7 @@ impl Collector<'_> {
                             if caption_alignment.is_none() {
                                 caption_alignment = alignment_from_styles(*s);
                             }
+                            caption_par = par_style_from_styles(*s);
                             let mut ctx = self.inline_ctx();
                             caption = collect_inlines(body_c, *s, engine, locator, &mut ctx)?;
                         }
@@ -1539,6 +1548,7 @@ impl Collector<'_> {
             body,
             caption,
             caption_alignment,
+            caption_par,
             kind: meta.kind,
             supplement,
             label: meta.label.clone(),
@@ -1666,6 +1676,7 @@ impl Collector<'_> {
             }
             let mut out = vec![IrBlock::Paragraph(IrParagraph {
                 inlines,
+                par: par_style_from_styles(styles),
                 ..IrParagraph::default()
             })];
             out.extend(desc_blocks);
@@ -1673,6 +1684,7 @@ impl Collector<'_> {
         } else {
             let mut out = vec![IrBlock::Paragraph(IrParagraph {
                 inlines: term_inlines,
+                par: par_style_from_styles(styles),
                 ..IrParagraph::default()
             })];
             out.extend(desc_blocks);
@@ -2558,12 +2570,46 @@ fn flush_pending(
     let mut ctx = collector.inline_ctx();
     let inlines = collect_inlines(&sequence, styles, engine, locator, &mut ctx)?;
     if !inlines.is_empty() {
+        // The pending children form one paragraph; a `#set par` scoped to
+        // them arrives as `StyledElem` wrappers in the run, so resolve `par`
+        // on the chain the paragraph actually laid out with.
+        let merged = styled_styles_in(&sequence);
+        let chained = styles.chain(&merged);
         out.push(IrBlock::Paragraph(IrParagraph {
             inlines,
+            alignment: alignment_from_styles(chained),
+            par: par_style_from_styles(chained),
             ..IrParagraph::default()
         }));
     }
     Ok(())
+}
+
+/// The `Styles` a run of inline content adds to its parent chain. `StyledElem`
+/// wrappers anywhere in the run contribute their styles (a block-scoped `#set
+/// par` reaches the paragraph only through them); they merge in document
+/// order so a later set rule wins.
+fn styled_styles_in(content: &Content) -> Styles {
+    let mut styled = Vec::new();
+    gather_styled_styles(content, &mut styled);
+    let mut merged = Styles::new();
+    for inner in styled.iter().rev() {
+        merged.apply((*inner).clone());
+    }
+    merged
+}
+
+fn gather_styled_styles<'a>(content: &'a Content, out: &mut Vec<&'a Styles>) {
+    if let Some(styled) = content.to_packed::<StyledElem>() {
+        out.push(&styled.styles);
+        gather_styled_styles(&styled.child, out);
+        return;
+    }
+    if let Some(sequence) = content.to_packed::<SequenceElem>() {
+        for child in &sequence.children {
+            gather_styled_styles(child, out);
+        }
+    }
 }
 
 /// `#set table(inset:)` becomes `w:tblCellMar`. `Auto` (never declared) keeps
@@ -3206,6 +3252,7 @@ struct HeadingSpec {
     body: Vec<IrInline>,
     label: Option<String>,
     alignment: Option<Alignment>,
+    par: IrParStyle,
     span: Option<Span>,
     outlined: bool,
 }
@@ -3217,6 +3264,7 @@ fn heading_block(spec: HeadingSpec) -> IrBlock {
     if !spec.outlined {
         let mut para = IrParagraph {
             alignment: spec.alignment,
+            par: spec.par,
             bookmark: spec.label,
             ..IrParagraph::default()
         };

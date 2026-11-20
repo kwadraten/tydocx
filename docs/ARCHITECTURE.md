@@ -220,7 +220,7 @@ they exercise that public API as integration tests.
 | `convert/realize/inline.rs` | Pair → `IrInline` collection: runs from `StyleChain`, links, refs, cites, images, math, breaks. |
 | `convert/realize/style.rs` | `StyleChain` → `Run` conversion (weight/style/size/color/font, smart quotes, run-merge key). |
 | `convert/realize/patch.rs` | Companion-Paged patch: footnote entry bodies from frame groups and image display sizes by content hash (with the intrinsic fallback). |
-| `convert/realize/place.rs` | Companion-Paged patch: `#place(.., float: true)` geometry — matches each float's frame group (keyed by the place's `Location` in `FrameParent`) to a page-absolute `IrAnchor` for `wp:anchor` emission. |
+| `convert/realize/place.rs` | Companion-Paged patch: `#place` geometry — each float's frame group (keyed by the place's `Location` in `FrameParent`) and each non-floating place's `Tag` bracket (the placed items' union bounds between `Tag::Start`/`Tag::End`) become a page-absolute `IrAnchor` for `wp:anchor` emission. Non-floats carry `wp:wrapNone` and a `behindDoc` flag from paint order. |
 | `convert/block.rs` | Block-level HTML tag walk and dispatch, paragraphs, equations, figures, code blocks, blockquotes, and term lists. |
 | `convert/inline_walk.rs` | HTML inline traversal: formatted spans, links, citations, footnotes, images, and inline equations. |
 | `convert/headings.rs` | Semantic heading conversion, numbering, smart quotes, and inline heading content. |

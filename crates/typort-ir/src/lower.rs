@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use typort_ooxml::document::{
-    AnchoredContent, AnchoredFloat, BlockElement, CellBorders, CellContent, Document, ImageData,
-    ImageFormat, InlineElement, LevelOverride, ListInfo, Paragraph, SectionBreak, SectionBreakType,
-    Table, TableBorders, TableCell, TableCellMargins, TableRow, VMerge,
+    AnchorWrap, AnchoredContent, AnchoredFloat, BlockElement, CellBorders, CellContent, Document,
+    FirstLineIndent, ImageData, ImageFormat, InlineElement, LevelOverride, ListInfo, Paragraph,
+    SectionBreak, SectionBreakType, Table, TableBorders, TableCell, TableCellMargins, TableRow,
+    VMerge,
 };
 
 use crate::degradation::{Degradation, DegradationAction};
@@ -14,8 +15,8 @@ use crate::mode::CompatMode;
 use crate::types::{
     Alignment, HangingIndent, IrAnchor, IrBibEntry, IrBlock, IrCellBorders, IrDocument, IrEnum,
     IrEquation, IrFootnote, IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList,
-    IrNumberingPattern, IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType, IrShapeKind, IrTable,
-    IrTableCell, IrTableRow, IrVMerge, ParagraphStyle, Run,
+    IrNumberingPattern, IrParStyle, IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType,
+    IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, ParagraphStyle, Run,
 };
 
 #[derive(Debug, Default)]
@@ -35,6 +36,23 @@ pub struct LowerCtx {
     pub content_width_twips: Option<u32>,
     /// Whether an unrepresentable heading numbering was already reported.
     pub unmappable_heading_reported: bool,
+    /// The Normal style's first-line indent — the comparison baseline for
+    /// per-paragraph `par.first-line-indent` overrides.
+    pub normal_first_line_twips: i64,
+    /// The Normal style's char-based first-line indent, if it has one.
+    pub normal_first_line_chars: Option<i64>,
+    /// The Normal style's justification (`body_alignment == "both"`).
+    pub normal_justify: bool,
+    /// Running z-order for `wp:anchor@relativeHeight` — each anchored
+    /// drawing is numbered in lowering (document) order so later `#place`
+    /// content stacks over earlier content, matching Typst's paint order.
+    pub next_anchor_z: u32,
+    /// Page width in EMU — the span an overlay text box is grown to so its
+    /// (already positioned) text can never re-wrap.
+    pub page_width_emu: i64,
+    /// Page height in EMU — likewise grown so top-anchored text is never
+    /// clipped by the measured ink height.
+    pub page_height_emu: i64,
 }
 
 #[derive(Debug, Default)]
@@ -120,6 +138,12 @@ pub fn lower(
             .page
             .width_twips
             .checked_sub(ir.page.margin_left + ir.page.margin_right),
+        normal_first_line_twips: i64::from(ir.style.first_line_indent_twips),
+        normal_first_line_chars: ir.style.first_line_indent_chars.map(i64::from),
+        normal_justify: ir.style.body_alignment == "both",
+        next_anchor_z: 0,
+        page_width_emu: i64::from(ir.page.width_twips) * 635,
+        page_height_emu: i64::from(ir.page.height_twips) * 635,
     };
 
     for footnote in &ir.footnotes {
@@ -336,6 +360,7 @@ fn lower_block_in(
             body,
             caption,
             caption_alignment,
+            caption_par,
             kind: _,
             supplement: _,
             label,
@@ -356,6 +381,7 @@ fn lower_block_in(
                     body,
                     caption,
                     caption_alignment: *caption_alignment,
+                    caption_par: *caption_par,
                     label: label.as_ref(),
                     caption_first: *caption_first,
                     gap_twips: *gap_twips,
@@ -691,23 +717,37 @@ struct PlaceSpec<'a> {
 }
 
 fn lower_place(spec: &PlaceSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
-    if spec.float
-        && !ctx.compat.is_c1()
+    if !ctx.compat.is_c1()
         && let Some(anchor) = spec.anchor
-        && let Some(content) = anchored_content(spec.body, doc, ctx)
+        && let Some(content) = anchored_content(spec.body, spec.float, doc, ctx)
     {
         let mut para = Paragraph::new();
         para.mark_size_half_pt = Some(2);
         para.spacing_before = Some(0);
         para.spacing_after = Some(0);
+        let (x_emu, width_emu, height_emu) = overlay_text_span(anchor, &content, spec.float, ctx);
         para.inlines
             .push(InlineElement::AnchoredFloat(AnchoredFloat {
-                x_emu: anchor.x_emu,
+                x_emu,
                 y_emu: anchor.y_emu,
-                width_emu: anchor.width_emu,
-                height_emu: anchor.height_emu,
-                clearance_emu: spec.clearance_emu,
-                top_and_bottom: matches!(spec.wrap, IrPlaceWrap::TopAndBottom),
+                width_emu,
+                height_emu,
+                clearance_emu: if spec.float { spec.clearance_emu } else { 0 },
+                z_order: {
+                    ctx.next_anchor_z += 1;
+                    ctx.next_anchor_z
+                },
+                wrap: if spec.float {
+                    match spec.wrap {
+                        IrPlaceWrap::TopAndBottom => AnchorWrap::TopAndBottom,
+                        IrPlaceWrap::Square => AnchorWrap::Square,
+                    }
+                } else {
+                    // A non-floating `#place` does not displace flow text;
+                    // paint order (behindDoc) carries the layering instead.
+                    AnchorWrap::None
+                },
+                behind_doc: !spec.float && anchor.behind_doc,
                 content,
             }));
         return vec![BlockElement::Paragraph(para)];
@@ -727,6 +767,7 @@ fn lower_place(spec: &PlaceSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> 
 
 fn anchored_content(
     body: &[IrBlock],
+    float: bool,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> Option<AnchoredContent> {
@@ -736,14 +777,125 @@ fn anchored_content(
     {
         return Some(AnchoredContent::Image(data));
     }
+    // A placed `rect(fill:)` becomes a solid-filled text box, not a shaded
+    // marker line — the box itself carries the fill.
+    let (inner, fill_hex) = match body {
+        [
+            IrBlock::Shape {
+                kind: IrShapeKind::Rectangle,
+                body: shape_body,
+                fill_hex: Some(fill),
+                ..
+            },
+        ] => (shape_body.as_slice(), Some(fill.clone())),
+        _ => (body, None),
+    };
     let mut lowered = Vec::new();
-    for block in body {
+    for block in inner {
         lowered.extend(lower_block(block, doc, ctx));
+    }
+    if lowered.is_empty() && fill_hex.is_some() {
+        // `w:txbxContent` needs at least one paragraph; an empty one at 1pt
+        // keeps the box a pure fill with no visible text line.
+        let mut para = Paragraph::new();
+        para.mark_size_half_pt = Some(2);
+        para.spacing_before = Some(0);
+        para.spacing_after = Some(0);
+        lowered.push(BlockElement::Paragraph(para));
     }
     if lowered.is_empty() {
         return None;
     }
-    Some(AnchoredContent::Text(lowered))
+    if !float {
+        // A placed paragraph's justification must never inherit Normal's:
+        // Word stretches `w:br`-terminated lines under `both` where Typst
+        // leaves them unjustified (`linebreak(justify:)` defaults to
+        // `false`). Every placed paragraph gets an explicit `w:jc`; an
+        // undeclared alignment resolves to `left`.
+        for element in &mut lowered {
+            force_paragraph_alignment(element);
+        }
+    }
+    Some(AnchoredContent::Text {
+        blocks: lowered,
+        fill_hex,
+    })
+}
+
+/// Grow a non-floating text box until its text cannot re-wrap or clip. The
+/// measured extent is the text's ink bounds — narrower than the advance
+/// width and shorter than Word's line boxes — so the box is
+/// expanded to a page span while keeping the edge the content visually
+/// anchors to (left edge for `left`, the center for `center`, the right
+/// edge for `right`, and the top edge always, since text is top-anchored);
+/// `wrap="none"` + `wrapNone` keep the expansion invisible. Filled boxes
+/// (placed `rect`s) keep their declared extent.
+fn overlay_text_span(
+    anchor: IrAnchor,
+    content: &AnchoredContent,
+    float: bool,
+    ctx: &LowerCtx,
+) -> (i64, u64, u64) {
+    let (x_emu, width_emu, height_emu) = (anchor.x_emu, anchor.width_emu, anchor.height_emu);
+    let AnchoredContent::Text {
+        blocks,
+        fill_hex: None,
+    } = content
+    else {
+        return (x_emu, width_emu, height_emu);
+    };
+    if float {
+        return (x_emu, width_emu, height_emu);
+    }
+    let first_alignment = blocks.iter().find_map(|b| match b {
+        BlockElement::Paragraph(p) => p.alignment,
+        _ => None,
+    });
+    let page_w = ctx.page_width_emu;
+    let right = x_emu.saturating_add(i64::try_from(width_emu).unwrap_or(i64::MAX));
+    let page_w_u64 = u64::try_from(page_w).unwrap_or(u64::MAX);
+    let (x, w) = match first_alignment {
+        Some(Alignment::Center) => {
+            let center = x_emu.saturating_add(right) / 2;
+            (center - page_w / 2, page_w_u64)
+        }
+        Some(Alignment::Right) => (right - page_w, page_w_u64),
+        _ => (
+            x_emu,
+            u64::try_from(page_w.saturating_sub(x_emu).max(0))
+                .unwrap_or(u64::MAX)
+                .max(width_emu),
+        ),
+    };
+    let h = u64::try_from(ctx.page_height_emu.saturating_sub(anchor.y_emu).max(0))
+        .unwrap_or(u64::MAX)
+        .max(height_emu);
+    (x, w, h)
+}
+
+/// Pin `w:jc` on every paragraph in a placed text box: `left` unless the
+/// paragraph already declares center/right/justify.
+fn force_paragraph_alignment(element: &mut BlockElement) {
+    match element {
+        BlockElement::Paragraph(para) => {
+            para.alignment = para.alignment.or(Some(Alignment::Left));
+        }
+        BlockElement::Table(table) => {
+            for row in &mut table.rows {
+                for cell in &mut row.cells {
+                    for para in &mut cell.paragraphs {
+                        para.alignment = para.alignment.or(Some(Alignment::Left));
+                    }
+                    for item in &mut cell.content {
+                        if let CellContent::Paragraph(para) = item {
+                            para.alignment = para.alignment.or(Some(Alignment::Left));
+                        }
+                    }
+                }
+            }
+        }
+        BlockElement::BibliographyBlock { .. } => {}
+    }
 }
 
 fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockElement> {
@@ -778,6 +930,7 @@ struct FigureSpec<'a> {
     body: &'a [IrBlock],
     caption: &'a [IrInline],
     caption_alignment: Option<Alignment>,
+    caption_par: IrParStyle,
     label: Option<&'a String>,
     caption_first: bool,
     gap_twips: Option<u32>,
@@ -830,6 +983,7 @@ fn lower_figure(fig: &FigureSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) ->
     if !fig.caption.is_empty() || fig.label.is_some() {
         let mut para = Paragraph::new();
         para.alignment = fig.caption_alignment;
+        apply_par_overrides(&mut para, fig.caption_par, ctx);
         if let Some(gap) = fig.gap_twips {
             if fig.caption_first {
                 para.spacing_after = Some(gap);
@@ -882,10 +1036,31 @@ fn lower_figure(fig: &FigureSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) ->
     out
 }
 
+/// Copy a resolved `par` style onto the lowered paragraph as explicit
+/// `w:ind`/`w:jc` overrides — but only where it differs from the document's
+/// Normal style. A value equal to Normal inherits silently, exactly as
+/// before; this keeps overrides surgical instead of pinning every paragraph.
+fn apply_par_overrides(out: &mut Paragraph, par: IrParStyle, ctx: &LowerCtx) {
+    if let Some(fl) = par.first_line_indent
+        && (fl.twips != ctx.normal_first_line_twips || fl.chars != ctx.normal_first_line_chars)
+    {
+        out.first_line_indent = Some(FirstLineIndent {
+            twips: fl.twips,
+            chars: fl.chars,
+        });
+    }
+    if let Some(justify) = par.justify
+        && justify != ctx.normal_justify
+    {
+        out.justify = Some(justify);
+    }
+}
+
 fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     let mut out = Paragraph::new();
     out.style.clone_from(&para.style);
     out.alignment = para.alignment;
+    apply_par_overrides(&mut out, para.par, ctx);
     out.suppress_indent = para.suppress_indent;
     out.hanging_indent = para.hanging_indent;
     out.left_indent = para.left_indent;

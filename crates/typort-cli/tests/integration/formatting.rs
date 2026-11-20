@@ -1149,3 +1149,67 @@ fn issue_hyphenate_false_suppresses_auto_hyphens() {
         "#set text(hyphenate: false) must emit w:suppressAutoHyphens:\n{settings}"
     );
 }
+
+/// Paragraph-local `par` overrides: a paragraph whose own `StyleChain`
+/// resolves a `first-line-indent` or `justify` different from the document
+/// Normal style carries an explicit `w:ind`/`w:jc` — it never inherits a
+/// Normal value it did not declare. See the `par_local_overrides` fixture.
+#[test]
+fn par_local_zero_indent_and_unjustified_emit_overrides() {
+    let doc_xml = fixture_doc_xml("par_local_overrides");
+    let para = paragraph_containing(&doc_xml, "block-scoped paragraph opts out");
+    assert!(
+        para.contains(r#"w:ind w:firstLineChars="0" w:firstLine="0""#),
+        "a zero local indent clears the char-based Normal indent:\n{para}"
+    );
+    assert!(
+        para.contains(r#"w:jc w:val="left""#),
+        "justify: false pins left instead of inheriting Normal's both:\n{para}"
+    );
+}
+
+#[test]
+fn par_local_absolute_indent_emits_twips_and_clears_chars() {
+    let doc_xml = fixture_doc_xml("par_local_overrides");
+    let para = paragraph_containing(&doc_xml, "twelve-point absolute first-line");
+    assert!(
+        para.contains(r#"w:ind w:firstLineChars="0" w:firstLine="240""#),
+        "a 12pt indent emits twips and clears the char-based Normal indent:\n{para}"
+    );
+    assert!(
+        !para.contains("<w:jc"),
+        "unchanged justification stays inherited, no redundant jc:\n{para}"
+    );
+}
+
+#[test]
+fn par_caption_first_line_indent_override() {
+    let doc_xml = fixture_doc_xml("par_local_overrides");
+    let para = paragraph_containing(&doc_xml, "A caption body.");
+    assert!(
+        para.contains(r#"w:ind w:firstLineChars="0" w:firstLine="0""#),
+        "a caption's set par(first-line-indent: 0pt) reaches the paragraph:\n{para}"
+    );
+}
+
+#[test]
+fn par_unchanged_paragraphs_still_inherit_normal() {
+    let doc_xml = fixture_doc_xml("par_local_overrides");
+    let para = paragraph_containing(&doc_xml, "Body paragraph inherits");
+    assert!(
+        !para.contains("<w:ind") && !para.contains("<w:jc"),
+        "a paragraph matching Normal carries no redundant overrides:\n{para}"
+    );
+    let styles_xml = fixture_styles_xml("par_local_overrides");
+    let normal_start = styles_xml
+        .find(r#"w:styleId="Normal""#)
+        .expect("Normal style present");
+    let normal = &styles_xml[normal_start
+        ..styles_xml[normal_start..]
+            .find("</w:style>")
+            .map_or(styles_xml.len(), |e| normal_start + e)];
+    assert!(
+        normal.contains(r#"w:firstLineChars="200""#) && normal.contains(r#"w:jc w:val="both""#),
+        "the document-global Normal style is untouched:\n{normal}"
+    );
+}

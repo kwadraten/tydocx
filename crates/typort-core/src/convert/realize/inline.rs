@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use crate::convert::footnote::parse_circled_number;
 use crate::convert::page::{CounterUse, classify_counter_use, counter_page_label};
-use typort_ir::{Degradation, DegradationAction, HangingIndent, IrImage, IrInline, IrParagraph};
+use typort_ir::{
+    Degradation, DegradationAction, HangingIndent, IrFirstLineIndent, IrImage, IrInline,
+    IrParStyle, IrParagraph,
+};
 use typort_ooxml::document::Alignment;
 use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
@@ -993,9 +996,33 @@ pub fn collect_paragraph(
     Ok(IrParagraph {
         inlines,
         alignment: alignment_from_styles(styles),
+        par: par_style_from_styles(styles),
         hanging_indent: hanging_indent_from_styles(styles),
         ..IrParagraph::default()
     })
+}
+
+/// `par` settings resolved on the element's own `StyleChain` — the values
+/// Typst actually laid the paragraph out with, including set rules scoped
+/// inside `#let` helpers and show rules (the source-AST pass sees only
+/// top-level set rules). An em indent resolves at the chain's font size so a
+/// `#set par(first-line-indent: 2em)` under a smaller caption size yields
+/// the caption's own twips, matching Typst's layout.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "paragraph indents are small pt/em values"
+)]
+pub(crate) fn par_style_from_styles(styles: StyleChain<'_>) -> IrParStyle {
+    let amount = styles.get(ParElem::first_line_indent).amount();
+    let size_pt = styles.resolve(TextElem::size).to_pt();
+    let abs_pt = amount.abs.to_pt();
+    let em = amount.em.get();
+    let twips = ((abs_pt + em * size_pt) * 20.0).round() as i64;
+    let chars = (em != 0.0 && abs_pt == 0.0).then(|| (em * 100.0).round() as i64);
+    IrParStyle {
+        first_line_indent: Some(IrFirstLineIndent { twips, chars }),
+        justify: Some(styles.get(ParElem::justify)),
+    }
 }
 
 /// `#set par(hanging-indent:)` — read from the element's `StyleChain` so rules
