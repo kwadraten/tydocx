@@ -8,7 +8,7 @@ use super::{BlockElement, CellContent, Document, HtmlDocument, ParagraphStyle, T
 /// the `"section"` arm of `handle_html_element`). Hand-written paragraphs that
 /// merely look like a reference list are, to Typst, ordinary text, so typort
 /// converts them as ordinary text rather than guessing from heading keywords
-/// (which would assume the document's language — see CLAUDE.md language-neutrality rules).
+/// (which would assume the document's language — see AGENTS.md language-neutrality rules).
 pub(super) fn apply_paragraph_formatting(doc: &mut Document) {
     let mut after_heading = false;
     let mut is_first_element = true;

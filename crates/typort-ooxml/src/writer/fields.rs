@@ -78,6 +78,78 @@ pub(super) fn write_complex_field<W: Write>(
     write_fld_char(writer, "end")
 }
 
+/// Write a complex field whose field runs carry `bold`/`size_half_pt` styling —
+/// used when the cached result was extracted from styled Typst content (a bold
+/// or resized page-number token in a header/footer).
+pub(super) fn write_complex_field_styled<W: Write>(
+    writer: &mut Writer<W>,
+    instruction: &str,
+    cached_result: &str,
+    bold: bool,
+    size_half_pt: Option<u32>,
+) -> io::Result<()> {
+    write_fld_char_styled(writer, "begin", bold, size_half_pt)?;
+    write_instruction_text_run_styled(writer, instruction, bold, size_half_pt)?;
+    write_fld_char_styled(writer, "separate", bold, size_half_pt)?;
+    writer.create_element("w:r").write_inner_content(|w| {
+        write_field_rpr(w, bold, size_half_pt)?;
+        w.create_element("w:t")
+            .with_attribute(("xml:space", "preserve"))
+            .write_text_content(BytesText::new(cached_result))?;
+        Ok(())
+    })?;
+    write_fld_char_styled(writer, "end", bold, size_half_pt)
+}
+
+fn write_field_rpr<W: Write>(
+    w: &mut Writer<W>,
+    bold: bool,
+    size_half_pt: Option<u32>,
+) -> io::Result<()> {
+    w.create_element("w:rPr").write_inner_content(|rpr| {
+        if bold {
+            rpr.create_element("w:b").write_empty()?;
+        }
+        if let Some(size) = size_half_pt {
+            super::package::write_size_pair(rpr, &size.to_string())?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn write_fld_char_styled<W: Write>(
+    writer: &mut Writer<W>,
+    char_type: &str,
+    bold: bool,
+    size_half_pt: Option<u32>,
+) -> io::Result<()> {
+    writer.create_element("w:r").write_inner_content(|w| {
+        write_field_rpr(w, bold, size_half_pt)?;
+        w.create_element("w:fldChar")
+            .with_attribute(("w:fldCharType", char_type))
+            .write_empty()?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn write_instruction_text_run_styled<W: Write>(
+    writer: &mut Writer<W>,
+    text: &str,
+    bold: bool,
+    size_half_pt: Option<u32>,
+) -> io::Result<()> {
+    writer.create_element("w:r").write_inner_content(|w| {
+        write_field_rpr(w, bold, size_half_pt)?;
+        w.create_element("w:instrText")
+            .with_attribute(("xml:space", "preserve"))
+            .write_text_content(BytesText::new(text))?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
 pub(super) fn write_field_ref<W: Write>(
     writer: &mut Writer<W>,
     bookmark_name: &str,
@@ -86,6 +158,30 @@ pub(super) fn write_field_ref<W: Write>(
     let bookmark_name = truncate_bookmark_name(bookmark_name);
     let instr = format!(" REF {bookmark_name} \\h ");
     write_complex_field(writer, &instr, display_text, true)
+}
+
+pub(super) fn write_field_pageref<W: Write>(
+    writer: &mut Writer<W>,
+    bookmark_name: &str,
+    display_text: &str,
+) -> io::Result<()> {
+    let bookmark_name = truncate_bookmark_name(bookmark_name);
+    let instr = format!(" PAGEREF {bookmark_name} \\h ");
+    write_complex_field(writer, &instr, display_text, true)
+}
+
+/// Write a current-page field (` PAGE `) with the cached display text
+/// (the page number Typst rendered at this spot).
+pub(super) fn write_field_page<W: Write>(
+    writer: &mut Writer<W>,
+    display_text: &str,
+    bold: bool,
+    size_half_pt: Option<u32>,
+) -> io::Result<()> {
+    if !bold && size_half_pt.is_none() {
+        return write_complex_field(writer, " PAGE ", display_text, true);
+    }
+    write_complex_field_styled(writer, " PAGE ", display_text, bold, size_half_pt)
 }
 
 pub(super) fn write_hyperlink<W: Write>(

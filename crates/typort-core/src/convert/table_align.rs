@@ -20,6 +20,7 @@ use typst::introspection::Introspector;
 use typst_html::HtmlDocument;
 use typst_library::layout::{Alignment as TstAlignment, Celled, HAlignment, VAlignment};
 use typst_library::model::{TableCell as TstCell, TableChild, TableElem, TableItem};
+use typst_library::visualize::Paint;
 use typst_utils::Protected;
 
 use crate::world::TyportWorld;
@@ -63,6 +64,93 @@ pub(super) fn apply_cell_alignment(
             col += cell.colspan as usize;
         }
     }
+}
+
+/// Map a Typst `Paint` to the 6-digit uppercase hex for `w:shd` cell
+/// shading. Only solid colors map; gradients and tilings have no cell-level
+/// OOXML equivalent. Pure: no I/O, no global state. The hex comparison
+/// ignores alpha, matching the existing foreground-color convention
+/// (`extract_non_black_color`) and `highlight_style`.
+#[must_use]
+pub fn paint_to_shd_hex(paint: &Paint) -> Option<String> {
+    let Paint::Solid(color) = paint else {
+        return None;
+    };
+    let hex = color.to_hex();
+    Some(
+        hex.strip_prefix('#')
+            .map_or("", |digits| &digits[..6.min(digits.len())])
+            .to_uppercase(),
+    )
+}
+
+/// Apply each cell's authored fill (from the semantic `TableElem`) to the IR
+/// table — solid colors become `w:shd` cell shading. Cells the author left
+/// unfilled are untouched. Mirrors `apply_cell_alignment`: HTML supplies
+/// table *structure*, the introspector supplies the *styling* the HTML
+/// dropped.
+///
+/// Returns the number of cells that received a shading, so the C1 mode gate
+/// can report (and then strip) the dropped fills.
+pub(super) fn apply_cell_fill(
+    table: &mut Table,
+    table_elem: &TableElem,
+    world: &TyportWorld,
+    html_doc: &HtmlDocument,
+) -> usize {
+    let semantic_cells = collect_cells(table_elem);
+    let table_fill = table_elem.fill.get_ref(StyleChain::default());
+    let mut sink = Sink::new();
+    let traced = Traced::default();
+    let introspector: &dyn Introspector = &**html_doc.introspector();
+    let mut engine = Engine {
+        world: (world as &dyn World).track(),
+        library: world.library(),
+        introspector: Protected::new(introspector.track()),
+        traced: traced.track(),
+        sink: sink.track_mut(),
+        route: Route::default(),
+    };
+
+    // Walk the IR's origin cells (skipping `vMerge` continuation placeholders, which
+    // have no semantic counterpart) in document order, alongside the semantic cells.
+    let mut filled = 0usize;
+    let mut sem = semantic_cells.iter();
+    for (row_idx, row) in table.rows.iter_mut().enumerate() {
+        let mut col = 0usize;
+        for cell in &mut row.cells {
+            if cell.vmerge == VMerge::Continue {
+                col += cell.colspan as usize;
+                continue;
+            }
+            let Some(sc) = sem.next() else { return filled };
+            if let Some(hex) = resolve_fill(sc, table_fill, col, row_idx, &mut engine) {
+                cell.shading = Some(hex);
+                filled += 1;
+            }
+            col += cell.colspan as usize;
+        }
+    }
+    filled
+}
+
+/// Resolve a cell's fill: a per-cell override wins; otherwise the table-level
+/// fill resolved by Typst at the cell coordinate. Returns `None` for `auto`,
+/// `none`, gradients, tilings, or when evaluating the authored closure fails.
+fn resolve_fill(
+    cell: &TstCell,
+    table_fill: &Celled<Option<Paint>>,
+    col: usize,
+    row: usize,
+    engine: &mut Engine,
+) -> Option<String> {
+    if let Smart::Custom(fill) = cell.fill.get_ref(StyleChain::default()) {
+        return fill.as_ref().and_then(paint_to_shd_hex);
+    }
+    let paint = table_fill
+        .resolve(engine, StyleChain::default(), col, row)
+        .ok()??;
+    paint_to_shd_hex(&paint)
 }
 
 /// Flatten the table's semantic cells in document order (headers/footers included,
@@ -139,5 +227,40 @@ fn apply_align(cell: &mut TableCell, align: TstAlignment) {
                 para.alignment = Some(ha);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use typst_library::layout::Angle;
+    use typst_library::visualize::{
+        Color, ColorSpace, Gradient, LinearGradient, Paint, ProcessColorSpace,
+    };
+
+    #[test]
+    fn solid_color_maps_to_uppercase_hex() {
+        assert_eq!(
+            paint_to_shd_hex(&Paint::Solid(Color::from_u8(0xdd, 0xee, 0xff, 0xff))),
+            Some("DDEEFF".to_string())
+        );
+        // Alpha is ignored: the same RGB with any alpha maps the same way.
+        assert_eq!(
+            paint_to_shd_hex(&Paint::Solid(Color::from_u8(0xdd, 0xee, 0xff, 0x80))),
+            Some("DDEEFF".to_string())
+        );
+    }
+
+    #[test]
+    fn gradient_has_no_cell_shading() {
+        let gradient = Gradient::Linear(Arc::new(LinearGradient {
+            stops: vec![],
+            angle: Angle::deg(0.0),
+            space: ColorSpace::Process(ProcessColorSpace::Srgb),
+            relative: Smart::Auto,
+            anti_alias: true,
+        }));
+        assert_eq!(paint_to_shd_hex(&Paint::Gradient(gradient)), None);
     }
 }

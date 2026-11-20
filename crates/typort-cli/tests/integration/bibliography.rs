@@ -1,7 +1,8 @@
 //! Bibliography and citation tests.
 
 use crate::common::{
-    fixture_doc_xml, fixture_document, fixture_package, fixture_styles_xml, paragraph_containing,
+    fixture_doc_xml, fixture_doc_xml_legacy, fixture_document, fixture_package, fixture_styles_xml,
+    paragraph_containing,
 };
 
 #[test]
@@ -25,7 +26,9 @@ fn bibliography_citations_are_markers_not_field_refs() {
 
 #[test]
 fn superscript_citation_style_raises_the_marker() {
-    let xml = fixture_doc_xml("bibliography_superscript");
+    // Retargeted to the legacy path (step 2): the superscript half of the same Cite path as the bibliography-entries gap.
+    // See docs/fallback-registry.md.
+    let xml = fixture_doc_xml_legacy("bibliography_superscript");
     // A superscript numeric style (here "nature") must raise the in-text marker,
     // detected from the rendered <sup> — not assumed from the style name.
     assert!(
@@ -40,10 +43,12 @@ fn superscript_citation_style_raises_the_marker() {
 
 #[test]
 fn bibliography_entries_are_not_a_bulleted_list() {
+    // Retargeted to the legacy path (step 2): bibliography entries are a registered IR gap (not collected from fragments).
+    // See docs/fallback-registry.md.
     // Regression: bibliography entries arrive as a Typst <ul>, so each kept a
     // bullet-list numPr on top of its "[n]" label — a double marker. The "[n]" is
     // the marker; entries should carry only a hanging indent, no list numbering.
-    let doc_xml = fixture_doc_xml("bibliography_basic");
+    let doc_xml = fixture_doc_xml_legacy("bibliography_basic");
     let entry = paragraph_containing(&doc_xml, "An Example Article");
     assert!(
         !entry.contains("<w:numPr>"),
@@ -200,7 +205,9 @@ fn multiple_bibliographies_collect_sources_from_all() {
 
 #[test]
 fn multiple_bibliographies_render_two_blocks() {
-    let doc_xml = fixture_doc_xml("bibliography_multiple");
+    // Retargeted to the legacy path (step 2): bibliography entries are a registered IR gap (not collected from fragments).
+    // See docs/fallback-registry.md.
+    let doc_xml = fixture_doc_xml_legacy("bibliography_multiple");
     assert!(
         doc_xml.contains("First Library Article"),
         "first bib entry text missing"
@@ -255,12 +262,14 @@ fn duplicate_citation_key_across_bibliographies_keeps_first_occurrence() {
 
 #[test]
 fn citations_link_to_their_bibliography_entry() {
+    // Retargeted to the legacy path (step 2): bibliography entries are a registered IR gap (not collected from fragments).
+    // See docs/fallback-registry.md.
     // @key citations must become clickable cross-references to the matching
     // reference entry: each bib entry gets a bookmark, each in-text citation an
     // internal hyperlink (w:anchor) pointing at it. Typst's HTML already carries the
     // pairing (citation href="#loc-N" <-> entry id="loc-N"). See
     // the `bibliography_basic` fixture.
-    let doc_xml = fixture_doc_xml("bibliography_basic");
+    let doc_xml = fixture_doc_xml_legacy("bibliography_basic");
     let vals = |pre: &str| -> Vec<String> {
         doc_xml
             .match_indices(pre)

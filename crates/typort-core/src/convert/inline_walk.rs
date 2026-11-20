@@ -1,9 +1,18 @@
+use std::collections::HashMap;
+
+use typst::World;
+
+use crate::compat::{CompatMode, Degradation, DegradationAction};
+
+use typst_library::visualize::ImageElem;
+
 use super::{
-    Alignment, CiteElem, CiteGroup, EmphElem, EquationElem, HtmlDocument, HtmlElement, HtmlNode,
-    InlineFmt, LinkElem, Paragraph, RefElem, Run, StrongElem, Tag, WalkCtx, collect_flat_text,
-    content_at_location, drain_text_runs, element_at_location, emit_block_equation, find_img_src,
-    find_tag_end, first_biblioref_href, footnote, get_attr_value, has_attr_value, image, inline,
-    is_block_equation, run_with_span, sanitize_anchor, subtree_has_element, tag_name,
+    Alignment, CiteElem, CiteGroup, EmphElem, EquationElem, HighlightElem, HighlightStyle,
+    HtmlDocument, HtmlElement, HtmlNode, InlineFmt, LinkElem, Paragraph, RefElem, Run, StrongElem,
+    Tag, WalkCtx, collect_flat_text, content_at_location, drain_text_runs, element_at_location,
+    emit_block_equation, find_img_src, find_tag_end, first_biblioref_href, footnote,
+    get_attr_value, has_attr_value, highlight_style, image, inline, is_block_equation, page,
+    run_with_span, sanitize_anchor, subtree_has_element, tag_name, tag_span,
 };
 
 /// The behavior needed by a caller of the shared HTML inline collector.
@@ -21,6 +30,10 @@ pub(super) struct InlineOptions<'a> {
     fmt: InlineFmt,
     html_doc: Option<&'a HtmlDocument>,
     purpose: InlinePurpose,
+    /// Display sizes of rendered images, keyed by content hash. Only
+    /// populated for footnote walks — body walks read sizes through the
+    /// shared `WalkCtx` instead.
+    image_sizes: Option<&'a HashMap<u64, (u64, u64)>>,
 }
 
 impl<'a> InlineOptions<'a> {
@@ -29,6 +42,7 @@ impl<'a> InlineOptions<'a> {
             fmt: InlineFmt::default(),
             html_doc: None,
             purpose: InlinePurpose::Paragraph,
+            image_sizes: None,
         }
     }
 
@@ -37,6 +51,7 @@ impl<'a> InlineOptions<'a> {
             fmt,
             html_doc,
             purpose: InlinePurpose::Generic,
+            image_sizes: None,
         }
     }
 
@@ -45,14 +60,16 @@ impl<'a> InlineOptions<'a> {
             fmt: InlineFmt::default(),
             html_doc: None,
             purpose: InlinePurpose::FormattedRun,
+            image_sizes: None,
         }
     }
 
-    pub(super) fn footnote(fmt: InlineFmt) -> Self {
+    pub(super) fn footnote(fmt: InlineFmt, image_sizes: &'a HashMap<u64, (u64, u64)>) -> Self {
         Self {
             fmt,
             html_doc: None,
             purpose: InlinePurpose::Footnote,
+            image_sizes: Some(image_sizes),
         }
     }
 
@@ -111,12 +128,44 @@ pub(super) fn collect_inlines(
                     // Layouted-opaque inline content (e.g. a boxed drawing as a
                     // figure body): rasterize in place as an inline image.
                     if let Some(img) = image::rasterize_html_frame(frame) {
+                        // U21 (C1 only, Paragraph purpose only — the Generic
+                        // path carries no degradation sink): the frame's
+                        // vector/text content is no longer editable. The frame
+                        // carries no span or page, so the degradation is
+                        // span-less without a page hint.
+                        if options.purpose == InlinePurpose::Paragraph
+                            && let Some(ctx) = ctx.as_deref_mut()
+                            && ctx.compat == CompatMode::C1
+                        {
+                            ctx.degradations.push(Degradation::new(
+                                None,
+                                "html-frame",
+                                DegradationAction::Approximated,
+                                "HTML frame rasterized to PNG; content is no longer editable text",
+                            ));
+                        }
                         para.add_image(img);
                     }
                 }
             }
         }
         i += 1;
+    }
+}
+
+/// Whether an inline element with this tag name and `role` attribute is
+/// skipped (not descended into) for the given collection purpose.
+///
+/// Generic and Footnote both skip `MathML` — `<math>` is the rendered echo of
+/// an equation the Tag walker already emitted as OMML — and differ only in
+/// which footnote-marker role they suppress (`doc-noteref` vs `doc-backlink`).
+/// `FormattedRun` deliberately skips nothing: it descends into `MathML`, and
+/// changing that output belongs to #12.
+fn skip_inline_element(purpose: InlinePurpose, tag: &str, role: Option<&str>) -> bool {
+    match purpose {
+        InlinePurpose::Generic => tag == "math" || role == Some("doc-noteref"),
+        InlinePurpose::Footnote => tag == "math" || role == Some("doc-backlink"),
+        InlinePurpose::FormattedRun | InlinePurpose::Paragraph => false,
     }
 }
 
@@ -132,27 +181,76 @@ pub(super) fn collect_inline_element(
                 handle_inline_html_element(elem, ctx, para);
             }
         }
-        InlinePurpose::Generic => {
-            if tag_name(elem) == "math" || has_attr_value(elem, "role", "doc-noteref") {
+        InlinePurpose::Generic | InlinePurpose::FormattedRun | InlinePurpose::Footnote => {
+            // The three non-Paragraph purposes share one descend shape: skip
+            // what the purpose suppresses, then recurse with the tag's
+            // formatting. Only Generic treats `<br>` as a line break.
+            let tag = tag_name(elem);
+            if skip_inline_element(
+                options.purpose,
+                &tag,
+                get_attr_value(elem, "role").as_deref(),
+            ) {
                 return;
             }
-            let fmt = options.fmt.for_tag(&tag_name(elem));
-            collect_inlines(&elem.children, para, None, options.with_fmt(fmt));
-        }
-        InlinePurpose::FormattedRun => {
-            // Deliberately descend into MathML here. Link display collection has
-            // historically leaked its glyphs; changing that output belongs to #12.
-            let fmt = options.fmt.for_tag(&tag_name(elem));
-            collect_inlines(&elem.children, para, None, options.with_fmt(fmt));
-        }
-        InlinePurpose::Footnote => {
-            if tag_name(elem) == "math" || has_attr_value(elem, "role", "doc-backlink") {
+            if options.purpose == InlinePurpose::Generic && tag == "br" {
+                // A forced line break (`#linebreak()`) — without this it falls
+                // through to the child recursion below (a `<br>` has no children)
+                // and the break is silently dropped, gluing the surrounding words.
+                para.push_run(Run::line_break());
                 return;
             }
-            let fmt = options.fmt.for_tag(&tag_name(elem));
+            if options.purpose == InlinePurpose::Footnote {
+                // A hyperlink in a footnote keeps its target: only the
+                // display runs are collected from its children.
+                if tag == "a"
+                    && let Some(href) = get_attr_value(elem, "href")
+                {
+                    let mut tmp = collect_children_generic(&elem.children, options.fmt, None);
+                    let runs = drain_text_runs(&mut tmp);
+                    if !runs.is_empty() {
+                        para.add_hyperlink(href, runs);
+                    }
+                    return;
+                }
+                // An image in a footnote embeds like a body image: the
+                // `<img>` src data-URL carries the bytes and the display
+                // size comes from the paged render, falling back to the
+                // image's intrinsic size when no rendered size is known.
+                if tag == "img"
+                    && let Some(src) = get_attr_value(elem, "src")
+                {
+                    let empty = HashMap::new();
+                    let sizes = options.image_sizes.unwrap_or(&empty);
+                    if let Some(img) = image::image_data_from_src(&src, sizes) {
+                        para.add_image(img);
+                    }
+                    return;
+                }
+            }
+            let fmt = options.fmt.for_tag(&tag);
             collect_inlines(&elem.children, para, None, options.with_fmt(fmt));
         }
     }
+}
+
+/// Collect an element's children into a fresh paragraph with the given
+/// formatting, using the Generic collector. The Generic collector is
+/// element-aware (equations resolve to OMML when `html_doc` is present), so
+/// this preserves inline math that `drain_text_runs` would drop.
+fn collect_children_generic(
+    children: &[HtmlNode],
+    fmt: InlineFmt,
+    html_doc: Option<&HtmlDocument>,
+) -> Paragraph {
+    let mut tmp = Paragraph::new();
+    collect_inlines(
+        children,
+        &mut tmp,
+        None,
+        InlineOptions::generic(fmt, html_doc),
+    );
+    tmp
 }
 
 pub(super) fn collect_generic_inline_tag(
@@ -248,14 +346,15 @@ pub(super) fn handle_inline_tag(
     match content.elem().name() {
         "strong" | "emph" => handle_emphasis_tag(tag, children, i, ctx, para),
         "equation" => handle_inline_equation_tag(tag, children, i, ctx, para),
-        "footnote" => handle_inline_footnote_tag(tag, children, i, para),
+        "footnote" => handle_inline_footnote_tag(tag, children, i, ctx, para),
         "image" => handle_inline_image_tag(tag, children, i, ctx, para),
         "ref" => handle_inline_ref_tag(tag, children, i, ctx, para),
         "link" => handle_inline_link_tag(tag, children, i, ctx, para),
         "super" | "sub" | "raw" | "underline" | "strike" | "highlight" | "overline"
-        | "smallcaps" => handle_inline_format_tag(tag, children, i, para),
+        | "smallcaps" => handle_inline_format_tag(tag, children, i, ctx, para),
         "cite-group" => handle_inline_cite_group_tag(tag, children, i, ctx, para),
-        "par" | "context" => handle_nested_inline_tag(tag, children, i, ctx, para),
+        "par" => handle_nested_inline_tag(tag, children, i, ctx, para),
+        "context" => handle_inline_context_tag(tag, children, i, ctx, para),
         "caption" => handle_inline_caption_tag(tag, children, i, ctx, para),
         _ => find_tag_end(children, i, tag.location()),
     }
@@ -299,11 +398,10 @@ pub(super) fn handle_emphasis_tag(
         para.inlines.append(&mut tmp.inlines);
     } else if let Some(body) = body {
         for mut run in inline::extract_runs(&body) {
-            if fmt.bold {
-                run.bold = true;
-            } else {
-                run.italic = true;
-            }
+            // The runs already carry formatting from nested elements
+            // (smallcaps/super/sub); merge the emphasis flag instead of
+            // overwriting them (see #20).
+            fmt.or_into(&mut run);
             para.push_run(run);
         }
     }
@@ -334,10 +432,27 @@ pub(super) fn handle_inline_footnote_tag(
     tag: &Tag,
     children: &[HtmlNode],
     i: usize,
+    ctx: &mut WalkCtx,
     para: &mut Paragraph,
 ) -> usize {
     if let Some(id) = footnote::find_footnote_id_in_range(&children[i..]) {
         para.add_footnote_ref(id + 1);
+    }
+    // U26 (C1 only): a non-decimal, non-circled numbering has no OOXML
+    // equivalent. The marker text is the rendered numbering, so a `#set
+    // footnote(numbering: …)` rule is seen here even though the element
+    // field cannot see it. Span-less: the §4.1 dedup collapses a
+    // document's numbering to its first occurrence plus a count.
+    if ctx.compat == CompatMode::C1
+        && let Some(marker) = footnote::find_footnote_marker_text(&children[i..])
+        && !footnote::footnote_marker_representable(&marker)
+    {
+        ctx.degradations.push(Degradation::new(
+            None,
+            "footnote-numbering",
+            DegradationAction::Literalized,
+            format!("footnote numbering {marker:?} is not representable; references using it are dropped"),
+        ));
     }
     find_tag_end(children, i, tag.location())
 }
@@ -346,14 +461,32 @@ pub(super) fn handle_inline_image_tag(
     tag: &Tag,
     children: &[HtmlNode],
     i: usize,
-    ctx: &WalkCtx,
+    ctx: &mut WalkCtx,
     para: &mut Paragraph,
 ) -> usize {
     let end = find_tag_end(children, i, tag.location());
-    if let Some(src) = find_img_src(&children[i..=end])
-        && let Some(img_data) = image::image_data_from_src(&src, ctx.image_sizes)
+    let src = find_img_src(&children[i..=end]);
+    if let Some(src) = &src
+        && let Some(img_data) = image::image_data_from_src(src, ctx.image_sizes)
     {
         para.add_image(img_data);
+    }
+    if ctx.compat == CompatMode::C1 {
+        // L4: an SVG image is rasterized to PNG; the vector aspect is dropped.
+        if let Some(src) = &src
+            && image::is_vector_image_src(src)
+        {
+            ctx.degradations.push(Degradation::new(
+                tag_span(tag),
+                "vector-image",
+                DegradationAction::Approximated,
+                "SVG image rasterized to PNG; vector aspect dropped",
+            ));
+        }
+        // U19: a non-cover fit and a non-empty alt text are dropped.
+        if let Some(image_elem) = element_at_location::<ImageElem>(ctx.html_doc, tag.location()) {
+            image::report_image_aspects(&image_elem, tag_span(tag), ctx.degradations);
+        }
     }
     end
 }
@@ -422,6 +555,7 @@ pub(super) fn handle_inline_format_tag(
     tag: &Tag,
     children: &[HtmlNode],
     i: usize,
+    ctx: &mut WalkCtx,
     para: &mut Paragraph,
 ) -> usize {
     let end = find_tag_end(children, i, tag.location());
@@ -429,11 +563,49 @@ pub(super) fn handle_inline_format_tag(
     if !text.is_empty() {
         let mut run = Run::new(&text);
         if let Tag::Start(content, _) = tag {
-            apply_inline_format(content.elem().name(), &mut run);
+            let name = content.elem().name();
+            if name == "highlight" {
+                apply_highlight_fill(ctx, tag, &mut run);
+            } else if name == "overline" && ctx.compat == CompatMode::C1 {
+                // M9: C1 drops the overline aspect instead of silently
+                // rewriting it as underline; the text survives unadorned.
+                ctx.degradations.push(Degradation::new(
+                    tag_span(tag),
+                    "overline",
+                    DegradationAction::Skipped,
+                    "overline dropped; text kept without decoration",
+                ));
+            } else {
+                apply_inline_format(name, &mut run);
+            }
         }
         para.push_run(run);
     }
     end
+}
+
+/// Resolve a highlight's declared fill and write its OOXML form onto the
+/// run. Falls back to the historical yellow when the element can't be
+/// resolved at this location, or when the fill is unset (Typst's default).
+fn apply_highlight_fill(ctx: &WalkCtx, tag: &Tag, run: &mut Run) {
+    let Some(highlight) = element_at_location::<HighlightElem>(ctx.html_doc, tag.location()) else {
+        run.highlight_color = Some("yellow".into());
+        return;
+    };
+    // `fill` is a settable field: `as_option` reads the value stored on the
+    // realized element. An explicitly set `none` means no highlight; an
+    // unset fill means Typst's default yellow — the same pattern
+    // `is_block_equation` uses for `block`.
+    let style = match highlight.fill.as_option() {
+        Some(Some(paint)) => highlight_style(Some(paint)),
+        Some(None) => HighlightStyle::None,
+        None => HighlightStyle::Named("yellow"),
+    };
+    match style {
+        HighlightStyle::Named(name) => run.highlight_color = Some(name.into()),
+        HighlightStyle::Shading(hex) => run.shading = Some(hex),
+        HighlightStyle::None => {}
+    }
 }
 
 pub(super) fn handle_inline_cite_group_tag(
@@ -454,6 +626,85 @@ pub(super) fn handle_inline_cite_group_tag(
         let display = collect_flat_text(&children[i + 1..end]);
         if !keys.is_empty() && !display.is_empty() {
             para.add_citation(keys, display);
+        }
+    }
+    end
+}
+
+/// A `context` Tag wraps a `context ...` expression. Most of the time it is
+/// transparent — the rendered text is the expression's value, collected as
+/// usual — but `counter(page).at(<label>)` is a page reference to a labelled
+/// location: emit a PAGEREF field to that label's bookmark instead, with the
+/// rendered page number as the cached display text. The label is recovered
+/// from the source AST (the Tag's span points at the expression); anything
+/// the resolver can't identify falls back to the plain-text collection.
+pub(super) fn handle_inline_context_tag(
+    tag: &Tag,
+    children: &[HtmlNode],
+    i: usize,
+    ctx: &mut WalkCtx,
+    para: &mut Paragraph,
+) -> usize {
+    let end = find_tag_end(children, i, tag.location());
+    let Tag::Start(content, _) = tag else {
+        return end;
+    };
+    let span = content.span();
+    let source = span.id().and_then(|id| ctx.world.source(id).ok());
+    let label = source
+        .as_ref()
+        .and_then(|source| page::counter_page_label(source, span));
+    if let Some(label) = label {
+        let display = collect_flat_text(&children[i + 1..end]);
+        para.add_field_pageref(label, display);
+    } else {
+        // A bare current-page reference becomes a PAGE field (an
+        // intersection-native field, present in all compat modes); the
+        // cached text is whatever Typst rendered at this spot.
+        let counter_use = source.as_ref().map_or(page::CounterUse::Other, |source| {
+            page::classify_counter_use(source, span)
+        });
+        match counter_use {
+            page::CounterUse::CurrentPage => {
+                let display = collect_flat_text(&children[i + 1..end]);
+                para.add_field_page(display);
+            }
+            page::CounterUse::PageCounterUnsupported => {
+                ctx.degradations.push(Degradation::new(
+                    Some(span),
+                    "page-counter-value",
+                    DegradationAction::Literalized,
+                    "page-counter value Word cannot recompute (e.g. arithmetic around counter(page)) kept as literal text",
+                ));
+                collect_inlines(
+                    &children[i + 1..end],
+                    para,
+                    Some(ctx),
+                    InlineOptions::paragraph(),
+                );
+            }
+            page::CounterUse::FootnoteCounter => {
+                ctx.degradations.push(Degradation::new(
+                    Some(span),
+                    "footnote-counter-reference",
+                    DegradationAction::Literalized,
+                    "footnote-counter reference kept as literal text (NOTEREF is a C3 field)",
+                ));
+                collect_inlines(
+                    &children[i + 1..end],
+                    para,
+                    Some(ctx),
+                    InlineOptions::paragraph(),
+                );
+            }
+            page::CounterUse::Other => {
+                collect_inlines(
+                    &children[i + 1..end],
+                    para,
+                    Some(ctx),
+                    InlineOptions::paragraph(),
+                );
+            }
         }
     }
     end
@@ -498,6 +749,8 @@ pub(super) fn handle_inline_caption_tag(
 }
 
 /// Apply the appropriate formatting flag to a `Run` based on the inline tag name.
+/// Highlight is not handled here: its declared fill is resolved with the
+/// element in `apply_highlight_fill`.
 pub(super) fn apply_inline_format(tag_name: &str, run: &mut Run) {
     match tag_name {
         "super" => run.superscript = true,
@@ -505,7 +758,6 @@ pub(super) fn apply_inline_format(tag_name: &str, run: &mut Run) {
         "raw" => run.monospace = true,
         "underline" | "overline" => run.underline = true,
         "strike" => run.strikethrough = true,
-        "highlight" => run.highlight_color = Some("yellow".into()),
         "smallcaps" => run.smallcaps = true,
         _ => {}
     }
@@ -519,36 +771,17 @@ pub(super) fn handle_inline_html_element(
 ) {
     let tag_str = tag_name(elem);
     match tag_str.as_str() {
-        "strong" | "b" | "em" | "i" => {
-            // Pass the doc and move ALL inlines (not just text runs): emphasis can
-            // wrap an inline equation (typst 0.15 nests math inside the emphasis
-            // element), which the shared inline collector emits as OMML via the
-            // introspector — `drain_text_runs` would silently drop that math.
-            let mut tmp = Paragraph::new();
-            collect_inlines(
+        "strong" | "b" | "em" | "i" | "code" => {
+            // Emphasis and code share one collection shape: descend with the
+            // tag's formatting (`for_tag` maps "code" to monospace) and move
+            // ALL inlines (not just text runs) — emphasis can wrap an inline
+            // equation (typst 0.15 nests math inside the emphasis element),
+            // which the shared inline collector emits as OMML via the
+            // introspector; `drain_text_runs` would silently drop that math.
+            let mut tmp = collect_children_generic(
                 &elem.children,
-                &mut tmp,
-                None,
-                InlineOptions::generic(
-                    InlineFmt::default().for_tag(tag_str.as_str()),
-                    Some(ctx.html_doc),
-                ),
-            );
-            para.inlines.append(&mut tmp.inlines);
-        }
-        "code" => {
-            let mut tmp = Paragraph::new();
-            collect_inlines(
-                &elem.children,
-                &mut tmp,
-                None,
-                InlineOptions::generic(
-                    InlineFmt {
-                        monospace: true,
-                        ..InlineFmt::default()
-                    },
-                    Some(ctx.html_doc),
-                ),
+                InlineFmt::default().for_tag(tag_str.as_str()),
+                Some(ctx.html_doc),
             );
             para.inlines.append(&mut tmp.inlines);
         }
@@ -568,13 +801,7 @@ pub(super) fn handle_inline_html_element(
         "a" => {
             // External hyperlink from HTML <a href="...">
             if let Some(href) = get_attr_value(elem, "href") {
-                let mut tmp = Paragraph::new();
-                collect_inlines(
-                    &elem.children,
-                    &mut tmp,
-                    None,
-                    InlineOptions::generic(InlineFmt::default(), None),
-                );
+                let mut tmp = collect_children_generic(&elem.children, InlineFmt::default(), None);
                 let runs = drain_text_runs(&mut tmp);
                 if !runs.is_empty() {
                     para.add_hyperlink(href, runs);
@@ -583,29 +810,18 @@ pub(super) fn handle_inline_html_element(
                 collect_inlines(&elem.children, para, Some(ctx), InlineOptions::paragraph());
             }
         }
-        "sup" => {
-            let mut tmp = Paragraph::new();
-            collect_inlines(
-                &elem.children,
-                &mut tmp,
-                None,
-                InlineOptions::generic(InlineFmt::default(), None),
-            );
+        "sup" | "sub" => {
+            // One shape, one flag difference: collect the children as plain
+            // text runs, then mark them superscript or subscript. Text runs
+            // only — `drain_text_runs` drops anything else (e.g. an equation
+            // nested under the marker), as before.
+            let mut tmp = collect_children_generic(&elem.children, InlineFmt::default(), None);
             for mut run in drain_text_runs(&mut tmp) {
-                run.superscript = true;
-                para.push_run(run);
-            }
-        }
-        "sub" => {
-            let mut tmp = Paragraph::new();
-            collect_inlines(
-                &elem.children,
-                &mut tmp,
-                None,
-                InlineOptions::generic(InlineFmt::default(), None),
-            );
-            for mut run in drain_text_runs(&mut tmp) {
-                run.subscript = true;
+                if tag_str == "sup" {
+                    run.superscript = true;
+                } else {
+                    run.subscript = true;
+                }
                 para.push_run(run);
             }
         }
@@ -617,5 +833,78 @@ pub(super) fn handle_inline_html_element(
         _ => {
             collect_inlines(&elem.children, para, Some(ctx), InlineOptions::paragraph());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InlinePurpose, skip_inline_element};
+
+    #[test]
+    fn skip_inline_element_generic_skips_math_and_noteref() {
+        // Generic skips the MathML echo of an equation and the footnote
+        // reference marker, but descends into anything else.
+        assert!(skip_inline_element(InlinePurpose::Generic, "math", None));
+        assert!(skip_inline_element(
+            InlinePurpose::Generic,
+            "sup",
+            Some("doc-noteref")
+        ));
+        assert!(!skip_inline_element(InlinePurpose::Generic, "sup", None));
+        assert!(!skip_inline_element(
+            InlinePurpose::Generic,
+            "sup",
+            Some("doc-backlink")
+        ));
+        assert!(!skip_inline_element(InlinePurpose::Generic, "span", None));
+    }
+
+    #[test]
+    fn skip_inline_element_formatted_run_skips_nothing() {
+        // FormattedRun deliberately descends into MathML (see #12); only the
+        // other purposes suppress anything.
+        assert!(!skip_inline_element(
+            InlinePurpose::FormattedRun,
+            "math",
+            None
+        ));
+        assert!(!skip_inline_element(
+            InlinePurpose::FormattedRun,
+            "sup",
+            Some("doc-noteref")
+        ));
+        assert!(!skip_inline_element(
+            InlinePurpose::FormattedRun,
+            "a",
+            Some("doc-backlink")
+        ));
+    }
+
+    #[test]
+    fn skip_inline_element_footnote_skips_math_and_backlink() {
+        assert!(skip_inline_element(InlinePurpose::Footnote, "math", None));
+        assert!(skip_inline_element(
+            InlinePurpose::Footnote,
+            "a",
+            Some("doc-backlink")
+        ));
+        assert!(!skip_inline_element(
+            InlinePurpose::Footnote,
+            "a",
+            Some("doc-noteref")
+        ));
+        assert!(!skip_inline_element(InlinePurpose::Footnote, "span", None));
+    }
+
+    #[test]
+    fn skip_inline_element_paragraph_never_skips() {
+        // Paragraph dispatches to handle_inline_html_element, which owns its
+        // own skipping; the shared predicate stays out of its way.
+        assert!(!skip_inline_element(InlinePurpose::Paragraph, "math", None));
+        assert!(!skip_inline_element(
+            InlinePurpose::Paragraph,
+            "sup",
+            Some("doc-noteref")
+        ));
     }
 }

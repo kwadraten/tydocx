@@ -22,10 +22,23 @@ pub(super) fn write_table<W: Write>(
         // Table properties with borders
         let tbl_width = table.width_pct.unwrap_or(5000).to_string();
         w.create_element("w:tblPr").write_inner_content(|tpr| {
-            tpr.create_element("w:tblW")
-                .with_attribute(("w:w", tbl_width.as_str()))
-                .with_attribute(("w:type", "pct"))
-                .write_empty()?;
+            if let Some(dxa) = table.width_twips {
+                let w_str = dxa.to_string();
+                tpr.create_element("w:tblW")
+                    .with_attribute(("w:w", w_str.as_str()))
+                    .with_attribute(("w:type", "dxa"))
+                    .write_empty()?;
+            } else {
+                tpr.create_element("w:tblW")
+                    .with_attribute(("w:w", tbl_width.as_str()))
+                    .with_attribute(("w:type", "pct"))
+                    .write_empty()?;
+            }
+            if let Some(alignment) = table.alignment {
+                tpr.create_element("w:jc")
+                    .with_attribute(("w:val", alignment.ooxml_value()))
+                    .write_empty()?;
+            }
             tpr.create_element("w:tblBorders")
                 .write_inner_content(|bdr| {
                     // Per-side thicknesses: from detected `borders` when present
@@ -65,11 +78,60 @@ pub(super) fn write_table<W: Write>(
                     }
                     Ok(())
                 })?;
+            if let Some(margins) = &table.cell_margins {
+                tpr.create_element("w:tblCellMar")
+                    .write_inner_content(|mar| {
+                        for (name, value) in [
+                            ("w:top", margins.top),
+                            ("w:left", margins.left),
+                            ("w:bottom", margins.bottom),
+                            ("w:right", margins.right),
+                        ] {
+                            let v = value.to_string();
+                            mar.create_element(name)
+                                .with_attribute(("w:w", v.as_str()))
+                                .with_attribute(("w:type", "dxa"))
+                                .write_empty()?;
+                        }
+                        Ok(())
+                    })?;
+            }
+            if table.col_widths_twips.is_some() {
+                tpr.create_element("w:tblLayout")
+                    .with_attribute(("w:type", "fixed"))
+                    .write_empty()?;
+            }
             Ok(())
         })?;
+        if let Some(widths) = &table.col_widths_twips {
+            w.create_element("w:tblGrid").write_inner_content(|grid| {
+                for width in widths {
+                    let w_str = width.to_string();
+                    grid.create_element("w:gridCol")
+                        .with_attribute(("w:w", w_str.as_str()))
+                        .write_empty()?;
+                }
+                Ok(())
+            })?;
+        }
         // Table rows
         for (row_idx, row) in table.rows.iter().enumerate() {
             w.create_element("w:tr").write_inner_content(|tr_w| {
+                if row.height_twips.is_some() || row.is_header {
+                    tr_w.create_element("w:trPr").write_inner_content(|trpr| {
+                        if let Some(h) = row.height_twips {
+                            let h_str = h.to_string();
+                            trpr.create_element("w:trHeight")
+                                .with_attribute(("w:val", h_str.as_str()))
+                                .with_attribute(("w:hRule", "exact"))
+                                .write_empty()?;
+                        }
+                        if row.is_header {
+                            trpr.create_element("w:tblHeader").write_empty()?;
+                        }
+                        Ok(())
+                    })?;
+                }
                 for cell in &row.cells {
                     tr_w.create_element("w:tc").write_inner_content(|tc_w| {
                         // Emit cell properties (width, merges)
@@ -77,15 +139,22 @@ pub(super) fn write_table<W: Write>(
                         let has_vmerge = cell.vmerge != VMerge::None;
                         // Always emit tcPr to set cell width
                         tc_w.create_element("w:tcPr").write_inner_content(|tcpr| {
-                            // Cell width: use explicit value or equal distribution
-                            let cell_width = cell
-                                .width_pct
-                                .unwrap_or_else(|| (5000 / num_cols) * cell.colspan);
-                            let width_str = cell_width.to_string();
-                            tcpr.create_element("w:tcW")
-                                .with_attribute(("w:w", width_str.as_str()))
-                                .with_attribute(("w:type", "pct"))
-                                .write_empty()?;
+                            if let Some(dxa) = cell.width_twips {
+                                let width_str = dxa.to_string();
+                                tcpr.create_element("w:tcW")
+                                    .with_attribute(("w:w", width_str.as_str()))
+                                    .with_attribute(("w:type", "dxa"))
+                                    .write_empty()?;
+                            } else {
+                                let cell_width = cell
+                                    .width_pct
+                                    .unwrap_or_else(|| (5000 / num_cols) * cell.colspan);
+                                let width_str = cell_width.to_string();
+                                tcpr.create_element("w:tcW")
+                                    .with_attribute(("w:w", width_str.as_str()))
+                                    .with_attribute(("w:type", "pct"))
+                                    .write_empty()?;
+                            }
                             if has_colspan {
                                 let span_str = cell.colspan.to_string();
                                 tcpr.create_element("w:gridSpan")
@@ -105,24 +174,82 @@ pub(super) fn write_table<W: Write>(
                                     VMerge::None => {}
                                 }
                             }
-                            // Three-line header separator: a bottom rule on the
-                            // cells of the last header row (insideH is off, so the
-                            // line appears under the header only).
-                            if let Some(tb) = &table.borders
-                                && let Some(sep) = tb.header_sep
-                                && tb.header_rows > 0
-                                && row_idx + 1 == tb.header_rows
-                            {
-                                let s = sep.to_string();
+                            let header_sep = table.borders.as_ref().and_then(|tb| {
+                                (tb.header_rows > 0 && row_idx + 1 == tb.header_rows)
+                                    .then_some(tb.header_sep)
+                                    .flatten()
+                            });
+                            if cell.borders.is_some() || header_sep.is_some() {
                                 tcpr.create_element("w:tcBorders")
                                     .write_inner_content(|tbw| {
-                                        tbw.create_element("w:bottom")
-                                            .with_attribute(("w:val", "single"))
-                                            .with_attribute(("w:sz", s.as_str()))
-                                            .with_attribute(("w:space", "0"))
-                                            .write_empty()?;
+                                        let sides = cell.borders.clone().unwrap_or_default();
+                                        for (name, side) in [
+                                            ("w:top", sides.top.as_ref()),
+                                            ("w:left", sides.left.as_ref()),
+                                            ("w:bottom", sides.bottom.as_ref()),
+                                            ("w:right", sides.right.as_ref()),
+                                        ] {
+                                            let sep_here =
+                                                name == "w:bottom" && header_sep.is_some();
+                                            match (side, sep_here) {
+                                                (Some(b), _) => {
+                                                    let s = b.sz_eighths.to_string();
+                                                    let val =
+                                                        if b.dashed { "dashed" } else { "single" };
+                                                    let el = tbw
+                                                        .create_element(name)
+                                                        .with_attribute(("w:val", val))
+                                                        .with_attribute(("w:sz", s.as_str()))
+                                                        .with_attribute(("w:space", "0"));
+                                                    if let Some(color) = &b.color_hex {
+                                                        el.with_attribute((
+                                                            "w:color",
+                                                            color.as_str(),
+                                                        ))
+                                                        .write_empty()?;
+                                                    } else {
+                                                        el.write_empty()?;
+                                                    }
+                                                }
+                                                (None, true) => {
+                                                    let s =
+                                                        header_sep.unwrap_or_default().to_string();
+                                                    tbw.create_element(name)
+                                                        .with_attribute(("w:val", "single"))
+                                                        .with_attribute(("w:sz", s.as_str()))
+                                                        .with_attribute(("w:space", "0"))
+                                                        .write_empty()?;
+                                                }
+                                                (None, false) => {
+                                                    if cell.borders.is_some() {
+                                                        tbw.create_element(name)
+                                                            .with_attribute(("w:val", "nil"))
+                                                            .write_empty()?;
+                                                    }
+                                                }
+                                            }
+                                        }
                                         Ok(())
                                     })?;
+                            }
+                            // Cell shading (w:shd comes after tcBorders and
+                            // before vAlign in the CT_TcPr schema order).
+                            if let Some(shading) = &cell.shading {
+                                tcpr.create_element("w:shd")
+                                    .with_attribute(("w:val", "clear"))
+                                    .with_attribute(("w:fill", shading.as_str()))
+                                    .write_empty()?;
+                            }
+                            if cell.zero_margins {
+                                tcpr.create_element("w:tcMar").write_inner_content(|mar| {
+                                    for name in ["w:top", "w:left", "w:bottom", "w:right"] {
+                                        mar.create_element(name)
+                                            .with_attribute(("w:w", "0"))
+                                            .with_attribute(("w:type", "dxa"))
+                                            .write_empty()?;
+                                    }
+                                    Ok(())
+                                })?;
                             }
                             // Vertical cell alignment (w:vAlign comes after
                             // tcBorders in the CT_TcPr schema order).

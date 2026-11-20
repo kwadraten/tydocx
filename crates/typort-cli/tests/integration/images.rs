@@ -42,7 +42,7 @@ fn text_figure_does_not_steal_drawing_raster() {
         "the quote figure's body must stay editable text, not be replaced by an image"
     );
     assert_eq!(
-        doc_xml.matches("<w:drawing").count(),
+        doc_xml.matches("asvg:svgBlip").count(),
         1,
         "exactly one embedded image: the drawing figure's own canvas"
     );
@@ -57,9 +57,10 @@ fn text_figure_does_not_steal_drawing_raster() {
 #[test]
 fn image_inside_rounded_container_embedded() {
     let doc_xml = fixture_doc_xml("rounded_container_image");
+    let embedded =
+        doc_xml.matches("<a:blip ").count() - doc_xml.matches("<mc:AlternateContent").count();
     assert_eq!(
-        doc_xml.matches("<w:drawing").count(),
-        2,
+        embedded, 2,
         "both the rounded-container image and the figure image must embed"
     );
     let container_img = doc_xml.find("<w:drawing").unwrap();
@@ -219,7 +220,7 @@ fn figure_caption_is_single_paragraph() {
 fn drawing_figure_is_rasterized_not_leaked() {
     let xml = fixture_doc_xml("edge_figure_rasterized");
     assert_eq!(
-        xml.matches("<w:drawing").count(),
+        xml.matches("asvg:svgBlip").count(),
         1,
         "the curve figure should be exactly one embedded image: {xml}"
     );
@@ -245,13 +246,13 @@ fn mixed_image_formats_stay_aligned() {
     // it to PNG keeps all three figures' images. See edge_image_format_mix.typ.
     let package = fixture_package("edge_image_format_mix");
     let names: Vec<&str> = package.part_names().collect();
-    let media = names
+    let rasters = names
         .iter()
-        .filter(|n| n.starts_with("word/media/"))
+        .filter(|n| n.starts_with("word/media/") && n.ends_with(".png"))
         .count();
     assert_eq!(
-        media, 3,
-        "all three figure images must be embedded (the GIF re-encoded), got {media}: {names:?}"
+        rasters, 3,
+        "all three figure images must be embedded (the GIF re-encoded), got {rasters}: {names:?}"
     );
 }
 

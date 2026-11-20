@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use typort_ooxml::document::{Alignment, InlineElement, Paragraph, ParagraphStyle, Run};
-use typst::layout::{Frame, FrameItem};
+use typst::layout::{Frame, FrameItem, Point};
 use typst_layout::PagedDocument;
 
+use super::body_size::{
+    BODY_SIZE_SAMPLE_PAGES, DEFAULT_BODY_SIZE_HALF_PT, dominant_body_size_half_pt,
+};
 use super::language::is_cjk_char;
-use super::style::DEFAULT_BODY_SIZE_HALF_PT;
 use super::units::pt_to_half_pt;
 
 /// OpenType weight at which rendered text is treated as bold.
@@ -42,24 +44,55 @@ struct PagedRunStyle {
     x: f64,
     text_width: f64,
     page_width: f64,
+    /// Zero-based page index, for the baseline sampling shared with the
+    /// document-style detector (#27).
+    page_idx: usize,
 }
 
 /// Collect per-run style information from all pages of the `PagedDocument`.
 fn collect_paged_run_styles(paged: &PagedDocument) -> Vec<PagedRunStyle> {
     let mut items = Vec::new();
-    for page in paged.pages() {
+    for (page_idx, page) in paged.pages().iter().enumerate() {
         let page_width = page.frame.width().to_pt();
-        collect_styles_from_frame(&page.frame, page_width, &mut items);
+        collect_styles_from_frame(&page.frame, page_width, page_idx, &mut items);
     }
     items
 }
 
-fn collect_styles_from_frame(frame: &Frame, page_width: f64, items: &mut Vec<PagedRunStyle>) {
-    super::frames::visit_frame_items(frame, false, &mut |position, item| {
+fn collect_styles_from_frame(
+    frame: &Frame,
+    page_width: f64,
+    page_idx: usize,
+    items: &mut Vec<PagedRunStyle>,
+) {
+    collect_styles_at(frame, Point::zero(), page_width, page_idx, items);
+}
+
+/// Recursive run-style walk, skipping footnote entry groups (see
+/// `is_footnote_entry_group`): footnote text renders at 0.85em, and
+/// counting it here misdetects the body size — a document whose
+/// footnote text outnumbers its body text then gets a body-size
+/// override re-added onto every body run.
+fn collect_styles_at(
+    frame: &Frame,
+    offset: Point,
+    page_width: f64,
+    page_idx: usize,
+    items: &mut Vec<PagedRunStyle>,
+) {
+    for (position, item) in frame.items() {
+        let absolute = Point::new(offset.x + position.x, offset.y + position.y);
+        if let FrameItem::Group(group) = item {
+            if super::frames::is_footnote_entry_group(group) {
+                continue;
+            }
+            collect_styles_at(&group.frame, absolute, page_width, page_idx, items);
+            continue;
+        }
         if let FrameItem::Text(text_item) = item {
             let text = text_item.text.to_string();
             if text.is_empty() {
-                return;
+                continue;
             }
             let info = text_item.font.info();
             let spans: Vec<typst_syntax::Span> =
@@ -83,12 +116,13 @@ fn collect_styles_from_frame(frame: &Frame, page_width: f64, items: &mut Vec<Pag
                 ),
                 is_math_font,
                 is_whitespace,
-                x: position.x.to_pt(),
+                x: absolute.x.to_pt(),
                 text_width: text_item.width().to_pt(),
                 page_width,
+                page_idx,
             });
         }
-    });
+    }
 }
 
 /// Finds the resolved coordinate for a variation axis on a shaped
@@ -124,7 +158,7 @@ fn variation_coordinate(
 /// `wght` axis from `variant.weight`, typst-library `text/font/variations.rs`).
 /// So for a VF run we must read the resolved `wght` coordinate — falling back to
 /// `info().variant.weight` when the font has no `wght` axis (variations empty).
-fn effective_weight(instance: &typst_library::text::FontInstance) -> u16 {
+pub(crate) fn effective_weight(instance: &typst_library::text::FontInstance) -> u16 {
     let wght = variation_coordinate(instance, typst_library::text::StandardAxes::WGHT)
         .map(typst_library::text::FontWeight::from_wght);
     wght.unwrap_or(instance.info().variant.weight).to_number()
@@ -156,7 +190,9 @@ fn effective_weight(instance: &typst_library::text::FontInstance) -> u16 {
 ///
 /// Falls back to `info().variant.style` when neither axis is present in
 /// `variations()` (a non-VF face, or a VF with no `ital`/`slnt` axis at all).
-fn effective_style(instance: &typst_library::text::FontInstance) -> typst_library::text::FontStyle {
+pub(crate) fn effective_style(
+    instance: &typst_library::text::FontInstance,
+) -> typst_library::text::FontStyle {
     use typst_library::text::{FontStyle, StandardAxes};
 
     if variation_coordinate(instance, StandardAxes::ITAL)
@@ -182,14 +218,23 @@ struct RenderedBodyStyle {
 /// Splitting by script prevents a CJK-dominated document from picking a CJK
 /// fallback font as the ASCII baseline (which would cause every Latin run to
 /// get a spurious font override) and vice-versa.
+///
+/// The baseline is sampled exactly like `extract_document_style` (#27) — the
+/// first pages only, with the size from the shared glyph-weighted detector.
+/// Sampling all pages let back matter in another size or font move the
+/// baseline away from the document style and put spurious overrides on body
+/// runs. (The font histograms still weight by byte length; only the size
+/// histogram and the sampling are part of #27.)
 fn detect_rendered_body_style(styles: &[PagedRunStyle]) -> RenderedBodyStyle {
     let mut ascii_font_counts: HashMap<&str, usize> = HashMap::new();
     let mut cjk_font_counts: HashMap<&str, usize> = HashMap::new();
-    let mut size_counts: HashMap<u32, usize> = HashMap::new();
+    let mut size_samples: Vec<(f64, usize)> = Vec::new();
 
-    for item in styles {
-        let half_pt = pt_to_half_pt(item.size_pt);
-        *size_counts.entry(half_pt).or_insert(0) += item.text.len();
+    for item in styles
+        .iter()
+        .filter(|item| item.page_idx < BODY_SIZE_SAMPLE_PAGES)
+    {
+        size_samples.push((item.size_pt, item.text.chars().count()));
 
         let has_cjk = item.text.chars().any(is_cjk_char);
         let has_ascii = item
@@ -212,9 +257,7 @@ fn detect_rendered_body_style(styles: &[PagedRunStyle]) -> RenderedBodyStyle {
         .map_or_else(|| "Times New Roman".to_string(), ToString::to_string);
     let body_font_cjk = super::stats::dominant_key(cjk_font_counts)
         .map_or_else(|| body_font_ascii.clone(), ToString::to_string);
-    let body_size =
-        super::stats::dominant_key(size_counts.iter().map(|(size, count)| (size, *count)))
-            .map_or(DEFAULT_BODY_SIZE_HALF_PT, |size| *size);
+    let body_size = dominant_body_size_half_pt(size_samples).unwrap_or(DEFAULT_BODY_SIZE_HALF_PT);
 
     RenderedBodyStyle {
         ascii_font: body_font_ascii,
@@ -223,7 +266,7 @@ fn detect_rendered_body_style(styles: &[PagedRunStyle]) -> RenderedBodyStyle {
     }
 }
 
-fn extract_non_black_color(paint: &typst_library::visualize::Paint) -> Option<String> {
+pub(crate) fn extract_non_black_color(paint: &typst_library::visualize::Paint) -> Option<String> {
     let typst_library::visualize::Paint::Solid(color) = paint else {
         return None;
     };
@@ -317,12 +360,100 @@ pub fn apply_styles_from_paged(paged: &PagedDocument, doc: &mut typort_ooxml::do
     // Apply paragraph alignment from x-positions
     apply_paragraph_alignment(&paged_styles, doc);
 
+    // Measure per-level heading sizes from the rendered runs and write them
+    // back into the document style before suppressing redundant heading run
+    // properties: the suppression compares run sizes against these style
+    // sizes, and the histogram values they replace can be wrong (see
+    // `measure_heading_sizes`).
+    let measured = measure_heading_sizes(doc, &paged_styles);
+    for (idx, size) in measured.iter().enumerate() {
+        if let Some(size) = size {
+            doc.style.heading_sizes[idx] = *size;
+        }
+    }
+
     // Drop per-run bold/size that merely restate the Heading style's own values:
     // the Heading{n} pStyle already supplies `<w:b/>` and the detected per-level
     // size, so repeating them on every run is noise that fights a user's Word
     // template. Only values that EQUAL the style are removed (extends commit
     // 9c458ca's "let Word own heading flow" to per-run bold/size).
     suppress_redundant_heading_run_props(doc);
+}
+
+/// Measure per-level heading sizes from the paged rendering.
+///
+/// For each heading paragraph in the document (levels 1–5), the spans of its
+/// runs are matched against the paged runs' spans — the same span link
+/// `build_style_override_maps` uses — and the sizes of the matching rendered
+/// runs are collected per level, weighted by glyph count. The dominant size
+/// per level is that level's measured size.
+///
+/// A level with no matching heading paragraph stays `None` and keeps the
+/// histogram value `detect_heading_sizes` computed: measuring needs a heading
+/// paragraph in the document, and a level that never occurs has nothing to
+/// measure. A heading whose size equals the body size is measured like any
+/// other — unlike the histogram, this does not filter sizes to those larger
+/// than the body, which is what made a headings-only document's H2 fall back
+/// to `body + offset` and render at the wrong size.
+fn measure_heading_sizes(
+    doc: &typort_ooxml::document::Document,
+    paged_styles: &[PagedRunStyle],
+) -> [Option<u32>; 5] {
+    // Span -> rendered size (half-points) weighted by glyph count, from the
+    // paged runs. A whitespace-only run carries no observable size, and a
+    // detached span points at no source text, so both are skipped — the same
+    // guards `build_style_override_maps` applies to its span map. One paged
+    // item can carry several spans (a run spanning a style boundary); the
+    // item's glyph count is credited to each of them, since a single item has
+    // a single size and there is no per-span glyph split to consult.
+    let mut span_sizes: HashMap<typst_syntax::Span, HashMap<u32, usize>> = HashMap::new();
+    for item in paged_styles {
+        if item.is_whitespace {
+            continue;
+        }
+        let size_half = pt_to_half_pt(item.size_pt);
+        let glyphs = item.text.chars().count();
+        for &span in &item.spans {
+            if span.is_detached() {
+                continue;
+            }
+            *span_sizes
+                .entry(span)
+                .or_default()
+                .entry(size_half)
+                .or_default() += glyphs;
+        }
+    }
+
+    // Per-level size counts, collected from the heading paragraphs' runs.
+    let mut per_level: [HashMap<u32, usize>; 5] = Default::default();
+    for element in &doc.body.elements {
+        typort_ooxml::document::for_each_paragraph_in_block(element, &mut |p| {
+            let Some(ParagraphStyle::Heading(level)) = p.style else {
+                return;
+            };
+            if !(1..=5).contains(&level) {
+                return;
+            }
+            let idx = usize::from(level) - 1;
+            p.for_each_run(&mut |run| {
+                let Some(span) = run.span else { return };
+                if span.is_detached() {
+                    return;
+                }
+                let Some(sizes) = span_sizes.get(&span) else {
+                    return;
+                };
+                for (&size, &count) in sizes {
+                    *per_level[idx].entry(size).or_default() += count;
+                }
+            });
+        });
+    }
+
+    per_level.map(|counts| {
+        super::stats::dominant_key(counts.iter().map(|(size, count)| (size, *count))).copied()
+    })
 }
 
 /// Remove per-run `bold` / `size_half_pt` from runs inside heading paragraphs
@@ -711,5 +842,138 @@ fn apply_paragraph_alignment(
         } else if min_x > page_center {
             p.alignment = Some(Alignment::Right);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU64;
+
+    use super::*;
+    use typort_ooxml::document::{BlockElement, Document};
+    use typst_syntax::Span;
+
+    /// A non-detached span for tests: file id 1 in the high bits, `n` low.
+    fn span(n: u64) -> Span {
+        Span::from_raw(NonZeroU64::new((1u64 << 48) | n).unwrap())
+    }
+
+    fn paged_run(text: &str, spans: Vec<Span>, size_pt: f64) -> PagedRunStyle {
+        PagedRunStyle {
+            text: text.to_string(),
+            spans,
+            font_family: "Libertinus Serif".to_string(),
+            size_pt,
+            color_hex: None,
+            is_bold: false,
+            is_italic: false,
+            is_math_font: false,
+            is_whitespace: false,
+            x: 0.0,
+            text_width: 10.0,
+            page_width: 400.0,
+            page_idx: 0,
+        }
+    }
+
+    fn heading_para(level: u8, text: &str, run_span: Option<Span>) -> Paragraph {
+        let mut p = Paragraph::new();
+        p.style = Some(ParagraphStyle::Heading(level));
+        let mut run = Run::new(text);
+        run.span = run_span;
+        p.push_run(run);
+        p
+    }
+
+    fn doc_with(paras: Vec<Paragraph>) -> Document {
+        let mut doc = Document::new();
+        for p in paras {
+            doc.body.elements.push(BlockElement::Paragraph(p));
+        }
+        doc
+    }
+
+    #[test]
+    fn measures_heading_size_equal_to_body() {
+        // The aligned_equations case in miniature: the H2 renders at 13pt,
+        // which is also the detected body size, so the histogram would fall
+        // back to body + offset. Measurement must still report 13pt.
+        let doc = doc_with(vec![heading_para(2, "Simple alignment", Some(span(7)))]);
+        let paged = vec![paged_run("Simple alignment", vec![span(7)], 13.0)];
+        assert_eq!(
+            measure_heading_sizes(&doc, &paged),
+            [None, Some(26), None, None, None]
+        );
+    }
+
+    #[test]
+    fn measures_each_level_independently() {
+        let doc = doc_with(vec![
+            heading_para(1, "Title", Some(span(1))),
+            heading_para(2, "Section", Some(span(2))),
+            heading_para(3, "Subsection", Some(span(3))),
+        ]);
+        let paged = vec![
+            paged_run("Title", vec![span(1)], 20.0),
+            paged_run("Section", vec![span(2)], 13.0),
+            paged_run("Subsection", vec![span(3)], 11.0),
+        ];
+        assert_eq!(
+            measure_heading_sizes(&doc, &paged),
+            [Some(40), Some(26), Some(22), None, None]
+        );
+    }
+
+    #[test]
+    fn dominant_size_wins_within_a_level() {
+        // Two H2s at different sizes: the one with more glyphs decides.
+        let doc = doc_with(vec![
+            heading_para(2, "Long section title", Some(span(1))),
+            heading_para(2, "Hi", Some(span(2))),
+        ]);
+        let paged = vec![
+            paged_run("Long section title", vec![span(1)], 13.0),
+            paged_run("Hi", vec![span(2)], 20.0),
+        ];
+        assert_eq!(
+            measure_heading_sizes(&doc, &paged),
+            [None, Some(26), None, None, None]
+        );
+    }
+
+    #[test]
+    fn unmatched_heading_stays_unmeasured() {
+        let doc = doc_with(vec![
+            heading_para(1, "Title", Some(span(1))),
+            heading_para(2, "Section", Some(span(9))),
+        ]);
+        let paged = vec![paged_run("Title", vec![span(1)], 20.0)];
+        assert_eq!(
+            measure_heading_sizes(&doc, &paged),
+            [Some(40), None, None, None, None]
+        );
+    }
+
+    #[test]
+    fn detached_span_and_whitespace_runs_are_ignored() {
+        let doc = doc_with(vec![heading_para(2, "Section", Some(span(2)))]);
+        let mut whitespace = paged_run(" ", vec![span(2)], 20.0);
+        whitespace.is_whitespace = true;
+        let paged = vec![whitespace, paged_run("other", vec![Span::detached()], 20.0)];
+        assert_eq!(
+            measure_heading_sizes(&doc, &paged),
+            [None, None, None, None, None]
+        );
+    }
+
+    #[test]
+    fn level_six_heading_is_ignored() {
+        // heading_sizes covers levels 1-5 only.
+        let doc = doc_with(vec![heading_para(6, "Deep", Some(span(1)))]);
+        let paged = vec![paged_run("Deep", vec![span(1)], 10.0)];
+        assert_eq!(
+            measure_heading_sizes(&doc, &paged),
+            [None, None, None, None, None]
+        );
     }
 }

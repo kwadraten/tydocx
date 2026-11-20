@@ -5,6 +5,7 @@
 //! that element, giving us direct access to `HeadingElem`, `EquationElem`,
 //! `FootnoteElem`, etc. without parsing HTML tags.
 
+mod baseline;
 mod bibliography;
 mod block;
 mod breaks;
@@ -14,13 +15,14 @@ mod fmt;
 mod footnote;
 mod frames;
 mod headings;
+mod highlight;
 mod image;
 pub mod inline;
 mod inline_walk;
 mod lists;
 pub mod page;
 mod postprocess;
-mod recovery;
+pub mod realize;
 mod smallcaps;
 mod source;
 mod stats;
@@ -29,14 +31,17 @@ mod table_width;
 mod tables;
 mod text_norm;
 
+pub use realize::{DocxDocument, convert_ir, export_ir, export_ir_with_ir};
+
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use typort_ooxml::document::{
-    Alignment, BlockElement, CellContent, Document, HangingIndent, ImageData, InlineElement,
-    ListInfo, Paragraph, ParagraphStyle, Run, Table, TableCell, TableRow, VMerge,
+    Alignment, BlockElement, CellContent, Document, HangingIndent, HeaderFooter, ImageData,
+    InlineElement, ListInfo, Paragraph, ParagraphStyle, Run, Table, TableCell, TableRow, VMerge,
 };
 use typst::comemo::Track;
+use typst::diag::SourceDiagnostic;
 use typst::foundations::{Content, NativeElement, Packed, Selector, Smart, StyleChain};
 use typst::introspection::{Introspector, Location, Tag};
 use typst::model::Numbering;
@@ -47,22 +52,28 @@ use typst_library::model::{
     CiteElem, CiteGroup, EmphElem, HeadingElem, LinkElem, OutlineElem, RefElem, StrongElem,
     TableElem,
 };
-use typst_library::text::{Lang, Region, SmartQuoteElem, SmartQuoter, SmartQuotes};
+use typst_library::text::{HighlightElem, Lang, Region, SmartQuoteElem, SmartQuoter, SmartQuotes};
 
+use crate::compat::{CompatMode, ConvertOptions, ConvertOutcome, Degradation, DegradationAction};
 use crate::world::TyportWorld;
 use fmt::InlineFmt;
 
+use baseline::apply_baseline_shifts_from_source;
 use block::{emit_block_equation, is_inline_equation_at, walk_tags};
 use dom::{
     children_are_inline, collect_deep_text, collect_flat_text, collect_li_ids, content_at_location,
     detect_alignment, drain_text_runs, element_at_location, find_body, find_first_element,
     find_img_src, find_tag_end, first_biblioref_href, get_attr_value, has_attr_value,
     is_block_equation, is_doc_endnotes_section, run_with_span, sanitize_anchor,
-    subtree_has_element, tag_name,
+    subtree_has_element, tag_name, tag_span,
 };
 use headings::handle_heading;
+use highlight::{HighlightStyle, highlight_style};
 use inline_walk::{InlineOptions, collect_inlines};
-use lists::{convert_html_list, handle_list_tag};
+use lists::{
+    convert_html_list, convert_html_list_to_paragraphs, enum_location_before, enum_numbering_at,
+    handle_list_tag,
+};
 use postprocess::{apply_paragraph_formatting, extract_document_metadata};
 use smallcaps::apply_smallcaps_from_source;
 use source::{apply_hanging_indent_from_source, apply_source_overrides, gather_source_overrides};
@@ -109,6 +120,13 @@ struct WalkCtx<'a> {
     /// of these is a citation (rendered as a marker like `[27]`), not a
     /// cross-reference to a bookmarked figure/equation/heading.
     bib_keys: &'a HashSet<String>,
+    /// Compat mode of this conversion. C1 gates degrade constructs the
+    /// OOXML intersection cannot express; C2/C3 keep the current output.
+    compat: CompatMode,
+    /// Degradations found so far. C1 gates push here, as do all-mode
+    /// literalizations (e.g. a page-counter value kept as literal text).
+    /// The walk pushes; `export` returns the list as part of [`ConvertOutcome`].
+    degradations: &'a mut Vec<Degradation>,
 }
 
 impl WalkCtx<'_> {
@@ -125,35 +143,92 @@ impl WalkCtx<'_> {
 
 /// Convert a Typst source file to an OOXML `Document` using the tag-walker approach.
 ///
+/// Compiles both targets, then hands them to [`export`]. The returned
+/// outcome pairs the document with the degradations reported during
+/// conversion (page/footnote counters kept as literal text, unmappable
+/// numbering patterns, ...; Phase 1 adds the per-mode gates).
+///
 /// # Errors
-/// Returns compilation errors if the Typst source cannot be compiled.
-pub fn convert(world: &TyportWorld) -> Result<Document, Vec<String>> {
-    // 1. Compile both targets.
+/// Returns compilation errors, with their spans, if the Typst source cannot
+/// be compiled.
+pub fn convert(
+    world: &TyportWorld,
+    options: &ConvertOptions,
+) -> Result<ConvertOutcome, Vec<SourceDiagnostic>> {
+    // The realize path (step 2) is the conversion path. The legacy
+    // tag-walker `export` stays as the explicitly-injected fallback and
+    // comparison baseline (see docs/fallback-registry.md).
+    realize::convert_ir(world, options)
+}
+
+/// The legacy tag-walker path, as a full pipeline: compile both targets
+/// and run `export`. Kept as the explicitly-injected fallback and as the
+/// comparison baseline for the realize path's equivalence tests.
+///
+/// # Errors
+///
+/// Returns the Typst compile diagnostics when the source fails to compile.
+pub fn convert_legacy(
+    world: &TyportWorld,
+    options: &ConvertOptions,
+) -> Result<ConvertOutcome, Vec<SourceDiagnostic>> {
     let (html_doc, paged_doc) = compile_both_targets(world)?;
+    Ok(export(&html_doc, paged_doc.as_ref(), world, options))
+}
+
+/// Export already-compiled documents to an OOXML `Document`.
+///
+/// Runs pipeline phases 2–5 (page settings and document style, HTML walk,
+/// headers and footers, post-processing) over the compiled documents. This is
+/// the backend-shaped entry point: callers that already hold compiled
+/// documents (a host compiler, a test) use this instead of [`convert`].
+#[must_use]
+pub fn export(
+    html_doc: &HtmlDocument,
+    paged_doc: Option<&PagedDocument>,
+    world: &TyportWorld,
+    options: &ConvertOptions,
+) -> ConvertOutcome {
+    let mut degradations = Vec::new();
+
     let mut doc = Document::new();
 
     // 2. Apply page settings and document style.
-    apply_page_and_style(world, paged_doc.as_ref(), &mut doc);
+    apply_page_and_style(world, paged_doc, &mut doc, &mut degradations);
 
     // 3. Walk the HTML body.
-    let body = walk_body(world, &html_doc, paged_doc.as_ref(), &mut doc);
+    walk_body(
+        world,
+        html_doc,
+        paged_doc,
+        &mut doc,
+        options.compat,
+        &mut degradations,
+    );
 
     // 4. Apply headers and footers.
-    apply_headers_and_footers(paged_doc.as_ref(), &mut doc);
+    apply_headers_and_footers(paged_doc, &mut doc, options.compat, &mut degradations);
 
     // 5. Run post-processing passes.
-    run_post_passes(world, &html_doc, paged_doc.as_ref(), body, &mut doc);
+    run_post_passes(
+        world,
+        html_doc,
+        paged_doc,
+        &mut doc,
+        options.compat,
+        &mut degradations,
+    );
 
-    Ok(doc)
+    ConvertOutcome::new(doc, degradations)
 }
 
 fn compile_both_targets(
     world: &TyportWorld,
-) -> Result<(HtmlDocument, Option<PagedDocument>), Vec<String>> {
+) -> Result<(HtmlDocument, Option<PagedDocument>), Vec<SourceDiagnostic>> {
     let html_result = typst::compile::<HtmlDocument>(world);
     let html_doc = match html_result.output {
         Ok(doc) => doc,
-        Err(errors) => return Err(errors.iter().map(|e| e.message.to_string()).collect()),
+        Err(errors) => return Err(errors.into_iter().collect()),
     };
 
     let paged_result = typst::compile::<PagedDocument>(world);
@@ -166,6 +241,7 @@ fn apply_page_and_style(
     world: &TyportWorld,
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
+    degradations: &mut Vec<Degradation>,
 ) {
     // Extract page settings and document style from PagedDocument (heuristic).
     if let Some(paged) = paged_doc {
@@ -175,7 +251,11 @@ fn apply_page_and_style(
 
     // Override with authoritative values from source AST.
     let source_overrides = gather_source_overrides(world);
-    apply_source_overrides(&source_overrides, doc, paged_doc.is_some());
+    apply_source_overrides(&source_overrides, doc, paged_doc.is_some(), degradations);
+
+    // Footnote numbering restarts per page only when the source resets the
+    // footnote counter in a page header; Typst's default is continuous.
+    doc.style.footnote_restart_each_page = source::detect_footnote_restart_each_page(world);
 
     // Note: page column count comes solely from the source AST
     // (`#set page(columns:)` / `#page(columns:)`, parsed above). There is no
@@ -185,21 +265,19 @@ fn apply_page_and_style(
     // genuine three column documents are all covered by the source parse.
 }
 
-fn walk_body<'a>(
+fn walk_body(
     world: &TyportWorld,
-    html_doc: &'a HtmlDocument,
+    html_doc: &HtmlDocument,
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
-) -> &'a HtmlElement {
-    // First pass: extract footnote content from <section role="doc-endnotes">,
-    // add it to the document, and size the footnote text from the Paged render.
-    let body = find_body(html_doc.root()).unwrap_or_else(|| html_doc.root());
-    footnote::extract_add_and_size_footnotes(doc, &body.children, paged_doc);
-
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
+) {
     // From the PagedDocument: on-page image display sizes keyed by content
     // hash (content itself comes from each <img>'s src data-URL during the
     // walk), and drawing-canvas rasters keyed by their figure's Location.
-    // Both keyed — no positional queues to desync.
+    // Both keyed — no positional queues to desync. Computed before the
+    // footnote extraction below so footnote images get real display sizes.
     let (image_sizes, mut figure_rasters) = if let Some(paged) = paged_doc {
         (
             image::collect_image_sizes(paged),
@@ -208,6 +286,11 @@ fn walk_body<'a>(
     } else {
         (HashMap::new(), HashMap::new())
     };
+
+    // First pass: extract footnote content from <section role="doc-endnotes">,
+    // add it to the document, and size the footnote text from the Paged render.
+    let body = find_body(html_doc.root()).unwrap_or_else(|| html_doc.root());
+    footnote::extract_add_and_size_footnotes(doc, &body.children, paged_doc, &image_sizes);
 
     // Walk the HTML tree's Tag sequence. Explicit `#pagebreak()` breaks are
     // recovered from the source AST during post-processing; automatic page-flow
@@ -231,34 +314,226 @@ fn walk_body<'a>(
             figure_rasters: &mut figure_rasters,
             bookmarks: &mut bookmarks,
             bib_keys: &bib_keys,
+            compat,
+            degradations,
         };
         walk_tags(&body.children, &mut ctx);
     }
 
     // Detect footnote format (circled numbers).
     footnote::detect_footnote_format(&body.children, doc);
-
-    body
 }
 
-fn apply_headers_and_footers(paged_doc: Option<&PagedDocument>, doc: &mut Document) {
-    // Extract headers and footers before content recovery so header/footer text
-    // is not misidentified as missing body content. All margin-zone consumers
+fn apply_headers_and_footers(
+    paged_doc: Option<&PagedDocument>,
+    doc: &mut Document,
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
+) {
+    // Extract headers and footers first so header/footer text is not
+    // misidentified as body content. All margin-zone consumers
     // share the resolved margins (paged default overridden by the source AST),
     // so a small author margin never misfiles body text as header/footer.
     if let Some(paged) = paged_doc {
         let margins = page::MarginsPt::from_settings(&doc.page_settings);
+        // The declared page-numbering format (from `#set page(numbering:)`,
+        // consumed in `apply_source_overrides`) wins over glyph guessing.
+        let declared = doc.page_numbering;
+        let top = page::extract_zone_parts(paged, page::MarginZone::Top, margins, declared);
+        let header_first_differs = top.title_page;
+        let header_even_differs = top.even_and_odd;
+        doc.even_and_odd_headers |= top.even_and_odd;
+        doc.title_page |= top.title_page;
+        report_zone_unrepresentable(&top, "header", compat, degradations);
         if doc.header.is_none() {
-            doc.header = page::extract_header(paged, margins);
+            doc.header.clone_from(&top.default);
         }
+        doc.header_even.clone_from(&top.even);
+        doc.header_first.clone_from(&top.first);
         // Detect page numbering before extracting footer. If the footer is just
-        // a page number, set page_numbering so the writer generates a PAGE field.
-        if let Some(fmt) = page::detect_page_numbering(paged, margins) {
-            doc.page_numbering = Some(fmt);
+        // a page number, the writer generates a PAGE field footer instead.
+        let numbering = page::detect_page_numbering(paged, margins)
+            .or_else(|| page::detect_multi_format_page_numbering(paged, margins));
+        let mut footer_first_differs = false;
+        let mut footer_even_differs = false;
+        let mut bottom: Option<page::ZoneParts> = None;
+        if let Some(fmt) = numbering {
+            doc.page_number_footers.default = true;
+            if declared.is_none() {
+                doc.page_numbering = Some(fmt);
+            }
             // Don't set doc.footer — the writer will generate a PAGE field footer
         } else if doc.footer.is_none() {
-            doc.footer = page::extract_footer(paged, margins);
+            let parts =
+                page::extract_zone_parts(paged, page::MarginZone::Bottom, margins, declared);
+            footer_first_differs = parts.title_page;
+            footer_even_differs = parts.even_and_odd;
+            doc.even_and_odd_headers |= parts.even_and_odd;
+            doc.title_page |= parts.title_page;
+            report_zone_unrepresentable(&parts, "footer", compat, degradations);
+            doc.footer.clone_from(&parts.default);
+            doc.footer_even.clone_from(&parts.even);
+            doc.footer_first.clone_from(&parts.first);
+            bottom = Some(parts);
         }
+        if doc.title_page {
+            if !header_first_differs && doc.header_first.is_none() && doc.header.is_some() {
+                doc.header_first = doc.header.clone();
+            }
+            if !footer_first_differs && doc.footer_first.is_none() && doc.footer.is_some() {
+                doc.footer_first = doc.footer.clone();
+            }
+            doc.page_number_footers.first =
+                doc.page_number_footers.default && !footer_first_differs;
+        }
+        if doc.even_and_odd_headers {
+            if !header_even_differs && doc.header_even.is_none() && doc.header.is_some() {
+                doc.header_even = doc.header.clone();
+            }
+            if !footer_even_differs && doc.footer_even.is_none() && doc.footer.is_some() {
+                doc.footer_even = doc.footer.clone();
+            }
+            doc.page_number_footers.even = doc.page_number_footers.default && !footer_even_differs;
+        }
+        if compat == CompatMode::C1 {
+            if let Some(degradation) = page::header_footer_variant(paged, margins) {
+                degradations.push(degradation);
+            }
+            let page_one = |parts: &page::ZoneParts, default: Option<HeaderFooter>| {
+                if parts.title_page && parts.first.is_none() {
+                    None
+                } else {
+                    parts.first.clone().or(default)
+                }
+            };
+            doc.header = page_one(&top, doc.header.take());
+            doc.footer = bottom.as_ref().map_or(doc.footer.take(), |parts| {
+                page_one(parts, doc.footer.take())
+            });
+            doc.header_even = None;
+            doc.header_first = None;
+            doc.footer_even = None;
+            doc.footer_first = None;
+            doc.title_page = false;
+            doc.even_and_odd_headers = false;
+            doc.page_number_footers.even = false;
+            doc.page_number_footers.first = false;
+        }
+    }
+}
+
+/// In C2/C3 a first-page or odd/even zone variant is representable, so only a
+/// shape that covers none of those (an arbitrary mid-document content change)
+/// reports `header-footer-variant`.
+fn report_zone_unrepresentable(
+    parts: &page::ZoneParts,
+    zone_name: &str,
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
+) {
+    if compat == CompatMode::C1 {
+        return;
+    }
+    if let Some(page_index) = parts.unrepresentable_page {
+        degradations.push(Degradation::new(
+            None,
+            "header-footer-variant",
+            DegradationAction::Skipped,
+            format!(
+                "page {page_index} {zone_name} differs from page 1; only the first page's {zone_name} is kept"
+            ),
+        ));
+    }
+}
+
+fn append_transform_bodies(world: &TyportWorld, doc: &mut Document) {
+    let texts = page::transform_bodies_text(world.main_source().text());
+    if texts.is_empty() {
+        return;
+    }
+    let mut para = Paragraph::new();
+    para.inlines
+        .push(InlineElement::Text(Run::new(texts.join(" "))));
+    doc.body.elements.push(BlockElement::Paragraph(para));
+}
+
+fn c1_source_degradations(world: &TyportWorld, degradations: &mut Vec<Degradation>) {
+    let main = world.main_source();
+    let template_names = page::extract_show_template_names_from_source(main.text());
+    if let Some(span) = page::detect_page_setting_change(main, &template_names) {
+        degradations.push(Degradation::new(
+            Some(span),
+            "section-break",
+            DegradationAction::Skipped,
+            "page columns or margins change mid-document; kept as a single section",
+        ));
+    }
+    let overrides = page::extract_source_style_overrides(main.text(), &template_names);
+    if overrides.margins_mirrored {
+        degradations.push(Degradation::new(
+            None,
+            "mirrored-margins",
+            DegradationAction::Skipped,
+            "inside/outside margins are not representable without w:mirrorMargins; \
+                 both sides keep the Typst default",
+        ));
+    }
+    if overrides.numbering_changed {
+        degradations.push(Degradation::new(
+            None,
+            "page-numbering-change",
+            DegradationAction::Skipped,
+            "the page numbering format or counter restart changes mid-document; \
+                 kept as a single numbering scheme",
+        ));
+    }
+    if overrides.page_furniture {
+        degradations.push(Degradation::new(
+            None,
+            "page-foreground",
+            DegradationAction::Approximated,
+            "page foreground/background is not representable as anchored content; \
+                 its content is kept in the page header or dropped",
+        ));
+    }
+    if overrides.show_outline_entry_rule {
+        degradations.push(Degradation::new(
+            None,
+            "show-outline-entry-rule",
+            DegradationAction::Approximated,
+            "a `show outline.entry` rule rewrites outline entries; the table of \
+                 contents keeps Word's default entry formatting",
+        ));
+    }
+    let transforms = [
+        (overrides.move_call, "moved-content", "a `move` offset"),
+        (
+            overrides.rotate_call,
+            "rotated-content",
+            "a `rotate` rotation",
+        ),
+        (overrides.scale_call, "scaled-content", "a `scale` factor"),
+        (overrides.skew_call, "skewed-content", "a `skew` shear"),
+    ];
+    for (present, construct, what) in transforms {
+        if present {
+            degradations.push(Degradation::new(
+                None,
+                construct,
+                DegradationAction::Skipped,
+                format!("{what} has no OOXML equivalent; the content is kept in place"),
+            ));
+        }
+    }
+    if overrides.show_heading_rule {
+        degradations.push(Degradation::new(
+            None,
+            "show-heading-rule",
+            DegradationAction::Approximated,
+            "a `show heading` rule rewrites heading content; a heading that is not \
+                 returned by the rule loses its Heading style and outline entry, while \
+                 its text is kept",
+        ));
     }
 }
 
@@ -266,21 +541,16 @@ fn run_post_passes(
     world: &TyportWorld,
     html_doc: &HtmlDocument,
     paged_doc: Option<&PagedDocument>,
-    body: &HtmlElement,
     doc: &mut Document,
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
 ) {
-    // Recover missing content from PagedDocument (e.g. #align(center) blocks).
-    if let Some(paged) = paged_doc {
-        recovery::recover_missing_content(paged, doc);
-        // Set table borders from the rules actually drawn (three-line vs grid).
-        recovery::detect_three_line_tables(paged, doc);
-    }
-
     // Extract title/author from document metadata, falling back to first heading.
     extract_document_metadata(html_doc, doc);
 
     // Extract bibliography sources for Word citation data store.
-    doc.citation_sources = bibliography::extract_bibliography_sources(html_doc, world);
+    doc.citation_sources =
+        bibliography::extract_bibliography_sources(&**html_doc.introspector(), world);
 
     // Suppress indent after headings and apply bibliography hanging indent.
     apply_paragraph_formatting(doc);
@@ -301,39 +571,17 @@ fn run_post_passes(
 
     // Detect small caps from source text.
     apply_smallcaps_from_source(world, doc);
+    apply_baseline_shifts_from_source(world, doc);
 
     // Recover explicit `#pagebreak()`/`#colbreak()` from the source AST.
     breaks::apply_breaks_from_source(world, doc);
 
-    // Build element→page mapping for section break and rule placement.
-    let element_page_map: Vec<usize> = if let Some(paged) = paged_doc {
-        recovery::build_element_page_map(doc, &body.children, paged)
-    } else {
-        Vec::new()
-    };
-
-    // Detect and apply section breaks from page setting changes.
-    if let Some(paged) = paged_doc {
-        let sections = page::detect_section_breaks(paged);
-        if !sections.is_empty() {
-            page::apply_section_breaks(doc, &sections, &element_page_map);
-        }
-    }
-
-    // Insert horizontal rules from geometry (internally gated on a source
-    // `#line()` in any reachable file so unrelated rules aren't invented).
-    let main_src = world.main_source().text();
-    if let Some(paged) = paged_doc {
-        let main_dir = world
-            .main_source()
-            .id()
-            .vpath()
-            .realize(world.root())
-            .ok()
-            .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-            .unwrap_or_else(|| world.root().to_path_buf());
-        let sources = page::collect_reachable_source_texts(world.root(), &main_dir, main_src);
-        recovery::insert_horizontal_rules_from_paged(paged, doc, &element_page_map, &sources);
+    // M6 (C1 only): a mid-document columns/margins change starts a new
+    // Typst section; C1 keeps a single section, so the change is dropped.
+    // Size-only section breaks stay in all modes (spec-ecma376 §Page-level).
+    append_transform_bodies(world, doc);
+    if compat == CompatMode::C1 {
+        c1_source_degradations(world, degradations);
     }
 
     // Merge consecutive paragraphs that belong to the same visual line.
@@ -342,6 +590,54 @@ fn run_post_passes(
     }
 
     // Coalesce adjacent equally-formatted text runs last, after every per-run
-    // style patch and recovery pass has settled.
+    // style patch has settled.
     coalesce::coalesce_runs(doc);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn hello_world() -> TyportWorld {
+        TyportWorld::new(Path::new("../../tests/fixtures/hello.typ")).unwrap()
+    }
+
+    /// Byte-equality oracle for the two conversion paths on `hello`: it
+    /// only holds because `hello` is in the `ir_path` IDENTICAL set. If
+    /// the paths ever diverge on `hello`, this is the canary — see
+    /// `crates/typort-cli/tests/integration/ir_path.rs`.
+    #[test]
+    fn export_matches_convert() {
+        let world = hello_world();
+        let options = ConvertOptions::default();
+        let via_convert = convert(&world, &options).unwrap();
+        let (html_doc, paged_doc) = compile_both_targets(&world).unwrap();
+        let via_export = export(&html_doc, paged_doc.as_ref(), &world, &options);
+        assert_eq!(via_convert, via_export);
+    }
+
+    #[test]
+    fn export_without_paged_document_still_produces_headings() {
+        let world = hello_world();
+        let (html_doc, _) = compile_both_targets(&world).unwrap();
+        let outcome = export(&html_doc, None, &world, &ConvertOptions::default());
+        let doc = outcome.document;
+        let headings = doc
+            .body
+            .elements
+            .iter()
+            .filter(|element| {
+                matches!(
+                    element,
+                    BlockElement::Paragraph(p)
+                        if matches!(p.style, Some(ParagraphStyle::Heading(_)))
+                )
+            })
+            .count();
+        assert!(
+            headings >= 1,
+            "expected at least one heading, got {headings}"
+        );
+    }
 }

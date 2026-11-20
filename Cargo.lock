@@ -2641,8 +2641,8 @@ dependencies = [
  "clap",
  "time",
  "typort-core",
+ "typort-ir",
  "typort-ooxml",
- "typort-presets",
  "typst",
  "typst-layout",
  "typst-pdf",
@@ -2654,12 +2654,14 @@ name = "typort-core"
 version = "0.2.0"
 dependencies = [
  "base64",
+ "codex",
  "hayagriva",
  "image",
  "resvg",
  "time",
  "tiny-skia",
  "ttf-parser",
+ "typort-ir",
  "typort-math",
  "typort-ooxml",
  "typst",
@@ -2667,9 +2669,19 @@ dependencies = [
  "typst-kit",
  "typst-layout",
  "typst-library",
+ "typst-realize",
  "typst-render",
+ "typst-svg",
  "typst-syntax",
  "typst-utils",
+]
+
+[[package]]
+name = "typort-ir"
+version = "0.2.0"
+dependencies = [
+ "typort-ooxml",
+ "typst-syntax",
 ]
 
 [[package]]
@@ -2690,16 +2702,6 @@ dependencies = [
  "quick-xml 0.37.5",
  "typst-syntax",
  "zip",
-]
-
-[[package]]
-name = "typort-presets"
-version = "0.2.0"
-dependencies = [
- "serde",
- "tempfile",
- "toml",
- "typort-ooxml",
 ]
 
 [[package]]

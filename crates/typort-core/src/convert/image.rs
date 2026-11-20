@@ -2,10 +2,15 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use typort_ooxml::document::{ImageData, ImageFormat};
+use typst::foundations::Packed;
 use typst::introspection::Location;
 use typst::layout::{Frame, FrameItem};
 use typst_html::HtmlFrame;
 use typst_layout::PagedDocument;
+use typst_library::visualize::{ImageElem, ImageFit};
+use typst_syntax::Span;
+
+use crate::compat::{Degradation, DegradationAction};
 
 /// Image CONTENT comes from the HTML `<img>` src data-URL (the semantic
 /// source, see `image_data_from_src`); the paged frames contribute only the
@@ -52,7 +57,7 @@ fn collect_frame_image_sizes(frame: &Frame, sizes: &mut HashMap<u64, (u64, u64)>
     }
 }
 
-fn hash_bytes(bytes: &[u8]) -> u64 {
+pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()
@@ -96,6 +101,7 @@ pub(super) fn image_data_from_src(
             Some(ImageData {
                 bytes,
                 format,
+                svg: None,
                 width_emu: w,
                 height_emu: h,
             })
@@ -114,6 +120,7 @@ pub(super) fn image_data_from_src(
             Some(ImageData {
                 bytes: png,
                 format: ImageFormat::Png,
+                svg: None,
                 width_emu: w,
                 height_emu: h,
             })
@@ -137,11 +144,52 @@ pub(super) fn image_data_from_src(
             Some(ImageData {
                 bytes: png,
                 format: ImageFormat::Png,
+                svg: Some(bytes),
                 width_emu: w,
                 height_emu: h,
             })
         }
         _ => None,
+    }
+}
+
+/// Whether an image `src` data-URL is a vector image (SVG) whose vector
+/// aspect C1 drops by rasterizing it to PNG. Raster formats (PNG/JPEG)
+/// keep their aspect; GIF/WebP re-encode to PNG, losing only animation.
+#[must_use]
+pub fn is_vector_image_src(src: &str) -> bool {
+    src.starts_with("data:image/svg+xml")
+}
+
+/// In C1, report the aspects of one image the OOXML intersection drops
+/// (U19): a non-cover `fit` (cover is the default Word behavior; the
+/// display size Typst computed is kept, only the fit behavior is lost)
+/// and a non-empty `alt` text (no alt-text slot is written). The image
+/// itself is kept; only these aspects are reported.
+pub(super) fn report_image_aspects(
+    image: &Packed<ImageElem>,
+    span: Option<Span>,
+    degradations: &mut Vec<Degradation>,
+) {
+    if let Some(fit) = image.fit.as_option()
+        && *fit != ImageFit::Cover
+    {
+        degradations.push(Degradation::new(
+            span,
+            "image-fit",
+            DegradationAction::Skipped,
+            "image fit is not cover; the fit behavior is dropped",
+        ));
+    }
+    if let Some(Some(alt)) = image.alt.as_option()
+        && !alt.is_empty()
+    {
+        degradations.push(Degradation::new(
+            span,
+            "image-alt",
+            DegradationAction::Skipped,
+            "image alt text is dropped",
+        ));
     }
 }
 
@@ -215,8 +263,8 @@ fn collect_figure_canvases(
 
 /// True if a frame (recursively) contains a Bézier curve shape — the signature
 /// of vector line art. Tables and horizontal rules use only straight `Line`
-/// geometry, so this never matches a table grid. Used by recovery to keep
-/// canvas-internal text out of the recovered-line corpus.
+/// geometry, so this never matches a table grid. Used to spot figure canvases
+/// for rasterization.
 pub(super) fn frame_has_curve(frame: &Frame) -> bool {
     frame.items().any(|(_, item)| match item {
         FrameItem::Shape(shape, _) => {
@@ -265,10 +313,19 @@ fn rasterize_frame(frame: &Frame) -> Option<ImageData> {
     };
     let pixmap = typst_render::render(&page, &opts);
     let bytes = pixmap.encode_png().ok()?;
+    let svg = Some(frame_svg(&page));
     Some(ImageData {
         bytes,
         format: ImageFormat::Png,
+        svg,
         width_emu: (width_pt * 12700.0) as u64,
         height_emu: (height_pt * 12700.0) as u64,
     })
+}
+
+/// Serialize a drawing frame to SVG — the vector-preserving companion to the
+/// PNG rasterization.
+fn frame_svg(page: &typst_layout::Page) -> Vec<u8> {
+    let opts = typst_svg::SvgOptions::default();
+    typst_svg::svg(page, &opts).into_bytes()
 }

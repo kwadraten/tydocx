@@ -4,7 +4,7 @@ use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesText, Event};
 
 use super::footnotes::write_footnote_pr;
-use super::image::image_rel_id;
+use super::image::{image_rel_id, svg_rel_id};
 use super::{DocParts, RelKind};
 use crate::document::{Document, DocumentStyle, ImageData, ImageFormat};
 
@@ -71,27 +71,40 @@ pub(crate) fn write_language_pair<W: Write>(
     Ok(())
 }
 
+/// Indentation attributes for a `w:ind` element. Every field is optional;
+/// an absent field is omitted from the output. Call sites set only the
+/// attributes they need (`..Default::default()` for the rest) instead of
+/// passing four positional `Option<&str>` values.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Indentation<'a> {
+    pub left: Option<&'a str>,
+    pub right: Option<&'a str>,
+    pub hanging: Option<&'a str>,
+    pub first_line_chars: Option<&'a str>,
+    pub first_line: Option<&'a str>,
+}
+
 pub(crate) fn write_indentation<W: Write>(
     writer: &mut Writer<W>,
-    left: Option<&str>,
-    hanging: Option<&str>,
-    first_line_chars: Option<&str>,
-    first_line: Option<&str>,
+    indentation: Indentation<'_>,
 ) -> io::Result<()> {
-    let mut indentation = writer.create_element("w:ind");
-    if let Some(value) = left {
-        indentation = indentation.with_attribute(("w:left", value));
+    let mut element = writer.create_element("w:ind");
+    if let Some(value) = indentation.left {
+        element = element.with_attribute(("w:left", value));
     }
-    if let Some(value) = hanging {
-        indentation = indentation.with_attribute(("w:hanging", value));
+    if let Some(value) = indentation.right {
+        element = element.with_attribute(("w:right", value));
     }
-    if let Some(value) = first_line_chars {
-        indentation = indentation.with_attribute(("w:firstLineChars", value));
+    if let Some(value) = indentation.hanging {
+        element = element.with_attribute(("w:hanging", value));
     }
-    if let Some(value) = first_line {
-        indentation = indentation.with_attribute(("w:firstLine", value));
+    if let Some(value) = indentation.first_line_chars {
+        element = element.with_attribute(("w:firstLineChars", value));
     }
-    indentation.write_empty()?;
+    if let Some(value) = indentation.first_line {
+        element = element.with_attribute(("w:firstLine", value));
+    }
+    element.write_empty()?;
     Ok(())
 }
 
@@ -116,8 +129,10 @@ pub(super) fn generate_content_types(
                 .with_attribute(("Extension", "xml"))
                 .with_attribute(("ContentType", "application/xml"))
                 .write_empty()?;
-            for format in [ImageFormat::Png, ImageFormat::Jpeg] {
-                if images.iter().any(|image| image.format == format) {
+            for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Svg] {
+                if images.iter().any(|image| {
+                    image.format == format || (format == ImageFormat::Svg && image.svg.is_some())
+                }) {
                     w.create_element("Default")
                         .with_attribute(("Extension", format.extension()))
                         .with_attribute(("ContentType", format.content_type()))
@@ -152,17 +167,21 @@ pub(super) fn generate_content_types(
                 .with_attribute(("PartName", "/word/settings.xml"))
                 .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"))
                 .write_empty()?;
-            if parts.has(RelKind::Header) {
-                w.create_element("Override")
-                    .with_attribute(("PartName", "/word/header1.xml"))
-                    .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"))
-                    .write_empty()?;
+            for slot in 1_u8..=3 {
+                if parts.has(RelKind::Header(slot)) {
+                    w.create_element("Override")
+                        .with_attribute(("PartName", format!("/word/header{slot}.xml").as_str()))
+                        .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"))
+                        .write_empty()?;
+                }
             }
-            if parts.has(RelKind::Footer) {
-                w.create_element("Override")
-                    .with_attribute(("PartName", "/word/footer1.xml"))
-                    .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"))
-                    .write_empty()?;
+            for slot in 1_u8..=3 {
+                if parts.has(RelKind::Footer(slot)) {
+                    w.create_element("Override")
+                        .with_attribute(("PartName", format!("/word/footer{slot}.xml").as_str()))
+                        .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"))
+                        .write_empty()?;
+                }
             }
             w.create_element("Override")
                 .with_attribute(("PartName", "/docProps/core.xml"))
@@ -218,13 +237,13 @@ pub(super) fn generate_document_rels(
                 w.create_element("Relationship")
                     .with_attribute(("Id", rid.as_str()))
                     .with_attribute(("Type", rel_type.as_str()))
-                    .with_attribute(("Target", target))
+                    .with_attribute(("Target", target.as_str()))
                     .write_empty()?;
             }
 
             // Image relationships
             for (idx, img) in images.iter().enumerate() {
-                let rid = image_rel_id(idx + 1, parts);
+                let rid = image_rel_id(idx + 1, images, parts);
                 let ext = img.format.extension();
                 let target = format!("media/image{}.{ext}", idx + 1);
                 w.create_element("Relationship")
@@ -235,6 +254,18 @@ pub(super) fn generate_document_rels(
                     ))
                     .with_attribute(("Target", target.as_str()))
                     .write_empty()?;
+                if img.svg.is_some() {
+                    let svg_rid = svg_rel_id(idx + 1, images, parts);
+                    let svg_target = format!("media/image{}.svg", idx + 1);
+                    w.create_element("Relationship")
+                        .with_attribute(("Id", svg_rid.as_str()))
+                        .with_attribute((
+                            "Type",
+                            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                        ))
+                        .with_attribute(("Target", svg_target.as_str()))
+                        .write_empty()?;
+                }
             }
             Ok(())
         })?;
@@ -244,6 +275,7 @@ pub(super) fn generate_document_rels(
 pub(super) fn generate_settings(
     writer: &mut Writer<&mut Vec<u8>>,
     style: &DocumentStyle,
+    even_and_odd_headers: bool,
 ) -> io::Result<()> {
     writer
         .create_element("w:settings")
@@ -256,7 +288,13 @@ pub(super) fn generate_settings(
             "http://schemas.openxmlformats.org/officeDocument/2006/math",
         ))
         .write_inner_content(|w| {
-            write_footnote_pr(w, &style.footnote_format)?;
+            if style.suppress_auto_hyphens {
+                w.create_element("w:suppressAutoHyphens").write_empty()?;
+            }
+            if even_and_odd_headers {
+                w.create_element("w:evenAndOddHeaders").write_empty()?;
+            }
+            write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
             w.create_element("w:compat").write_inner_content(|c| {
                 c.create_element("w:useFELayout").write_empty()?;
                 c.create_element("w:compatSetting")
@@ -331,6 +369,14 @@ pub(super) fn generate_core_properties(
             if let Some(author) = &doc.metadata.author {
                 w.create_element("dc:creator")
                     .write_text_content(BytesText::new(author))?;
+            }
+            if let Some(keywords) = &doc.metadata.keywords {
+                w.create_element("cp:keywords")
+                    .write_text_content(BytesText::new(keywords))?;
+            }
+            if let Some(description) = &doc.metadata.description {
+                w.create_element("dc:description")
+                    .write_text_content(BytesText::new(description))?;
             }
             w.create_element("dcterms:created")
                 .with_attribute(("xsi:type", "dcterms:W3CDTF"))

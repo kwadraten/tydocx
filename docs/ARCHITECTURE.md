@@ -2,7 +2,7 @@
 
 This document explains how typort turns a Typst document into an editable Word
 file. It is written for newcomers to the codebase. For build and contribution
-rules, see [`CLAUDE.md`](../CLAUDE.md) in the repository root.
+rules, see [`AGENTS.md`](../AGENTS.md) in the repository root.
 
 ## The problem
 
@@ -24,125 +24,173 @@ page-bottom paragraphs, cross-references break. typort exists to avoid exactly
 that. (See the competitor analysis in the project notes: PDF-intermediate tools
 are fundamentally lossy.)
 
-## The core idea: read the document from three sources at once
+## The core idea: read the document from two representations, plus narrow source-AST exceptions
 
 typort compiles the **same source** more than once, because no single
-representation carries everything Word needs. There are **three** information
-sources, in order of authority:
+representation carries everything Word needs. The primary sources, in order
+of authority:
 
 | Source | Produced by | Carries | Used for |
 |--------|-------------|---------|----------|
-| **HTML semantics** | `typst::compile::<HtmlDocument>` | element identity + document order + an *introspector* | the skeleton: what each thing *is* and what order it comes in |
-| **Paged geometry** | `typst::compile::<PagedDocument>` | fonts, sizes, colors, alignment, page dimensions, images, and content that has no HTML form | "painting on" real styles, and *recovering* content HTML dropped |
-| **Source AST** | re-parsing the `.typ` text (and imports) for `set` rules | authoritative declared values (`set text(font: ...)`, margins, columns) | overriding heuristic guesses with what the author literally wrote |
+| **Realize pairs** | `typst::compile::<DocxDocument>` (`Target::Paged`, via `typst-realize`) | element identity + document order + the `StyleChain` that applies to each element + an *introspector* | the skeleton *and* the paint: what each thing *is*, what order it comes in, and how it is formatted — including declared `set` values, which live in the chains |
+| **Paged geometry** | `typst::compile::<PagedDocument>` (companion compile) | footnote entry bodies, on-page image display sizes, page dimensions, headers/footers, page numbering | what the pairs cannot carry: footnote bodies, image sizes, page-level facts |
+| **Source AST** (narrow exceptions only) | re-parsing the `.typ` text | values consumed before the chain (declared font spelling — `FontFamily::new` lowercases it), values no chain can see (`set` rules inside imported modules that own no content), and facts about consumption (whether a `show` rule re-emitted `it`, `counter(footnote).update(0)`, `counter(page).at(<label>)` targets) | a fill-in under the chain-derived values — never the primary read |
 
 The mental model:
 
-> **HTML is the skeleton (semantics + order). Paged paints it (real styles) and
-> patches it (layout-only content HTML couldn't express). The source AST corrects
-> both when the author stated a value explicitly.**
+> **The realize pairs are the skeleton and the paint** (semantics + order +
+> styles, straight from the evaluator — the `StyleChain` is the authoritative
+> declared value, the same place Typst itself reads it). **Paged supplies
+> only what the pairs cannot** (footnote entry bodies, image display sizes,
+> page-level facts). **The source AST is a gap-fill** for values that provably
+> never reach a chain — not a third authority.
 
-### Why HTML alone is not enough
+The legacy `HtmlDocument` tag-walker path is kept as `convert_legacy` /
+`export` — the explicitly-injected fallback and the equivalence baseline
+for the realize path (see `docs/fallback-registry.md`). It is not the
+conversion path anymore; on that path the source AST remains a full third
+source (it predates the chain work).
 
-Typst's HTML export deliberately omits visual information and drops content that
-has no semantic HTML representation:
+### Why realization replaced HTML
+
+The legacy path walked `HtmlDocument`'s tag sequence. Typst's HTML export
+deliberately omits visual information and drops content that has no
+semantic HTML representation:
 
 - **No styling values.** `<h1>` tells you "heading"; it does *not* tell you the
   font, the exact point size, the RGB color, or the alignment. Those exist only in
-  the rendered frames. typort reverse-engineers them from Paged geometry
-  (`convert/page/style.rs` and `convert/page/run_style.rs`).
+  the rendered frames. The legacy path reverse-engineered them from Paged geometry
+  (`convert/page/style.rs` and `convert/page/run_style.rs`). The realize pairs
+  carry the `StyleChain` with each element, so the styles are read directly —
+  never inferred back from rendered glyphs.
 - **Layout-only constructs vanish.** `#align(center)[...]`, `#place(...)`, some
   `#grid(...)` layouts, and `#line()` rules have no HTML element, so they are
-  *absent from the DOM*. typort recovers them by diffing rendered text lines
-  against the model (`convert/recovery/`).
+  *absent from the DOM*. The legacy path used to recover them by diffing rendered
+  text lines against the model (`convert/recovery/` — deleted in step 4; the
+  equivalence baseline now runs without it). In the realize path, elements
+  that only exist after layout (a table's synthesized `grid`, a figure body's
+  caption) are resolved by **fragment re-realization**: the enclosing body is
+  realized a second time as a `Fragment` with the same engine and a locator
+  derived from the main one, and the fragment's tags carry the synthesized
+  element.
 - **Page-level facts don't exist before pagination.** Page size, margins, columns,
   headers/footers (which live in the page-margin zones), page breaks, and page
   numbering only come into being once the document is laid out — i.e. only from
-  Paged.
+  Paged. The realize path still takes these from the companion `PagedDocument`
+  (route (b)), as an explicit patch step (`convert/realize/patch.rs`).
 - **Math is MathML, not OMML.** The HTML target (typst 0.15) renders equations to
-  **MathML** `<math>` elements — semantic, but not what Word edits. typort still
-  pulls the original `EquationElem` Content tree through the **introspector** and
-  converts it to OMML (`typort-math`); the HTML walk skips the `<math>` node so
+  **MathML** `<math>` elements — semantic, but not what Word edits. Both paths
+  pull the original `EquationElem` Content tree through the **introspector** and
+  convert it to OMML (`typort-math`); the HTML walk skips the `<math>` node so
   the equation's glyphs aren't re-emitted as duplicate literal text
-  (`convert/inline_walk.rs`, `"math"` arm). MathML→OMML transliteration is a possible
+  (`convert/inline_walk.rs`, `"math"` arm), and the realize collector
+  likewise emits only the OMML, not the equation's rendered text pairs.
+  MathML→OMML transliteration is a possible
   future alternative, but the Content tree is the richer source today.
+- **The realize target is `Paged`, not `Html`.** `Target` has no `Docx`
+  variant, so a custom `Output` picks an existing one. Under `Target::Html`,
+  `realize`'s verdict applies the Html-specific built-in show rules
+  (`TABLE_RULE` and ~37 others, registered for Html only): a `TableElem` in
+  the pairs is already rewritten to `<table>` — cells keep only
+  colspan/rowspan; fill, stroke, inset, align, and track widths are gone.
+  Under `Target::Paged` the Paged rules (59 in 0.15.1) rewrite elements into
+  `BlockElem`/`ParElem` containers plus rendered text — the element's fields
+  stay materialized and its identity stays in the tag stream, much closer to
+  DOCX's block model. `Target::Paged` also requires no `Feature::Html` and
+  avoids the "html export is under active development" compile warning.
 
 ### Why Paged alone is not enough
 
 The rendered document has lost the semantics. A heading is just large bold
 glyphs; a footnote is just text near the bottom of a page; a table is just lines
 and text boxes. Building Word from geometry alone is the lossy PDF→Word path we
-are explicitly avoiding. HTML is what lets typort emit **native** Word headings,
+are explicitly avoiding. The realize pairs are what let typort emit **native** Word headings,
 footnotes, and cross-references.
 
-### Why the source AST is a third source
+### Why the source AST still exists (narrowly)
 
-Heuristics from geometry are a *fallback*. When the author wrote
-`#set text(font: ("Times New Roman", "SimSun"))`, that declaration is more
-trustworthy than counting glyphs. `convert/page/source_ast.rs::extract_source_style_overrides`
-re-parses the main source **and its imports** (template `lib.typ` files often hide
-`set` rules inside functions) and these values override the Paged-derived guesses.
+Heuristics from geometry are a *fallback*, and the `StyleChain` is the
+primary declared-value source — but a few values provably never reach a
+chain:
+
+- **Declared font spelling.** `FontFamily::new` lowercases the family name
+  before it enters the chain (`"Libertinus Serif"` → `"libertinus serif"`),
+  but OOXML and CJK `eastAsia` selection need the declared spelling.
+- **Imported-module `set` rules** apply only to the module's own content;
+  when it has none, no pair carries the value. The AST scan
+  (`extract_source_style_overrides` over reachable files) treats their
+  top-level rules as document-global, so `merge_from` keeps them for fields
+  the ambient chains leave unset.
+- **Consumption facts.** `show heading:`/`show outline.entry:` rewrite the
+  element during realization — whether `it` was re-emitted is unobservable
+  in the pairs. `counter(footnote).update(0)` is locatable, but
+  `CounterUpdateElem::key` is private in typst 0.15. `counter(page).at(<label>)`
+  reference targets likewise need the source span lookup.
+
+Document-global overrides are resolved by `convert/realize/chain.rs` from the
+`TagElem` marker pairs' chains — the ambient document-scope state that
+element-internal styling never contaminates — and `merge_from` fills only the
+fields no chain could provide.
 
 ## The pipeline
 
-`typort_core::convert::convert(world) -> Result<Document, Vec<String>>` is the
-heart of the system. It is a linear, numbered pipeline. The steps are grouped here
-by purpose; see the numbered comments in `crates/typort-core/src/convert/mod.rs`
-for the exact order.
+`typort_core::convert::convert(world, &options) -> Result<ConvertOutcome, Vec<SourceDiagnostic>>`
+is the heart of the system. It is a thin wrapper: it compiles the realize
+document and a companion `PagedDocument` (`convert_ir`) and hands them to
+`export_ir`, which lowers the collected IR. `export_ir(docx_doc, paged_doc, world, &options) -> ConvertOutcome`
+is the backend-shaped entry point — callers that already hold compiled
+documents (a host compiler, a test) use it instead of `convert`. The outcome
+pairs the document with its degradation report (`ConvertOutcome { document, degradations }`);
+the compat mode rides in `ConvertOptions` (see `docs/spec-ecma376.md`). Compilation failures keep
+their spans: they are returned as `Vec<SourceDiagnostic>`, never as plain
+strings. The steps are grouped here by purpose; see the numbered comments in
+`crates/typort-core/src/convert/realize/mod.rs` for the exact order.
 
-```
-                    ┌─────────────────────────────────────────────┐
-   input.typ ──►    │  TyportWorld  (World trait: source, fonts,   │
-                    │                packages, Feature::Html)      │
-                    └───────────────┬──────────────┬──────────────┘
-                                    │              │
-              compile::<HtmlDocument>      compile::<PagedDocument>
-                                    │              │
-                    semantics + introspector   geometry + frames
-                                    │              │
-                                    ▼              ▼
-                    ┌─────────────────────────────────────────────┐
-                    │  convert(): five named phases                 │
-                    │   1  compile HTML + Paged targets             │
-                    │   2  apply page + style, then AST overrides   │
-                    │   3  walk HTML body → emit BlockElements;     │
-                    │      decode <img> data URLs; attach figure    │
-                    │      rasters by Location                      │
-                    │   4  apply headers/footers/page numbering     │
-                    │   5  run recovery and post-processing passes │
-                    │      (metadata, bibliography, per-run styles,│
-                    │      source breaks/smallcaps/hanging indents, │
-                    │      sections, rules, merging, coalescing)    │
-                    └───────────────┬─────────────────────────────┘
-                                    ▼
-                          typort_ooxml::Document   (the IR)
-                                    ▼
-                          writer → XML parts → ZIP
-                                    ▼
-                               output.docx
+```mermaid
+flowchart TD
+    INPUT["input.typ"] --> WORLD["TyportWorld (World trait: source, fonts, packages, Feature::Html)"]
+    WORLD -->|compile::&lt;DocxDocument&gt; — realize pairs + collect IR| COMPILE["convert_ir(): thin wrapper<br/>1 compile DocxDocument + companion PagedDocument"]
+    WORLD -->|compile::&lt;PagedDocument&gt; — geometry + frames| COMPILE
+    COMPILE --> EXPORT["export_ir(docx_doc, paged_doc, world, &options)<br/>2 page + style from Paged + StyleChain overrides (+ narrow AST fill-in)<br/>3 patch: footnote bodies + image sizes from Paged frames<br/>4 pure lowering: IrDocument → typort_ooxml::Document<br/>5 post-passes (paragraph formatting, CJK fonts, run coalescing)"]
+    EXPORT --> IR["typort_ooxml::Document"]
+    IR --> WRITER["writer → XML parts → ZIP"]
+    WRITER --> OUT["output.docx"]
 ```
 
 Two design properties worth knowing:
 
 - **Graceful degradation.** Paged compilation is treated as optional
   (`paged_result.output.ok()`). Every Paged-dependent step is guarded by
-  `if let Some(paged)`, so if only HTML compiles, conversion still produces a
-  (less-styled) document.
-- **HTML drives order.** The HTML tag walk (`walk_tags`) defines document order.
-  Paged data is matched back onto it — by introspection `Location` (figure
-  rasters, table detail), by content hash (image display sizes), or by geometric
-  y-position (recovered content). Image bytes themselves need no matching: they
-  travel inside each `<img>`'s src data-URL.
+  `if let Some(paged)`, so if only the realize compile succeeds,
+  conversion still produces a document — footnotes keep their markers
+  literally, but images keep their 0 size (the intrinsic-size fallback
+  lives in the patch, which needs Paged; see
+  `docs/fallback-registry.md`).
+- **The pairs drive order.** The realize pair walk (`collect_document`)
+  defines document order. Paged data is matched back onto it — by
+  `Location` within the one Paged compile (footnote entry groups, keyed
+  by their parent marker location), or by content hash (image display
+  sizes). `Location` is process-local and is never compared across
+  compiles or persisted. Image bytes need no matching: they travel in
+  the pairs' `ImageElem` content.
+
+The legacy path (`convert_legacy` → `export`) is the same shape with a
+different skeleton: it compiles `HtmlDocument` + `PagedDocument` and walks
+the HTML tags (`walk_tags`) through pipeline phases 2–5 (page + style,
+HTML body walk, headers/footers, post-processing). It stays
+as the fallback and the equivalence baseline; its recovery passes were
+deleted in step 4 once the realize path proved it covers the same content
+natively (the per-item evidence is in `docs/fallback-registry.md`).
 
 ## Crate layout
 
-```
-crates/
-  typort-cli/      Thin clap binary: parse args → convert → write .docx
-  typort-core/     Typst compilation + the conversion engine (the brain)
-  typort-ooxml/    The OOXML document model (IR) + XML writer + ZIP packaging
-  typort-math/     Typst math Content tree → OMML
-  typort-presets/  Journal/style preset loading
+```mermaid
+flowchart TD
+    CRATES["crates/"] --> CLI["typort-cli/ — Thin clap binary: parse args → convert → write .docx"]
+    CRATES --> CORE["typort-core/ — Typst compilation + the conversion engine (the brain)"]
+    CRATES --> IR["typort-ir/ — The owned realize IR (IrDocument) + its pure lowering to typort_ooxml::Document"]
+    CRATES --> OOXML["typort-ooxml/ — The OOXML document model (IR) + XML writer + ZIP packaging"]
+    CRATES --> MATH["typort-math/ — Typst math Content tree → OMML"]
 ```
 
 `typort-ooxml/src/lib.rs` is the crate's public API index: it contains only module
@@ -166,7 +214,13 @@ they exercise that public API as integration tests.
 | File | Responsibility |
 |------|----------------|
 | `world.rs` | `TyportWorld`: implements Typst's `World` trait (source, system fonts, `@preview` package download, `Feature::Html`). |
-| `convert/mod.rs` | Entry orchestration: module declarations/re-exports, `WalkCtx`, equation state, and the five named pipeline phases. |
+| `convert/mod.rs` | Entry orchestration: `convert` (the realize path, thin wrapper over `convert_ir`) and `convert_legacy`/`export` (the legacy HtmlDocument pipeline, kept as fallback and equivalence baseline), module declarations/re-exports, `WalkCtx`, equation state, and the legacy pipeline phases. |
+| `convert/realize/mod.rs` | The realize path: `DocxDocument: Output` (`Target::Paged`, collects the IR during `create`), `with_fragment` (fragment re-realization), `convert_ir`/`export_ir` (page/style via a scratch `Document`, patch, pure lowering, path-independent post-passes), and the core↔ir `CompatMode`/`Degradation` boundary conversions. `DocxDocument`'s `introspector()` is an `ElementIntrospector` fed from the pairs' tag stream; the feed **must recurse into `ParElem`/`BlockElem` bodies** for nested `TagElem`s — top-level-only collection leaves `CiteGroup`s undiscovered and fails the final compile round ("citation could not be located"). |
+| `convert/realize/collect.rs` | Pair → `IrDocument` collection: the tag-group walk, label/bibliography pass, footnote markers, and fragment-resolved tables/grids/figures. |
+| `convert/realize/inline.rs` | Pair → `IrInline` collection: runs from `StyleChain`, links, refs, cites, images, math, breaks. |
+| `convert/realize/style.rs` | `StyleChain` → `Run` conversion (weight/style/size/color/font, smart quotes, run-merge key). |
+| `convert/realize/patch.rs` | Companion-Paged patch: footnote entry bodies from frame groups and image display sizes by content hash (with the intrinsic fallback). |
+| `convert/realize/place.rs` | Companion-Paged patch: `#place(.., float: true)` geometry — matches each float's frame group (keyed by the place's `Location` in `FrameParent`) to a page-absolute `IrAnchor` for `wp:anchor` emission. |
 | `convert/block.rs` | Block-level HTML tag walk and dispatch, paragraphs, equations, figures, code blocks, blockquotes, and term lists. |
 | `convert/inline_walk.rs` | HTML inline traversal: formatted spans, links, citations, footnotes, images, and inline equations. |
 | `convert/headings.rs` | Semantic heading conversion, numbering, smart quotes, and inline heading content. |
@@ -179,22 +233,16 @@ they exercise that public API as integration tests.
 | `convert/page/mod.rs` | Paged-style facade: declares responsibility modules and re-exports their caller-facing API. |
 | `convert/page/units.rs`, `convert/page/style.rs` | Word-unit conversion and document-style detection from rendered frames. |
 | `convert/page/source_ast.rs`, `convert/page/hanging_indent.rs`, `convert/page/reachable.rs` | Authoritative source-AST `set`-rule parsing (including scoped hanging indents) and reachable local-source collection. |
-| `convert/page/sections.rs`, `convert/page/margin.rs` | Section changes, page settings, body/margin zones, headers, footers, and page numbering from Paged geometry. |
-| `convert/page/run_style.rs`, `convert/page/language.rs` | Per-run rendered-style overrides, redundant heading-property suppression, BCP-47 helpers, and localized CJK font names. |
-| `convert/recovery/mod.rs` | Orchestrates recovery of layout-only content HTML dropped and re-exports the recovery passes. |
-| `convert/recovery/lines.rs` | Extracts positioned rendered lines and run/x-cluster data from paged frames. |
-| `convert/recovery/deduplication.rs` | Builds the emitted-text corpus and decides which rendered lines are already represented. |
-| `convert/recovery/insertion.rs` | Places genuinely missing rendered lines into the document model. |
-| `convert/recovery/horizontal_rules.rs` | Recovers source-declared horizontal rules and maps emitted elements to paged locations. |
-| `convert/recovery/table_rules.rs` | Derives each table's border style from its own paged tag bracket. |
-| `convert/text_norm.rs` | Shared walk/recovery normalisation for visual markers, CJK spacing/fragments, math italics, whitespace, and citation markers. |
+| `convert/page/margin.rs` | Page settings, body/margin zones, headers, footers, and page numbering from Paged geometry. |
+| `convert/page/run_style.rs`, `convert/page/language.rs` | Per-run rendered-style overrides, measured per-level heading sizes, redundant heading-property suppression, BCP-47 helpers, and localized CJK font names. |
+| `convert/text_norm.rs` | CJK-space normalisation shared by the HTML walk (the recovery-side normalisers went with `convert/recovery/`). |
 | `convert/coalesce.rs` | Final pass: merges same-line paragraphs, coalesces adjacent runs with identical effective `rPr`, and folds whitespace-only runs. |
 | `convert/table_width.rs` | Turns a `TableElem`'s declared column `TrackSizings` (fr/rel/auto) into per-cell `w:tcW` percentages. |
 | `convert/table_align.rs` | Faithful table-cell alignment from the semantic `TableElem`: horizontal → cell-paragraph `w:jc`, vertical → `w:vAlign`. |
 | `convert/breaks.rs` | Explicit `#pagebreak()`/`#colbreak()` recovery from the source AST (both are consumed at compile time), positioned by run spans, expanding local function calls, and following `#include` chains. |
-| `convert/bibliography.rs` | Citation data via the semantic `BibliographyElem` (+ re-parsing `.bib`/`.yml` with hayagriva). |
+| `convert/bibliography.rs` | Citation data via the semantic `BibliographyElem` (+ re-parsing `.bib`/`.yml` with hayagriva). Takes `&dyn Introspector`, so both conversion paths share it (legacy: HtmlDocument's introspector; realize: DocxDocument's). |
 | `convert/footnote.rs` | Footnote bodies from the HTML `doc-endnotes` section. |
-| `convert/image.rs` | Image content decoded from each `<img>`'s base64 src data-URL (typst-html 0.15 embeds the bytes in the DOM); Paged frames contribute display sizes (by content hash) and drawing-canvas rasters keyed by their figure's `Location`. |
+| `convert/image.rs` | Image content decoded from each `<img>`'s base64 src data-URL (typst-html 0.15 embeds the bytes in the DOM); Paged frames contribute display sizes (by content hash) and drawing-canvas SVG+raster pairs keyed by their figure's `Location`. |
 | `convert/inline.rs` | Typst Content-AST inline formatting (bold/italic/…) → styled runs. |
 
 ## The IR: `typort_ooxml::Document`
@@ -212,11 +260,107 @@ share.
 - `Run` — a styled text span (bold/italic/underline/color/font/size/script).
 - `Table` / `TableRow` / `TableCell` — colspan/rowspan, shading, borders,
   multi-paragraph cells.
-- `ParagraphStyle` — a **typed enum** (`Heading(n)`, `Normal`, `Quote`, `Code`, …)
-  rather than stringly-typed style IDs.
+- `ParagraphStyle` — a **typed enum** (`Normal` | `Heading(n)`) rather than
+  stringly-typed style IDs. Code blocks ride a `code_block` flag on the
+  paragraph (the `CodeBlock` style), quotes a left indent.
 
 Units are stored in **Word-native form** (half-points for size, twips for
 spacing/indent) so the writer does minimal conversion.
+
+## The realize IR: `typort_ir::IrDocument`
+
+Between the realize pairs and `typort_ooxml::Document` sits a second,
+owned IR — the **Styled Semantic IR** (`crates/typort-ir`). The pairs
+borrow the realize arenas and cannot outlive `create()` — and `create()`
+runs once per round of the compiler's introspection-convergence loop, so it
+keeps no cross-call state — so the collector
+copies them into owned data at once: `IrDocument { info, page, style,
+body, footnotes, citation_sources }`, with `IrBlock` (14 variants:
+Paragraph, Heading, Table, Grid, Figure, List, Enum, Equation, Quote,
+Raw, Outline, Bibliography, Place, PageBreak) and `IrInline` (12
+variants: Text, Link, Ref, Cite, FootnoteMarker, LineBreak, Space, Image,
+Math, PageBreak, ColumnBreak, Tab). Strong/Emph/Super/Sub are **run
+attributes**, not inline variants — the Paged show rules already merged
+them into `TextElem` by the time the pairs exist, so the IR records them
+where the writer reads them (bold/italic/superscript/subscript on `Run`).
+
+Rules the equivalence round established (see
+`crates/typort-cli/tests/integration/ir_path.rs` for the rulings):
+
+- **Alignment** comes from the pair's `StyleChain` (`AlignElem` in
+  scope); justification is document-level (the Normal style's
+  `body_alignment`), never per-paragraph.
+- **Table borders** are mapped from the fragment grid
+  (`table_borders_from_grid`): explicit lines map per side with a header
+  separator; with no explicit lines, any cell stroke gives the writer's
+  uniform grid and no strokes give nil borders. **Column widths** are
+  fiftieths of a percent (5000 = 100%), summed over spanned tracks
+  without rescaling.
+- **Grids** lower to fixed-layout tables through a pure planner
+  (`typort-ir::grid_plan`): occupancy is derived from cell `x`/spans,
+  empty source rows run-length-merge into single rows with summed
+  `w:trHeight`, identical adjacent columns merge into `w:gridSpan`
+  lanes, and `rowspan`s become `w:vMerge` (a continuation keeps the
+  restart's `w:gridSpan`, so a spanning merge never splits into
+  per-lane cells). Strokes resolve per boundary segment the way Typst
+  folds them — an explicit line wins, a declared cell edge beats an
+  undeclared neighbour, ties go to the inner side — and the winning
+  side alone emits the `w:tcBorder`, so whitespace and continuation
+  cells never paint borders they do not own. `auto` row heights are
+  measured per row (`typst_layout::layout_frame` on the row's cell
+  bodies at their resolved widths) instead of equal-sharing the
+  fragment total; empty slots get zero cell margins and a 1pt
+  paragraph mark.
+- **Drawn figure bodies** attach their Paged canvas by `Location` hash
+  and embed as SVG (`typst_svg`) plus a PNG fallback (`typst_render`)
+  inside `mc:AlternateContent`; source SVG images keep their bytes the
+  same way. C1 keeps the raster only.
+- **Heading sizes** are measured from the collected headings' own runs
+  (glyph-weighted dominant size per level); the rank-based histogram is
+  only the fallback for levels with no sized run.
+- **Citations** arrive in fragments as `RefElem` tags, never `CiteGroup`;
+  a ref target that is not a document label is a bibliography key, and
+  the collector emits `IrInline::Cite` with the full literal marker text
+  (`"[1]"`, `"[1], [2]"`) and `target: None` until bibliography entries
+  exist. Citations are literal markers plus internal links, never
+  `CITATION` fields.
+- **Footnote markers** in a fragment are single-pass, so an unresolved
+  marker reads `"0"` and is replaced by the ordinal; entries are matched
+  by `Location` first, then by ordinal order. Footnote entry text is
+  excluded from the body-size/font histograms, so it cannot misdetect
+  the Normal style.
+- **Runs carry their source span** (from the pair content), so span-keyed
+  lookups (the `counter(page).at` exception, overline geometry matching)
+  locate IR content. **Term lists** are collected as paragraphs: tight items
+  are one paragraph (bold term + separator + description), wide items a
+  term paragraph plus description blocks.
+- **Footnote bodies** are collected from the `FootnoteElem.body` content
+  at the marker (the tag group carries only the marker), giving real
+  OMML, hyperlinks, and images; the Paged-frame body is the fallback.
+  Display equations in a footnote body stay inline `Math` (their OMML
+  already carries the `<m:oMathPara>` wrapper). Circled footnote
+  numbering comes from the elements' numbering patterns.
+- **Page references** (`counter(page).at(<label>)`) are detected in
+  fragments from a `ContextElem` tag, the label recovered from the
+  source AST via the main source threaded into the Collector, and
+  emitted as `IrInline::Ref { page_ref: true }` (PAGEREF field).
+- **Body defaults** are voted from the leading portion of the document
+  only (9,000 glyphs, the pairs-level analogue of the legacy first-3-
+  pages rule), so back matter cannot misdetect the body size or font.
+- **Inline images** arriving as tags in fragments are collected
+  (`ImageElem` branch in `handle_tag_start`); **block elements nested
+  in sequence children** are flattened out of the pending inline run
+  (`flatten_sequences`), so a display equation inside a `#body`
+  substitution is dispatched as a block.
+
+The lowering (`typort_ir::lower(ir, geometry, compat) -> (Document,
+Vec<Degradation>)`) is a **pure function**: no `World`, no `Engine`, no
+`PagedDocument` — geometry arrives as the explicit `GeometryInput {
+page_size, page_numbering, supplement, header (_even/_first), footer
+(_even/_first), even_and_odd_headers, title_page }` struct. That
+purity is what makes the lowering unit-testable (`crates/typort-ir` has
+its own lib tests) and what lets the two conversion paths share the
+writer without sharing a walk.
 
 ## The writer: direct OOXML, no library
 
@@ -255,31 +399,76 @@ classification (e.g. in `sum_i a_i = S`, the `= S` stays outside the n-ary).
 - No extensible arrows.
 - Word forces the Cambria Math font in math zones.
 
-## The fragile seam: `convert/recovery/`
+## Conformance oracles
 
-The honest part of this document. The recovery layer is where typort does, in
-miniature, the very PDF→Word inference it set out to avoid — because some content
-(`#align(center)`, `#place`, grids) reaches the model *only* as geometry.
+The step-5 conformance suite (`tests/integration/conformance.rs`,
+`tests/integration/numbering.rs`) pins the backend's structural contract
+rather than individual features:
 
-`recovery/mod.rs::recover_missing_content` orchestrates this seam:
-`recovery/lines.rs` extracts every rendered text line with its position,
-`recovery/deduplication.rs` **text-diffs** it against what already made it into
-the model, and `recovery/insertion.rs` inserts genuinely-missing lines at the
-geometrically-correct slot. `recovery/horizontal_rules.rs` and
-`recovery/table_rules.rs` contain the two rule-shape paths. Correctness depends on:
+- **Canonical fingerprint** (`typort-ooxml/src/canonical.rs`): a
+  namespace-aware canonicalization of a generated XML part — qualified
+  element names, attributes sorted, per-instance ids (`w:id`, `paraId`,
+  `rsid*`) dropped — so comparisons measure the tree, not serialization
+  noise. References (`w:numId`, `r:embed`) are kept. The semantic digest is
+  the same tree minus attributes: element classes plus text.
+- **Paragraph census (REACH):** over the whole fixture corpus, every
+  non-empty IR paragraph's text must appear somewhere in the package
+  (`word/document.xml` for body text, `word/footnotes.xml` for the
+  Paged-sourced footnote bodies), and every non-empty `document.xml`
+  paragraph must trace to IR text or a named generated prefix (numbering,
+  markers, field results). This pins D8: no silent drops. Paragraphs in
+  header/footer parts are sourced from the companion `PagedDocument` —
+  the realize pairs carry no page furniture — and account to the named
+  `page-furniture` source instead.
+- **IR variant coverage:** every `IrBlock`/`IrInline` variant must be
+  reached by at least one fixture — the census is only meaningful if the
+  corpus exercises the whole inventory.
+- **Round-trip and strict validation** (`#[ignore]`d; LibreOffice and
+  python-docx are the available oracles — there is no Word in CI or the dev
+  environment): every fixture docx must open under python-docx and survive
+  a LibreOffice conversion; the round-trip test additionally asserts every
+  element class survives or is a named LibreOffice rewrite
+  (`w:fldSimple` → `w:fldChar`/`w:hyperlink`, `w:tblBorders` → per-cell
+  `w:tcBorders`, empty `w:footnotePr` elided) and the paragraph-text
+  multiset is preserved. This environment's LibreOffice lacks the
+  `libreoffice-math` component, so it imports OMML as nothing — `m:*`
+  classes are unobservable on reopen and exempted as an oracle
+  limitation.
+- **Preservation:** `preserve_inert_constructs` pins that constructs typort
+  emits but does not further model (HYPERLINK `w:fldSimple`, heading
+  bookmarks + REF fields, footnote references) survive a save + reopen.
 
-- **Text normalization matching** across two very different pipelines. The shared
-  normalisers in `convert/text_norm.rs` strip CJK spaces, math italics, visual
-  markers, whitespace, citation markers, and identify CJK fragments.
-- **Geometry and text thresholds** collected as documented constants with their
-  owning responsibility under `convert/page/` and at the top of the responsible
-  `convert/recovery/*.rs` module. Those constants are the authoritative tuning
-  references for the paged-style and recovery heuristics.
+## The retired seam: `convert/recovery/` (deleted)
 
-These heuristics are individually justified but collectively brittle: both false
-negatives (real content skipped) and false positives (content duplicated) are
-possible. Most of the project's known edge-case bugs live here. **Anyone touching
-this directory should add a fixture-based regression test for the specific case.**
+The legacy path had a recovery layer that did, in miniature, the very
+PDF→Word inference typort set out to avoid — because some content
+(`#align(center)`, `#place`, grids) reached the HTML-based model *only* as
+geometry. `recovery/mod.rs::recover_missing_content` orchestrated it:
+`lines.rs` extracted every rendered text line with its position,
+`deduplication.rs` **text-diffed** it against what already made it into the
+model, and `insertion.rs` inserted genuinely-missing lines at the
+geometrically-correct slot. `horizontal_rules.rs` and `table_rules.rs` held
+the two rule-shape paths, and `page/sections.rs` inferred section breaks
+from rendered page-size changes.
+
+The realize path never ran any of it — it reads semantics from the pairs
+instead of reconstructing them from geometry. In step 4 the whole module
+was deleted after the fixture corpus proved every behavior has a native
+realize-path equivalent: layout-only blocks, placed content, `#block`/`#rect`
+text, `#rotate`/`#move`/`#scale` bodies, grids, shapes, and context/layout
+output are collected from the pairs (`realize/collect.rs`), `#line()` rules
+come from the `LineElem` pair (`line_blocks`), table borders from the
+realized grid strokes (`table_borders_from_grid`), and section breaks from
+the collected `PageSnapshot` chains (`ir.sections` → `lower_body` /
+`attach_section_break` in `typort-ir`). The geometry constants and the
+element→page map went with it; the remaining live gaps are recorded in
+`docs/fallback-registry.md`.
+
+The same brittleness warning still applies to the surviving Paged-geometry
+heuristics under `convert/page/` (per-run styles, margin zones, footnote
+bodies, image sizes): geometry → semantics inference can false-positive and
+false-negative. **Anyone touching those heuristics should add a
+fixture-based regression test for the specific case.**
 
 ## Language neutrality (how it stays universal)
 
@@ -292,11 +481,12 @@ pattern to follow:
    `#bibliography(...)`, not by matching a `参考文献`/`References` heading. A
    hand-written reference list is, to Typst, ordinary text — and is converted as
    such.
-2. **Figure/table captions** are deduplicated during recovery against the text
-   the semantic figure path already emitted, not by matching `表 `/`图 `/`Table `/
-   `Figure ` prefixes.
+2. **Figure/table captions** were once deduplicated during recovery by
+   matching `表 `/`图 `/`Table `/`Figure ` prefixes; the dedup that replaced it
+   compared semantic emitted text, and with recovery deleted each caption is
+   simply emitted once by the element's own walk.
 3. **Document language** (`w:lang`) is derived from `#set text(lang:, region:)`,
    not guessed from the presence of CJK glyphs.
 
 If a future change reintroduces `if text.contains("<word>")` to drive layout,
-it regresses this principle. See `CLAUDE.md`.
+it regresses this principle. See `AGENTS.md`.

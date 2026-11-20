@@ -391,3 +391,71 @@ fn hanging_indent_does_not_clobber_list_items() {
         "the hanging-indent rule must not clobber the list indent with 440:\n{item}"
     );
 }
+
+#[test]
+fn issue_list_item_linebreak_survives() {
+    // Regression for #35: `#linebreak()` in a list item was dropped by the
+    // Generic inline path, gluing the surrounding words ("item onecontinued").
+    let xml = fixture_doc_xml("issue_list_linebreak");
+    let para = paragraph_containing(&xml, "item one");
+    let br = para
+        .find("<w:br")
+        .expect("line break should be emitted in the list item");
+    assert!(
+        para.find("item one").unwrap() < br && br < para.find("continued").unwrap(),
+        "line break must sit between the two halves: {para}"
+    );
+}
+
+#[test]
+fn enum_numbering_patterns_map_to_ooxml_num_fmt() {
+    // Typst enum numbering patterns must survive as OOXML numFmt + lvlText
+    // overrides on the list's numbering instance (M1): "a)" -> lowerLetter,
+    // "i." -> lowerRoman, "1.1" -> decimal without the trailing dot.
+    // The part is pretty-printed, so collapse indentation between elements
+    // before asserting on adjacent element pairs.
+    let numbering = fixture_part("issue_enum_numbering_patterns", "word/numbering.xml");
+    let compact = {
+        let mut out = String::with_capacity(numbering.len());
+        let mut chars = numbering.chars().peekable();
+        while let Some(c) = chars.next() {
+            out.push(c);
+            if c == '>' {
+                let mut lookahead = chars.clone();
+                while matches!(lookahead.peek(), Some(w) if w.is_whitespace()) {
+                    lookahead.next();
+                }
+                if lookahead.peek() == Some(&'<') {
+                    while matches!(chars.peek(), Some(w) if w.is_whitespace()) {
+                        chars.next();
+                    }
+                }
+            }
+        }
+        out
+    };
+    for (num_fmt, lvl_text) in [
+        ("lowerLetter", "%1)"),
+        ("lowerLetter", "%2)"),
+        ("lowerRoman", "%1."),
+        ("decimal", "%1"),
+        ("decimal", "%2"),
+    ] {
+        let pair = format!("<w:numFmt w:val=\"{num_fmt}\"/><w:lvlText w:val=\"{lvl_text}\"/>");
+        assert!(
+            compact.contains(&pair),
+            "numbering.xml should carry numFmt {num_fmt} with lvlText {lvl_text}:\n{numbering}"
+        );
+    }
+    let xml = fixture_doc_xml("issue_enum_numbering_patterns");
+    for text in [
+        "first",
+        "second",
+        "nested one",
+        "roman one",
+        "outer one",
+        "inner one",
+    ] {
+        assert!(xml.contains(text), "enum item '{text}' should be present");
+    }
+}

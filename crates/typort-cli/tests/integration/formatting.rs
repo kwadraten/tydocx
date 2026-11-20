@@ -912,9 +912,240 @@ fn issue_smallcaps_text() {
 }
 
 #[test]
+fn issue_smallcaps_whitespace_run_not_marked() {
+    let xml = fixture_doc_xml("issue_smallcaps_whitespace");
+    // "A" and "B" are smallcaps; the space between them is not. Before the
+    // fix the three runs merged into one smallCaps run "A B".
+    let sc_count = xml.matches("<w:smallCaps/>").count();
+    assert_eq!(
+        sc_count, 2,
+        "only the A and B runs should be smallcaps, got {sc_count}"
+    );
+    assert!(
+        !xml.contains(">A B<"),
+        "the A and B runs must stay separate, not merge into one \"A B\" run"
+    );
+}
+
+#[test]
+fn issue_emphasis_nested_format_keeps_inner_flags() {
+    let xml = fixture_doc_xml("issue_emphasis_nested_format");
+    // The fixture only contains the two nested cases, so every marker here
+    // comes from a run that must carry both flags: italic + superscript for
+    // "sup", bold + smallcaps for "sc".
+    assert!(xml.contains("<w:i/>"), "emphasis should produce w:i");
+    assert!(
+        xml.contains("w:vertAlign w:val=\"superscript\""),
+        "superscript inside emphasis should keep its vertAlign"
+    );
+    assert!(xml.contains("<w:b/>"), "strong should produce w:b");
+    assert!(
+        xml.contains("<w:smallCaps/>"),
+        "smallcaps inside strong should keep its smallCaps"
+    );
+}
+
+#[test]
+fn issue_highlight_color_passthrough() {
+    let xml = fixture_doc_xml("issue_highlight_color");
+    // Default fill and the gradient fallback are the two yellow highlights.
+    assert_eq!(
+        xml.matches("<w:highlight w:val=\"yellow\"/>").count(),
+        2,
+        "default and gradient highlights should be yellow"
+    );
+    assert!(
+        xml.contains("<w:highlight w:val=\"blue\"/>"),
+        "named blue fill should pass through as w:highlight blue"
+    );
+    assert!(
+        xml.contains("<w:shd w:val=\"clear\" w:fill=\"FFCCCC\"/>"),
+        "arbitrary pink fill should pass through as character shading"
+    );
+    assert_eq!(
+        xml.matches("<w:shd ").count(),
+        1,
+        "fill:none must not add shading; only the pink fill is shaded"
+    );
+    for text in [
+        "default text",
+        "pink text",
+        "blue text",
+        "gradient text",
+        "plain text",
+    ] {
+        assert!(xml.contains(text), "highlight text '{text}' present");
+    }
+}
+
+#[test]
 fn issue_highlight_space_preserved() {
     let xml = fixture_doc_xml("issue_highlight_space");
     assert!(xml.contains("Hello"), "highlight text present");
     assert!(xml.contains("World"), "adjacent text present");
     assert!(xml.contains("bold"), "bold text present");
+}
+
+#[test]
+fn issue_code_font_detected_by_flag_not_name() {
+    // #26: the code face is "Zed Sans" (tests/fonts/ZedSans.ttf) — monospace
+    // by its MONOSPACE flag, with none of the old name substrings ("mono",
+    // "courier", "consol", "fira code", "source code") in its family name.
+    // The detected code font must be Zed Sans, not the "Courier New" the
+    // name check fell back to.
+    let fonts = std::path::PathBuf::from("../../tests/fonts");
+    let styles_xml = crate::common::fixture_part_with_font_dirs(
+        "issue_code_font_flag_not_name",
+        "word/styles.xml",
+        &[fonts],
+    );
+    assert!(
+        styles_xml.contains("Zed Sans"),
+        "code style font must be the detected monospace face Zed Sans:\n{styles_xml}"
+    );
+    assert!(
+        !styles_xml.contains("Courier New"),
+        "code font must not fall back to Courier New:\n{styles_xml}"
+    );
+}
+
+#[test]
+fn issue_code_font_flag_marks_code_runs_not_declared_name() {
+    let fonts = std::path::PathBuf::from("../../tests/fonts");
+    let doc_xml = crate::common::fixture_part_with_font_dirs(
+        "issue_code_font_flag_not_name",
+        "word/document.xml",
+        &[fonts],
+    );
+    assert!(
+        doc_xml.contains(r#"w:ascii="Zed Sans" w:hAnsi="Zed Sans" w:eastAsia="Zed Sans""#),
+        "code runs must resolve to the flag-detected code font in every rFonts slot:\n{doc_xml}"
+    );
+    assert!(
+        !doc_xml.contains(r#"w:eastAsia="Liberation Serif""#),
+        "code runs must not keep the body font in the eastAsia slot:\n{doc_xml}"
+    );
+}
+
+#[test]
+fn issue_import_nested_set_rule_reaches_document() {
+    // b.typ's `#set par(first-line-indent: 2em)` lives two imports deep
+    // (main -> a.typ -> b.typ, each resolved relative to its own file); the
+    // Normal style must carry the indent.
+    let styles_xml = fixture_styles_xml("issue_import_nested");
+    let normal_start = styles_xml
+        .find(r#"w:styleId="Normal""#)
+        .expect("Normal style present");
+    let normal = &styles_xml[normal_start
+        ..styles_xml[normal_start..]
+            .find("</w:style>")
+            .map_or(styles_xml.len(), |e| normal_start + e)];
+    assert!(
+        normal.contains("w:firstLine=") && !normal.contains(r#"w:firstLine="0""#),
+        "Normal style must declare a non-zero first-line indent from the nested import:\n{normal}"
+    );
+}
+
+#[test]
+fn issue_import_parent_dir_set_rule_reaches_document() {
+    // d.typ lives in a subdirectory and imports the shared rule file one
+    // level up (`../`); the Normal style must carry the indent.
+    let styles_xml = fixture_styles_xml("issue_import_parent_dir");
+    let normal_start = styles_xml
+        .find(r#"w:styleId="Normal""#)
+        .expect("Normal style present");
+    let normal = &styles_xml[normal_start
+        ..styles_xml[normal_start..]
+            .find("</w:style>")
+            .map_or(styles_xml.len(), |e| normal_start + e)];
+    assert!(
+        normal.contains("w:firstLine=") && !normal.contains(r#"w:firstLine="0""#),
+        "Normal style must declare a non-zero first-line indent from the parent-dir import:\n{normal}"
+    );
+}
+
+#[test]
+fn issue_semibold_weight_emits_bold() {
+    let doc_xml = fixture_doc_xml("issue_semibold_weight_630");
+    for needle in ["plain semibold text", "plain strong run"] {
+        let pos = doc_xml.find(needle).expect("run present");
+        let run_start = doc_xml[..pos].rfind("<w:r>").unwrap_or(0);
+        let run_end = doc_xml[pos..]
+            .find("</w:r>")
+            .map_or(doc_xml.len(), |e| pos + e);
+        let run = &doc_xml[run_start..run_end];
+        assert!(
+            run.contains("<w:b/>"),
+            "{needle:?} must serialize as <w:b/>:\n{run}"
+        );
+    }
+}
+
+#[test]
+fn issue_let_hanging_indent_applies_at_call_site() {
+    let doc_xml = fixture_doc_xml("issue_let_hanging_indent");
+    let para = paragraph_containing(&doc_xml, "Hanging item body text here.");
+    assert!(
+        para.contains(r#"w:left="440""#) && para.contains(r#"w:hanging="440""#),
+        "2em hanging indent inside a #let body must reach the call-site paragraph:\n{para}"
+    );
+}
+
+#[test]
+fn issue_v_vertical_space_becomes_spacing_before() {
+    let doc_xml = fixture_doc_xml("issue_v_vertical_space");
+    let para = paragraph_containing(&doc_xml, "Paragraph two.");
+    assert!(
+        para.contains(r#"<w:spacing w:before="330"/>"#),
+        "#v(1.5em) at 11pt must become w:before=330 twips:\n{para}"
+    );
+}
+
+#[test]
+fn issue_h_horizontal_space_becomes_tracked_space() {
+    let doc_xml = fixture_doc_xml("issue_h_horizontal_space");
+    assert!(
+        doc_xml.contains(r#"<w:spacing w:val="440"/>"#),
+        "#h(2em) at 11pt must become a space run with w:spacing=440:\n{doc_xml}"
+    );
+}
+
+#[test]
+fn issue_pad_inset_becomes_side_indents() {
+    let doc_xml = fixture_doc_xml("issue_pad_inset");
+    let para = paragraph_containing(&doc_xml, "Padded paragraph body.");
+    assert!(
+        para.contains(r#"w:left="720""#),
+        "#pad(left: 0.5in) must become w:left=720 twips:\n{para}"
+    );
+}
+
+#[test]
+fn issue_block_inset_becomes_side_indents() {
+    let doc_xml = fixture_doc_xml("issue_block_inset");
+    let para = paragraph_containing(&doc_xml, "Block inset body.");
+    assert!(
+        para.contains(r#"w:left="567""#) && para.contains(r#"w:right="567""#),
+        "#block(inset: 1cm) must indent both sides by 567 twips:\n{para}"
+    );
+}
+
+#[test]
+fn issue_tracking_becomes_run_spacing() {
+    let doc_xml = fixture_doc_xml("issue_tracking_spacing");
+    let para = paragraph_containing(&doc_xml, "SPACED TRACKED TEXT");
+    assert!(
+        para.contains(r#"<w:spacing w:val="20"/>"#),
+        "tracking 0.05em at 20pt must emit w:spacing=20 on the run:\n{para}"
+    );
+}
+
+#[test]
+fn issue_hyphenate_false_suppresses_auto_hyphens() {
+    let package = fixture_package("issue_hyphenate_false");
+    let settings = package.part_text("word/settings.xml");
+    assert!(
+        settings.contains("<w:suppressAutoHyphens/>"),
+        "#set text(hyphenate: false) must emit w:suppressAutoHyphens:\n{settings}"
+    );
 }

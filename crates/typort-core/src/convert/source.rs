@@ -1,6 +1,7 @@
 use super::{
     BlockElement, Document, HangingIndent, InlineElement, ParagraphStyle, TyportWorld, page,
 };
+use crate::compat::{Degradation, DegradationAction};
 
 /// Apply authoritative values from source AST, overriding heuristic guesses.
 /// Resolve the declared first-line indent (Typst default: 0pt) onto the style.
@@ -85,50 +86,191 @@ pub(super) fn apply_body_font_split(fonts: &[String], doc: &mut Document, has_ge
     doc.style.body_font_east_asia = east_asia;
 }
 
+/// Apply the declared `#set page(numbering:)` format: the declared value
+/// wins over glyph guessing (which runs later in `apply_headers_and_footers`);
+/// an unmappable pattern falls back to glyph detection and is reported.
+fn apply_page_numbering_format(
+    ovr: &page::SourceStyleOverrides,
+    doc: &mut Document,
+    degradations: &mut Vec<Degradation>,
+) {
+    let Some(decl) = &ovr.page_numbering else {
+        return;
+    };
+    match decl {
+        page::PageNumberingDecl::Pattern(pattern) => {
+            match page::page_number_format_from_declaration(pattern) {
+                Some(fmt) => doc.page_numbering = Some(fmt),
+                None => degradations.push(Degradation::new(
+                    None,
+                    "page-numbering-pattern",
+                    DegradationAction::Literalized,
+                    format!(
+                        "page numbering pattern \"{pattern}\" has no OOXML equivalent; the number format is guessed from the rendered glyphs instead"
+                    ),
+                )),
+            }
+        }
+        page::PageNumberingDecl::Unmappable => degradations.push(Degradation::new(
+            None,
+            "page-numbering-pattern",
+            DegradationAction::Literalized,
+            "page numbering is declared as a function or computed value, which has no OOXML equivalent; the number format is guessed from the rendered glyphs instead",
+        )),
+    }
+}
+
 /// Gather authoritative style overrides from the source AST: the main file plus
-/// every `#import`ed file. Only document-global `set` rules count — those at a
-/// file's top level or inside the closure named by the document's `#show:`
-/// template (a `set text(size:)` buried in a `#block` or a non-template helper
-/// closure is local and ignored). Imported files reuse the main file's template
-/// names so a template library that defines the closure honors its own globals.
+/// every file reachable from it through `#import`/`#include` chains. Paths
+/// resolve the way Typst resolves them — relative to the importing file's
+/// directory, or to the project root when they start with `/` — via
+/// [`collect_reachable_source_texts`], which also visits each file once
+/// (cycles are safe) and skips unreadable files silently. Only document-global
+/// `set` rules count — those at a file's top level or inside the closure named
+/// by the document's `#show:` template (a `set text(size:)` buried in a `#block`
+/// or a non-template helper closure is local and ignored). Imported files reuse
+/// the main file's template names so a template library that defines the closure
+/// honors its own globals.
 pub(super) fn gather_source_overrides(world: &TyportWorld) -> page::SourceStyleOverrides {
     let main_text = world.main_source().text();
     let template_names = page::extract_show_template_names_from_source(main_text);
-    let mut overrides = page::extract_source_style_overrides(main_text, &template_names);
+    let texts = page::collect_reachable_source_texts(world.root(), &world.main_dir(), main_text);
+    merge_reachable_overrides(&texts, &template_names)
+}
 
-    for import_path in page::extract_import_paths(main_text) {
-        let abs_path = world.root().join(import_path.trim_start_matches('/'));
-        if let Ok(content) = std::fs::read_to_string(&abs_path) {
-            let import_overrides = page::extract_source_style_overrides(&content, &template_names);
-            overrides.merge_from(&import_overrides);
-        }
+/// Whether the document resets the footnote counter in a page header (the
+/// opt-in for per-page footnote numbering). Checks the main source and every
+/// file reachable from it, reusing the same template names as
+/// [`gather_source_overrides`].
+pub(super) fn detect_footnote_restart_each_page(world: &TyportWorld) -> bool {
+    let main_text = world.main_source().text();
+    let template_names = page::extract_show_template_names_from_source(main_text);
+    let texts = page::collect_reachable_source_texts(world.root(), &world.main_dir(), main_text);
+    texts
+        .iter()
+        .any(|text| page::footnote_counter_reset_in_page_header(text, &template_names))
+}
+
+/// Merge `SourceStyleOverrides` from every reachable source text, main file
+/// first: the main file's values win, imported files only fill gaps.
+fn merge_reachable_overrides(
+    texts: &[String],
+    template_names: &[String],
+) -> page::SourceStyleOverrides {
+    let mut overrides = page::SourceStyleOverrides::default();
+    for text in texts {
+        let file_overrides = page::extract_source_style_overrides(text, template_names);
+        overrides.merge_from(&file_overrides);
     }
     overrides
+}
+
+/// `par.line(numbering:)` line numbering, page vertical alignment, and
+/// `columns(gutter:)` — the section-level page chrome declared in source.
+fn apply_page_chrome(ovr: &page::SourceStyleOverrides, doc: &mut Document, body_pt: f64) {
+    // `number-clearance` is the distance; Word's default (240 twips) applies
+    // when the source leaves it `auto`.
+    if ovr.line_numbering == Some(true) {
+        doc.page_settings.line_number_distance_twips =
+            Some(ovr.line_number_distance_twips.unwrap_or(240));
+        if let Some(em) = ovr.line_number_distance_em {
+            doc.page_settings.line_number_distance_twips = Some(page::pt_to_twips(em * body_pt));
+        }
+    } else if ovr.line_numbering == Some(false) {
+        doc.page_settings.line_number_distance_twips = None;
+    }
+
+    if let Some(align) = ovr.vertical_align {
+        doc.page_settings.vertical_align = Some(align);
+    }
+
+    if let Some(v) = ovr.column_gutter_twips {
+        doc.page_settings.column_spacing = Some(v);
+    }
+    if let Some(em) = ovr.column_gutter_em {
+        doc.page_settings.column_spacing = Some(page::pt_to_twips(em * body_pt));
+    }
+}
+
+/// Page margins and header/footer edge distances — em values resolve against
+/// the body size; absolute values were already converted in the AST.
+fn apply_page_edges(ovr: &page::SourceStyleOverrides, doc: &mut Document, body_pt: f64) {
+    if let Some(v) = ovr.margin_top {
+        doc.page_settings.margin_top = v;
+    }
+    if let Some(em) = ovr.margin_top_em {
+        doc.page_settings.margin_top = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.margin_bottom {
+        doc.page_settings.margin_bottom = v;
+    }
+    if let Some(em) = ovr.margin_bottom_em {
+        doc.page_settings.margin_bottom = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.margin_left {
+        doc.page_settings.margin_left = v;
+    }
+    if let Some(em) = ovr.margin_left_em {
+        doc.page_settings.margin_left = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.margin_right {
+        doc.page_settings.margin_right = v;
+    }
+    if let Some(em) = ovr.margin_right_em {
+        doc.page_settings.margin_right = page::pt_to_twips(em * body_pt);
+    }
+    if let Some(v) = ovr.header_twips {
+        doc.page_settings.header_twips = Some(v);
+    }
+    if let Some(em) = ovr.header_em {
+        doc.page_settings.header_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(v) = ovr.footer_twips {
+        doc.page_settings.footer_twips = Some(v);
+    }
+    if let Some(em) = ovr.footer_em {
+        doc.page_settings.footer_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+}
+
+/// `footnote.entry(clearance:/gap:/indent:/separator:)` → `w:footnotePr`.
+fn apply_footnote_entry(ovr: &page::SourceStyleOverrides, doc: &mut Document, body_pt: f64) {
+    if let Some(v) = ovr.footnote_clearance_twips {
+        doc.style.footnote_entry.clearance_twips = Some(v);
+    }
+    if let Some(em) = ovr.footnote_clearance_em {
+        doc.style.footnote_entry.clearance_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(v) = ovr.footnote_gap_twips {
+        doc.style.footnote_entry.gap_twips = Some(v);
+    }
+    if let Some(em) = ovr.footnote_gap_em {
+        doc.style.footnote_entry.gap_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(v) = ovr.footnote_indent_twips {
+        doc.style.footnote_entry.indent_twips = Some(v);
+    }
+    if let Some(em) = ovr.footnote_indent_em {
+        doc.style.footnote_entry.indent_twips = Some(page::pt_to_twips(em * body_pt));
+    }
+    if let Some(eighths) = ovr.footnote_separator_stroke_eighths {
+        doc.style.footnote_entry.separator_stroke_eighths = Some(eighths);
+    }
 }
 
 pub(super) fn apply_source_overrides(
     ovr: &page::SourceStyleOverrides,
     doc: &mut Document,
     has_geometry: bool,
+    degradations: &mut Vec<Degradation>,
 ) {
-    // Page margins
-    if let Some(v) = ovr.margin_top {
-        doc.page_settings.margin_top = v;
-    }
-    if let Some(v) = ovr.margin_bottom {
-        doc.page_settings.margin_bottom = v;
-    }
-    if let Some(v) = ovr.margin_left {
-        doc.page_settings.margin_left = v;
-    }
-    if let Some(v) = ovr.margin_right {
-        doc.page_settings.margin_right = v;
-    }
-
     // Columns
     if let Some(cols) = ovr.columns {
         doc.page_settings.columns = Some(cols);
     }
+
+    // Page numbering format: the declared value wins over glyph guessing.
+    apply_page_numbering_format(ovr, doc, degradations);
 
     // Body text font — split into ASCII and East-Asian defaults.
     if let Some(fonts) = &ovr.text_font {
@@ -142,8 +284,16 @@ pub(super) fn apply_source_overrides(
 
     apply_language_override(ovr, doc);
 
+    if ovr.text_hyphenate == Some(false) {
+        doc.style.suppress_auto_hyphens = true;
+    }
+
     // Resolve em-based values using actual body size
     let body_pt = f64::from(doc.style.body_size_half_pt) / 2.0;
+
+    apply_page_edges(ovr, doc, body_pt);
+    apply_page_chrome(ovr, doc, body_pt);
+    apply_footnote_entry(ovr, doc, body_pt);
 
     apply_first_line_indent(ovr, doc, body_pt);
     if let Some(all) = ovr.first_line_indent_all {
@@ -229,13 +379,19 @@ pub(super) fn apply_source_overrides(
 /// CJK-presence heuristic. CJK languages drive Word's East-Asian tag; all others
 /// drive the Latin tag (the `w:lang` w:val / w:eastAsia split). No-op when the
 /// source declares no language.
+///
+/// A declared CJK language also marks the document as CJK content: the
+/// East-Asian hint must be emitted even when the sampled pages render no CJK
+/// glyph (e.g. a CJK template whose body is Latin-only) — the declaration,
+/// not the glyphs, decides the document script.
 pub(super) fn apply_language_override(ovr: &page::SourceStyleOverrides, doc: &mut Document) {
     let Some(lang) = &ovr.text_lang else {
         return;
     };
     let tag = page::lang_region_to_bcp47(lang, ovr.text_region.as_deref());
-    if matches!(lang.to_ascii_lowercase().as_str(), "zh" | "ja" | "ko") {
+    if page::is_cjk_language(lang) {
         doc.style.lang_east_asia = tag;
+        doc.style.has_cjk_content = true;
     } else {
         doc.style.lang_latin = tag;
     }
@@ -305,5 +461,28 @@ pub(super) fn apply_hanging_indent_from_source(world: &TyportWorld, doc: &mut Do
                 relative_twips.saturating_add(rule.twips.unwrap_or(0)),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_reachable_overrides_main_wins_imports_fill_gaps() {
+        // The main file's size wins; the imported file's indent (absent from
+        // the main file) fills the gap.
+        let main = "#set text(size: 12pt)".to_string();
+        let imported = "#set text(size: 20pt)\n#set par(first-line-indent: 2em)".to_string();
+        let merged = merge_reachable_overrides(&[main, imported], &[]);
+        assert_eq!(merged.text_size_half_pt, Some(24));
+        assert_eq!(merged.first_line_indent_em, Some(2.0));
+    }
+
+    #[test]
+    fn merge_reachable_overrides_empty_stays_default() {
+        let merged = merge_reachable_overrides(&[], &[]);
+        assert_eq!(merged.text_size_half_pt, None);
+        assert_eq!(merged.first_line_indent_em, None);
     }
 }

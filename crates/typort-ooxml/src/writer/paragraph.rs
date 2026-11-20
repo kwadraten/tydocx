@@ -3,16 +3,10 @@ use std::io::{self, Write};
 use quick_xml::Writer;
 
 use super::WriteCtx;
-use super::citation::{lang_to_lcid, write_citation_sdt};
 use super::document::write_section_break;
-use super::fields::{
-    write_bookmark_end, write_bookmark_start, write_field_ref, write_hyperlink, write_toc_field,
-};
-use super::footnotes::write_footnote_ref;
-use super::image::{image_rel_id, write_image_inline};
 use super::math::{strip_math_para, write_equation_number, write_math_inline};
-use super::package::{two_em_hanging_twips, write_indentation};
-use super::run::{write_column_break, write_page_break, write_run, write_tab};
+use super::package::{Indentation, two_em_hanging_twips, write_indentation};
+use super::run::{write_inline, write_tab};
 use crate::document::{Alignment, HangingIndent, InlineElement, Paragraph};
 
 #[allow(
@@ -27,8 +21,10 @@ pub(super) fn write_paragraph<W: Write>(
     writer.create_element("w:p").write_inner_content(|w| {
         let has_style = para.style.is_some();
         let has_list = para.list_info.is_some();
+        let has_num = has_list || para.num_pr.is_some();
         let has_alignment = para.alignment.is_some();
-        let has_left_indent = para.left_indent.is_some();
+        let has_left_indent = para.left_indent.is_some() || para.right_indent.is_some();
+        let has_keep = para.keep_lines || para.keep_next;
         let has_code_block = para.code_block;
         let has_section_break = para.section_break.is_some();
         // Determine if we need to suppress the inherited first-line indent
@@ -48,9 +44,11 @@ pub(super) fn write_paragraph<W: Write>(
         let has_hanging = para.hanging_indent.is_some();
         let has_hrule = para.horizontal_rule;
         let has_tab_stops = !para.tab_stops.is_empty();
-        let has_spacing = para.spacing_before.is_some();
+        let has_spacing = para.spacing_before.is_some()
+            || para.spacing_after.is_some()
+            || para.line_twips.is_some();
         if has_style
-            || has_list
+            || has_num
             || has_alignment
             || suppress_indent
             || has_eq_number
@@ -59,8 +57,11 @@ pub(super) fn write_paragraph<W: Write>(
             || has_code_block
             || has_section_break
             || has_hrule
+            || para.shading.is_some()
             || has_tab_stops
             || has_spacing
+            || has_keep
+            || para.mark_size_half_pt.is_some()
         {
             w.create_element("w:pPr").write_inner_content(|ppr| {
                 // Horizontal rule: emit bottom border
@@ -75,6 +76,13 @@ pub(super) fn write_paragraph<W: Write>(
                         Ok(())
                     })?;
                 }
+                if let Some(fill) = &para.shading {
+                    ppr.create_element("w:shd")
+                        .with_attribute(("w:val", "clear"))
+                        .with_attribute(("w:color", "auto"))
+                        .with_attribute(("w:fill", fill.as_str()))
+                        .write_empty()?;
+                }
                 if has_code_block {
                     ppr.create_element("w:pStyle")
                         .with_attribute(("w:val", "CodeBlock"))
@@ -82,10 +90,16 @@ pub(super) fn write_paragraph<W: Write>(
                 } else if let Some(style) = &para.style {
                     let style_id = style.ooxml_value();
                     ppr.create_element("w:pStyle")
-                        .with_attribute(("w:val", style_id.as_str()))
+                        .with_attribute(("w:val", style_id.as_ref()))
                         .write_empty()?;
                 }
-                if let Some(li) = &para.list_info {
+                if para.keep_next {
+                    ppr.create_element("w:keepNext").write_empty()?;
+                }
+                if para.keep_lines {
+                    ppr.create_element("w:keepLines").write_empty()?;
+                }
+                if let Some(li) = para.list_info.as_ref().or(para.num_pr.as_ref()) {
                     let id_str = li.id.to_string();
                     let lvl_str = li.level.to_string();
                     ppr.create_element("w:numPr").write_inner_content(|num| {
@@ -137,14 +151,18 @@ pub(super) fn write_paragraph<W: Write>(
                 // Word's char-based value wins and the zeroing is ignored. When
                 // None, emit exactly the historical attribute set (byte-identical).
                 let zero_chars = ctx.doc_style.first_line_indent_chars.is_some();
-                if let Some(left) = para.left_indent {
-                    let left_str = left.to_string();
+                if para.left_indent.is_some() || para.right_indent.is_some() {
+                    let left_str = para.left_indent.map(|v| v.to_string());
+                    let right_str = para.right_indent.map(|v| v.to_string());
                     write_indentation(
                         ppr,
-                        Some(left_str.as_str()),
-                        None,
-                        zero_chars.then_some("0"),
-                        Some("0"),
+                        Indentation {
+                            left: left_str.as_deref(),
+                            right: right_str.as_deref(),
+                            first_line_chars: zero_chars.then_some("0"),
+                            first_line: Some("0"),
+                            ..Default::default()
+                        },
                     )?;
                 } else if has_hanging {
                     // Bibliographies use the historical 2em default; source-authored
@@ -158,32 +176,75 @@ pub(super) fn write_paragraph<W: Write>(
                     let bib_indent_str = bib_indent.to_string();
                     write_indentation(
                         ppr,
-                        Some(bib_indent_str.as_str()),
-                        Some(bib_indent_str.as_str()),
-                        zero_chars.then_some("0"),
-                        Some("0"),
+                        Indentation {
+                            left: Some(bib_indent_str.as_str()),
+                            hanging: Some(bib_indent_str.as_str()),
+                            first_line_chars: zero_chars.then_some("0"),
+                            first_line: Some("0"),
+                            ..Default::default()
+                        },
                     )?;
                 } else if has_list {
-                    // List indent: left = 2em, hanging = 1em, computed from body font size
-                    let list_left = two_em_hanging_twips(ctx.doc_style.body_size_half_pt);
-                    let list_hanging = list_left / 2;
+                    // List indent: left = 2em, hanging = 1em, computed from body
+                    // font size; Typst `list(indent:, body-indent:)` overrides.
+                    let list_left = para
+                        .list_left_twips
+                        .unwrap_or_else(|| two_em_hanging_twips(ctx.doc_style.body_size_half_pt));
+                    let list_hanging = para.list_hanging_twips.unwrap_or(list_left / 2);
                     let list_left_str = list_left.to_string();
                     let list_hanging_str = list_hanging.to_string();
                     write_indentation(
                         ppr,
-                        Some(list_left_str.as_str()),
-                        Some(list_hanging_str.as_str()),
-                        None,
-                        None,
+                        Indentation {
+                            left: Some(list_left_str.as_str()),
+                            hanging: Some(list_hanging_str.as_str()),
+                            ..Default::default()
+                        },
                     )?;
                 } else if suppress_indent || has_eq_number {
-                    write_indentation(ppr, None, None, zero_chars.then_some("0"), Some("0"))?;
+                    write_indentation(
+                        ppr,
+                        Indentation {
+                            first_line_chars: zero_chars.then_some("0"),
+                            first_line: Some("0"),
+                            ..Default::default()
+                        },
+                    )?;
                 }
                 // Emit spacing override
                 if let Some(before) = para.spacing_before {
                     let before_str = before.to_string();
+                    let after_str = para.spacing_after.map(|v| v.to_string());
+                    let el = ppr
+                        .create_element("w:spacing")
+                        .with_attribute(("w:before", before_str.as_str()));
+                    let el = if let Some(after) = after_str.as_deref() {
+                        el.with_attribute(("w:after", after))
+                    } else {
+                        el
+                    };
+                    if let Some(line) = para.line_twips {
+                        let line_str = line.to_string();
+                        el.with_attribute(("w:line", line_str.as_str()))
+                            .with_attribute(("w:lineRule", "exact"))
+                            .write_empty()?;
+                    } else if para.mark_size_half_pt.is_some() {
+                        el.with_attribute(("w:line", "0"))
+                            .with_attribute(("w:lineRule", "exact"))
+                            .write_empty()?;
+                    } else {
+                        el.write_empty()?;
+                    }
+                } else if let Some(after) = para.spacing_after {
+                    let after_str = after.to_string();
                     ppr.create_element("w:spacing")
-                        .with_attribute(("w:before", before_str.as_str()))
+                        .with_attribute(("w:after", after_str.as_str()))
+                        .write_empty()?;
+                } else if let Some(line) = para.line_twips {
+                    let line_str = line.to_string();
+                    ppr.create_element("w:spacing")
+                        .with_attribute(("w:line", line_str.as_str()))
+                        .with_attribute(("w:lineRule", "exact"))
                         .write_empty()?;
                 }
                 // Emit alignment
@@ -192,86 +253,42 @@ pub(super) fn write_paragraph<W: Write>(
                         .with_attribute(("w:val", alignment.ooxml_value()))
                         .write_empty()?;
                 }
+                if let Some(sz) = para.mark_size_half_pt {
+                    let sz_str = sz.to_string();
+                    ppr.create_element("w:rPr").write_inner_content(|rpr| {
+                        rpr.create_element("w:sz")
+                            .with_attribute(("w:val", sz_str.as_str()))
+                            .write_empty()?;
+                        rpr.create_element("w:szCs")
+                            .with_attribute(("w:val", sz_str.as_str()))
+                            .write_empty()?;
+                        Ok(())
+                    })?;
+                }
                 // Emit section break (w:sectPr inside w:pPr)
                 if let Some(section) = &para.section_break {
-                    write_section_break(ppr, section)?;
+                    write_section_break(ppr, section, ctx.parts)?;
                 }
                 Ok(())
             })?;
         }
         for inline in &para.inlines {
-            match inline {
-                InlineElement::Text(run) => write_run(w, run, ctx.doc_style)?,
-                InlineElement::FootnoteRef(id) => {
-                    write_footnote_ref(w, *id, &ctx.doc_style.footnote_format)?;
-                }
-                InlineElement::Math {
-                    omml_xml,
-                    equation_number,
-                } => {
-                    if let Some(num) = equation_number {
-                        // Word-native numbered display equation: a leading tab moves
-                        // to the center tab (centering the math), the math is emitted
-                        // as inline <m:oMath> (a block <m:oMathPara> does not coexist
-                        // with trailing runs on the same line), then a trailing tab
-                        // moves to the right tab and the number is written there.
-                        write_tab(w)?;
-                        write_math_inline(w, strip_math_para(omml_xml))?;
-                        write_equation_number(w, num)?;
-                    } else {
-                        write_math_inline(w, omml_xml)?;
-                    }
-                }
-                InlineElement::Image(img) => {
-                    let n = ctx.image_counter.get() + 1;
-                    ctx.image_counter.set(n);
-                    let rid = image_rel_id(n, ctx.parts);
-                    write_image_inline(w, img, n, &rid)?;
-                }
-                InlineElement::Bookmark { id, name } => {
-                    write_bookmark_start(w, *id, name)?;
-                }
-                InlineElement::BookmarkEnd { id } => {
-                    write_bookmark_end(w, *id)?;
-                }
-                InlineElement::FieldRef {
-                    bookmark_name,
-                    display_text,
-                } => {
-                    write_field_ref(w, bookmark_name, display_text)?;
-                }
-                InlineElement::Hyperlink { url, runs } => {
-                    write_hyperlink(w, url, runs, ctx.doc_style)?;
-                }
-                InlineElement::InternalLink { anchor, runs } => {
-                    w.create_element("w:hyperlink")
-                        .with_attribute(("w:anchor", anchor.as_str()))
-                        .write_inner_content(|hw| {
-                            for run in runs {
-                                write_run(hw, run, ctx.doc_style)?;
-                            }
-                            Ok(())
-                        })?;
-                }
-                InlineElement::PageBreak => {
-                    write_page_break(w)?;
-                }
-                InlineElement::ColumnBreak => {
-                    write_column_break(w)?;
-                }
-                InlineElement::FieldToc { max_depth } => {
-                    write_toc_field(w, *max_depth)?;
-                }
-                InlineElement::Tab => {
-                    write_tab(w)?;
-                }
-                InlineElement::Citation { keys, display_text } => {
-                    let sdt_id = ctx.citation_id_counter.get();
-                    ctx.citation_id_counter.set(sdt_id + 1);
-                    let locale_id = lang_to_lcid(&ctx.doc_style.lang_east_asia);
-                    write_citation_sdt(w, keys, display_text, sdt_id, locale_id)?;
-                }
+            if let InlineElement::Math {
+                omml_xml,
+                equation_number: Some(num),
+            } = inline
+            {
+                // Word-native numbered display equation: a leading tab moves
+                // to the center tab (centering the math), the math is emitted
+                // as inline <m:oMath> (a block <m:oMathPara> does not coexist
+                // with trailing runs on the same line), then a trailing tab
+                // moves to the right tab and the number is written there.
+                write_tab(w)?;
+                write_math_inline(w, strip_math_para(omml_xml))?;
+                write_equation_number(w, num)?;
+                continue;
             }
+            write_inline(w, inline, ctx)?;
         }
         Ok(())
     })?;

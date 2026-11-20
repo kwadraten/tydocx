@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 typst.workspace = true
+codex.workspace = true
 typst-library.workspace = true
 typst-syntax.workspace = true
 typst-kit.workspace = true
@@ -15,6 +16,9 @@ typst-utils.workspace = true
 typst-html.workspace = true
 typst-render.workspace = true
 typst-layout.workspace = true
+typst-svg.workspace = true
+typst-realize.workspace = true
+typort-ir.workspace = true
 typort-ooxml.workspace = true
 typort-math.workspace = true
 resvg.workspace = true

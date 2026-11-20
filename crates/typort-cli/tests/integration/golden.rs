@@ -23,6 +23,7 @@
 //   UPDATE_SNAPSHOTS=1 cargo test -p typort --test integration golden
 //   git diff tests/snapshots
 use crate::common::fixture_doc_xml;
+use crate::common::fixture_doc_xml_legacy;
 
 /// Path of a committed golden, relative to the crate dir (where tests run),
 /// mirroring the `../../tests/...` convention `fixture_doc_xml` uses.
@@ -65,7 +66,18 @@ fn first_diff<'a>(expected: &'a str, actual: &'a str) -> Option<(usize, &'a str,
 /// Convert the fixture, normalize, and either (re)write the golden
 /// (`UPDATE_SNAPSHOTS=1`) or assert byte-equality against the committed one.
 fn check_golden(fixture: &str) {
-    let actual = normalize_xml(&fixture_doc_xml(fixture));
+    check_golden_with(fixture, fixture_doc_xml);
+}
+
+/// The legacy-path variant of `check_golden`: the golden pins legacy
+/// output for fixtures whose IR output is a registered gap (regenerating
+/// would bake the gap into the snapshot). See `docs/fallback-registry.md`.
+fn check_golden_legacy(fixture: &str) {
+    check_golden_with(fixture, fixture_doc_xml_legacy);
+}
+
+fn check_golden_with(fixture: &str, convert: fn(&str) -> String) {
+    let actual = normalize_xml(&convert(fixture));
     let path = golden_path(fixture);
 
     if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
@@ -102,11 +114,27 @@ macro_rules! golden_test {
     };
 }
 
+macro_rules! golden_test_legacy {
+    ($name:ident, $fixture:literal) => {
+        #[test]
+        fn $name() {
+            check_golden_legacy($fixture);
+        }
+    };
+}
+
 golden_test!(golden_aligned_equations, "aligned_equations");
 golden_test!(golden_inline_math_in_text, "inline_math_in_text");
 golden_test!(golden_edge_complex_table, "edge_complex_table");
 golden_test!(golden_formatted_footnote, "formatted_footnote");
 golden_test!(golden_edge_term_list, "edge_term_list");
 golden_test!(golden_edge_deep_nested_list, "edge_deep_nested_list");
-golden_test!(golden_bibliography_basic, "bibliography_basic");
-golden_test!(golden_edge_theorem_proof, "edge_theorem_proof");
+// Retargeted to the legacy path (step 2): the bibliography entries are a
+// registered IR gap — regenerating would bake the empty bibliography field
+// into the snapshot. See docs/fallback-registry.md.
+golden_test_legacy!(golden_bibliography_basic, "bibliography_basic");
+// Retargeted to the legacy path (step 2): the IR path re-evaluates the
+// theorem counter in fragments and reads its final value, so both theorems
+// render as "Theorem 2"; regenerating would bake the wrong numbers into the
+// snapshot. See docs/fallback-registry.md ("fragment counter re-evaluation").
+golden_test_legacy!(golden_edge_theorem_proof, "edge_theorem_proof");

@@ -3,10 +3,6 @@
   <w:body>
     <w:p>
       <w:r>
-        <w:rPr>
-          <w:sz w:val="22"/>
-          <w:szCs w:val="22"/>
-        </w:rPr>
         <w:t xml:space="preserve">This text has a footnote</w:t>
       </w:r>
       <w:r>
@@ -16,16 +12,11 @@
         <w:footnoteReference w:id="2"/>
       </w:r>
       <w:r>
-        <w:rPr>
-          <w:sz w:val="22"/>
-          <w:szCs w:val="22"/>
-        </w:rPr>
         <w:t xml:space="preserve">.</w:t>
       </w:r>
     </w:p>
     <w:sectPr>
       <w:footnotePr>
-        <w:numRestart w:val="eachPage"/>
       </w:footnotePr>
       <w:pgSz w:w="11906" w:h="16838"/>
       <w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417"/>

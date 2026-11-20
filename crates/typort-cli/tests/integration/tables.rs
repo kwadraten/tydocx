@@ -1,9 +1,11 @@
 //! Table structure, cell merging, and math-in-table tests.
 
 use crate::common::{
-    fixture_doc_xml, fixture_document, fixture_package, fixture_package_from_document,
-    paragraph_containing,
+    fixture_doc_xml, fixture_document, fixture_outcome_with_options, fixture_package,
+    fixture_package_from_document, fixture_package_with_options, paragraph_containing,
+    paragraph_texts,
 };
+use typort_core::{CompatMode, ConvertOptions};
 
 #[test]
 fn three_line_table_is_not_a_boxed_grid() {
@@ -102,6 +104,10 @@ fn table_cell_supports_merged_cell_fields() {
         vmerge: VMerge::Restart,
         width_pct: None,
         vertical_align: None,
+        shading: None,
+        width_twips: None,
+        borders: None,
+        zero_margins: false,
     };
     assert_eq!(cell.colspan, 2);
     assert_eq!(cell.vmerge, VMerge::Restart);
@@ -114,6 +120,10 @@ fn table_cell_supports_merged_cell_fields() {
         vmerge: VMerge::Continue,
         width_pct: None,
         vertical_align: None,
+        shading: None,
+        width_twips: None,
+        borders: None,
+        zero_margins: false,
     };
     assert_eq!(cont_cell.vmerge, VMerge::Continue);
 }
@@ -126,6 +136,8 @@ fn merged_cell_emits_grid_span_and_vmerge() {
     let table = Table {
         rows: vec![
             TableRow {
+                height_twips: None,
+                is_header: false,
                 cells: vec![
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -134,6 +146,10 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         vmerge: VMerge::Restart,
                         width_pct: None,
                         vertical_align: None,
+                        shading: None,
+                        width_twips: None,
+                        borders: None,
+                        zero_margins: false,
                     },
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -142,10 +158,16 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         vmerge: VMerge::None,
                         width_pct: None,
                         vertical_align: None,
+                        shading: None,
+                        width_twips: None,
+                        borders: None,
+                        zero_margins: false,
                     },
                 ],
             },
             TableRow {
+                height_twips: None,
+                is_header: false,
                 cells: vec![
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -154,6 +176,10 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         vmerge: VMerge::Continue,
                         width_pct: None,
                         vertical_align: None,
+                        shading: None,
+                        width_twips: None,
+                        borders: None,
+                        zero_margins: false,
                     },
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -162,6 +188,10 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         vmerge: VMerge::None,
                         width_pct: None,
                         vertical_align: None,
+                        shading: None,
+                        width_twips: None,
+                        borders: None,
+                        zero_margins: false,
                     },
                 ],
             },
@@ -169,6 +199,10 @@ fn merged_cell_emits_grid_span_and_vmerge() {
         width_pct: None,
         border_size: None,
         borders: None,
+        cell_margins: None,
+        width_twips: None,
+        col_widths_twips: None,
+        alignment: None,
     };
     doc.add_table(table);
 
@@ -716,8 +750,21 @@ fn issue_rtl_table_bidi() {
 #[test]
 fn issue_nested_table_alignment() {
     let xml = fixture_doc_xml("issue_nested_table_alignment");
-    assert!(xml.contains("w:tbl"), "should contain at least one table");
+    let tbl_count = xml.matches("<w:tbl>").count();
+    assert!(
+        tbl_count >= 2,
+        "nested table should be emitted, got {tbl_count}"
+    );
+    assert!(
+        xml.contains("Left-aligned inner cell"),
+        "inner table cell text should be present"
+    );
     assert!(xml.contains("Normal right cell"), "outer cell text present");
+    let compact: String = xml.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        compact.contains("<w:tblWw:w=\"5000\"w:type=\"pct\"/><w:jcw:val=\"center\"/>"),
+        "the align(center)-wrapped inner table should carry w:jc in its tblPr"
+    );
 }
 
 #[test]
@@ -809,4 +856,230 @@ fn features_table_width_percentage() {
         doc_xml.contains("w:tcW"),
         "table cells should have w:tcW width elements"
     );
+}
+
+#[test]
+fn issue_table_cell_list_items_keep_num_pr() {
+    let doc_xml = fixture_doc_xml("issue_table_cell_list");
+    let tbl_start = doc_xml.find("<w:tbl>").expect("table present");
+    let tbl_end = doc_xml[tbl_start..]
+        .find("</w:tbl>")
+        .map(|e| tbl_start + e)
+        .expect("table closed");
+    let table = &doc_xml[tbl_start..tbl_end];
+
+    // The cell lists must not merge into one plain-text paragraph.
+    assert!(
+        !table.contains("onetwo"),
+        "cell list items must stay separate paragraphs, not merge into \"onetwo\""
+    );
+    // Six list items (2 bullet + 2 ordered + 2 nested) each carry w:numPr.
+    let num_pr_count = table.matches("w:numPr").count();
+    assert!(
+        num_pr_count >= 6,
+        "all 6 cell list items should carry w:numPr, got {num_pr_count}"
+    );
+    // The nested item sits at level 1.
+    assert!(
+        table.contains("w:ilvl w:val=\"1\""),
+        "nested cell list item should be at level 1"
+    );
+    for text in ["one", "two", "first", "second", "outer", "inner"] {
+        assert!(
+            table.contains(text),
+            "cell list item '{text}' should be present"
+        );
+    }
+}
+
+#[test]
+fn issue_table_cell_list_emits_numbering_part() {
+    let package = fixture_package("issue_table_cell_list");
+    assert!(
+        package
+            .part_names()
+            .any(|name| name == "word/numbering.xml"),
+        "a document whose only list is inside a table cell must still emit numbering.xml"
+    );
+    let numbering = package.part_text("word/numbering.xml");
+    assert!(
+        numbering.contains("w:numId"),
+        "numbering.xml should define instances for the cell lists"
+    );
+    // Nested levels are defined (L1): ilvl 1 exists on the abstractNums.
+    assert!(
+        numbering.contains("w:ilvl=\"1\""),
+        "numbering.xml should define level 1 for nested lists"
+    );
+}
+
+#[test]
+fn issue_table_cell_fill_writes_cell_shading() {
+    // Table fill (M2): a row-conditional table fill shades the header row,
+    // a per-cell fill shades one cell, and a gradient fill — which has no
+    // cell-level OOXML equivalent — shades nothing.
+    let xml = fixture_doc_xml("issue_table_cell_fill");
+    assert_eq!(
+        xml.matches("<w:shd w:val=\"clear\" w:fill=\"DDEEFF\"/>")
+            .count(),
+        2,
+        "both header cells should carry the table fill:\n{xml}"
+    );
+    assert_eq!(
+        xml.matches("<w:shd w:val=\"clear\" w:fill=\"FFCCCC\"/>")
+            .count(),
+        1,
+        "the per-cell fill should shade exactly one cell:\n{xml}"
+    );
+    assert_eq!(
+        xml.matches("<w:shd ").count(),
+        3,
+        "gradient-filled cells must not gain shading:\n{xml}"
+    );
+}
+
+#[test]
+fn issue_grid_list_entry_c2_becomes_borderless_table() {
+    let doc_xml = fixture_doc_xml("issue_grid_list_entry");
+    assert!(doc_xml.contains("<w:tbl>"), "grid lowers to a table");
+    assert_eq!(doc_xml.matches("<w:tr>").count(), 2, "two grid rows");
+    assert_eq!(
+        doc_xml.matches("<w:tc>").count(),
+        6,
+        "three cells per row keep the grid's column structure"
+    );
+    assert!(
+        doc_xml.contains(r#"<w:top w:val="nil"/>"#)
+            && doc_xml.contains(r#"<w:bottom w:val="nil"/>"#)
+            && doc_xml.contains(r#"<w:insideH w:val="nil"/>"#),
+        "a borderless grid must not grow visible cell borders:\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let order: Vec<usize> = [
+        "A.1.1",
+        "The first entry",
+        "A.1.2",
+        "The second entry",
+        "Text right",
+    ]
+    .iter()
+    .map(|needle| {
+        texts
+            .iter()
+            .position(|t| t.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} missing from {texts:?}"))
+    })
+    .collect();
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "grid cells keep reading order, positions {order:?}"
+    );
+    assert!(
+        !doc_xml.contains("PAGEREF"),
+        "literal page numbers stay literal text"
+    );
+}
+
+#[test]
+fn issue_grid_list_entry_c1_reports_and_keeps_text() {
+    let outcome = fixture_outcome_with_options(
+        "issue_grid_list_entry",
+        &ConvertOptions::new(CompatMode::C1),
+    );
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "grid-layout"),
+        "expected a grid-layout degradation, got {:?}",
+        outcome.degradations
+    );
+    let xml = fixture_package_with_options(
+        "issue_grid_list_entry",
+        &ConvertOptions::new(CompatMode::C1),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
+    for needle in [
+        "A.1.1",
+        "The first entry",
+        "A.1.2",
+        "The second entry",
+        "Text right",
+    ] {
+        assert!(xml.contains(needle), "{needle:?} missing from {xml}");
+    }
+}
+
+#[test]
+fn issue_table_inset_becomes_cell_margins() {
+    let doc_xml = fixture_doc_xml("issue_table_inset");
+    let mar_start = doc_xml
+        .find("<w:tblCellMar>")
+        .expect("w:tblCellMar emitted for #set table(inset:)");
+    let mar = &doc_xml[mar_start
+        ..doc_xml[mar_start..]
+            .find("</w:tblCellMar>")
+            .map_or(doc_xml.len(), |e| mar_start + e)];
+    assert!(
+        mar.contains(r#"<w:top w:w="100" w:type="dxa"/>"#)
+            && mar.contains(r#"<w:left w:w="80" w:type="dxa"/>"#)
+            && mar.contains(r#"<w:bottom w:w="100" w:type="dxa"/>"#)
+            && mar.contains(r#"<w:right w:w="80" w:type="dxa"/>"#),
+        "inset (x: 4pt, y: 5pt) must map to y=100 / x=80 twips:\n{mar}"
+    );
+}
+
+#[test]
+fn issue_grid_after_set_in_block_becomes_table() {
+    let doc_xml = fixture_doc_xml("issue_grid_in_block");
+    assert!(
+        doc_xml.contains("<w:tbl>"),
+        "grid after a set rule inside a block lowers to a table"
+    );
+    assert_eq!(
+        doc_xml.matches("<w:tr>").count(),
+        1,
+        "one grid row:\n{doc_xml}"
+    );
+    assert_eq!(
+        doc_xml.matches("<w:tc>").count(),
+        3,
+        "three cells keep the grid's column structure:\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let order: Vec<usize> = ["0.1", "Middle entry text", "11"]
+        .iter()
+        .map(|needle| {
+            texts
+                .iter()
+                .position(|t| t.trim() == *needle)
+                .unwrap_or_else(|| panic!("{needle:?} missing as a cell paragraph from {texts:?}"))
+        })
+        .collect();
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "grid cells keep reading order, positions {order:?}"
+    );
+}
+
+#[test]
+fn issue_table_after_set_in_block_keeps_table() {
+    let doc_xml = fixture_doc_xml("issue_table_after_set_in_block");
+    assert!(
+        doc_xml.contains("<w:tbl>"),
+        "table after a set rule inside a block stays a table"
+    );
+    assert_eq!(
+        doc_xml.matches("<w:tr>").count(),
+        2,
+        "header row plus one data row:\n{doc_xml}"
+    );
+    assert_eq!(
+        doc_xml.matches("<w:tc>").count(),
+        6,
+        "three cells per row:\n{doc_xml}"
+    );
+    assert!(doc_xml.contains("481,513"), "data cell should be present");
+    assert!(doc_xml.contains("Row label"), "row label should be present");
 }

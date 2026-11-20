@@ -1,9 +1,14 @@
+use typst_syntax::Span;
+
+use crate::compat::{CompatMode, Degradation, DegradationAction};
+
 use super::{
-    CellContent, Document, HtmlDocument, HtmlElement, HtmlNode, InlineFmt, InlineOptions, Location,
-    Paragraph, StyleChain, Table, TableCell, TableElem, TableRow, Tag, TyportWorld, VMerge,
-    WalkCtx, collect_inlines, content_at_location, element_at_location, find_first_element,
-    find_tag_end, get_attr_value, image, is_inline_equation_at, subtree_has_element, table_align,
-    table_width, tag_name, walk_tags,
+    CellContent, HtmlElement, HtmlNode, InlineFmt, InlineOptions, Location, Paragraph, StyleChain,
+    Table, TableCell, TableElem, TableRow, Tag, VMerge, WalkCtx, collect_inlines,
+    content_at_location, convert_html_list_to_paragraphs, element_at_location,
+    enum_location_before, enum_numbering_at, find_first_element, find_tag_end, get_attr_value,
+    image, is_inline_equation_at, subtree_has_element, table_align, table_width, tag_name,
+    walk_tags,
 };
 
 /// Rowspan metadata for a single cell: `(html_cell_index, rowspan, colspan)`.
@@ -25,7 +30,7 @@ pub(super) fn handle_table_tag(
 /// Handle a `table` Tag: find the HTML `<table>` element in the inner children and parse it.
 pub(super) fn handle_table(slice: &[HtmlNode], table_loc: Option<Location>, ctx: &mut WalkCtx) {
     if let Some(table) = find_first_element(slice, &|element| tag_name(element) == "table") {
-        convert_html_table(table, table_loc, ctx.doc, ctx.html_doc, ctx.world);
+        convert_html_table(table, table_loc, ctx);
         return;
     }
     // Fallback: walk inner children normally
@@ -33,15 +38,22 @@ pub(super) fn handle_table(slice: &[HtmlNode], table_loc: Option<Location>, ctx:
     walk_tags(inner, ctx);
 }
 
+/// The `TableElem`'s source span for a table location, or `None` when the
+/// location is unknown or the span is detached. Degradations never carry a
+/// fabricated span.
+fn table_span(ctx: &WalkCtx, loc: Option<Location>) -> Option<Span> {
+    let content = content_at_location(ctx.html_doc, loc?)?;
+    let span = content.span();
+    (!span.is_detached()).then_some(span)
+}
+
 /// Convert an HTML `<table>` element into the document model.
 pub(super) fn convert_html_table(
     elem: &HtmlElement,
     table_loc: Option<Location>,
-    doc: &mut Document,
-    html_doc: &HtmlDocument,
-    world: &TyportWorld,
+    ctx: &mut WalkCtx,
 ) {
-    let Some(mut table) = convert_html_table_to_model(elem, html_doc) else {
+    let Some(mut table) = convert_html_table_to_model(elem, ctx) else {
         return;
     };
 
@@ -50,28 +62,72 @@ pub(super) fn convert_html_table(
     // (cells left at width_pct = None) when the spec is all-`Auto`/`columns: N`,
     // or when the element is not queryable (e.g. nested tables with no location).
     if let Some(loc) = table_loc
-        && let Some(table_elem) = element_at_location::<TableElem>(html_doc, loc)
+        && let Some(table_elem) = element_at_location::<TableElem>(ctx.html_doc, loc)
     {
         let tracks = table_elem.columns.get_ref(StyleChain::default());
         let content_pt = f64::from(
-            doc.page_settings
+            ctx.doc
+                .page_settings
                 .width_twips
-                .saturating_sub(doc.page_settings.margin_left)
-                .saturating_sub(doc.page_settings.margin_right),
+                .saturating_sub(ctx.doc.page_settings.margin_left)
+                .saturating_sub(ctx.doc.page_settings.margin_right),
         ) / 20.0;
         let wctx = table_width::TableWidthCtx {
             content_pt,
-            body_font_pt: f64::from(doc.style.body_size_half_pt) / 2.0,
+            body_font_pt: f64::from(ctx.doc.style.body_size_half_pt) / 2.0,
         };
         if let Some(col_pct) = table_width::track_widths_pct(&tracks.0, wctx) {
             table_width::assign_cell_widths(&mut table, &col_pct);
         }
         // Semantic cell alignment (the HTML `<td>`s carry none): horizontal → cell
         // paragraph `w:jc`, vertical → `w:vAlign`, read from the same TableElem.
-        table_align::apply_cell_alignment(&mut table, &table_elem, world, html_doc);
+        table_align::apply_cell_alignment(&mut table, &table_elem, ctx.world, ctx.html_doc);
+        if ctx.compat == CompatMode::C1 {
+            let span = table_span(ctx, table_loc);
+            // M2: cell fills are dropped. The fill count needs the same
+            // resolution the writer path runs, so resolve on the real
+            // table and then strip the shading — the output is identical
+            // to never applying it.
+            let filled =
+                table_align::apply_cell_fill(&mut table, &table_elem, ctx.world, ctx.html_doc);
+            if filled > 0 {
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        cell.shading = None;
+                    }
+                }
+                ctx.degradations.push(Degradation::new(
+                    span,
+                    "table-cell-fill",
+                    DegradationAction::Skipped,
+                    format!("{filled} table cells had fills; cell fills are not emitted"),
+                ));
+            }
+            // U4: a table gutter is dropped (no inter-cell gap is emitted).
+            // `gutter` itself is a parse-time shorthand (`#[external]`) —
+            // it is never stored; `column_gutter`/`row_gutter` already
+            // default to it, so checking those two covers all three.
+            let col_gutter = table_elem.column_gutter.get_ref(StyleChain::default());
+            let row_gutter = table_elem.row_gutter.get_ref(StyleChain::default());
+            if !col_gutter.0.is_empty() || !row_gutter.0.is_empty() {
+                ctx.degradations.push(Degradation::new(
+                    span,
+                    "table-gutter",
+                    DegradationAction::Skipped,
+                    "table gutter is not representable; cells are placed adjacently",
+                ));
+            }
+            // U22: no gate — `TableElem.summary` is `#[internal]` +
+            // `#[parse(None)]`, so no user document can ever carry one;
+            // the gate could never fire.
+        } else {
+            // Semantic cell fill (likewise absent from the HTML): solid colors →
+            // `w:shd` cell shading.
+            table_align::apply_cell_fill(&mut table, &table_elem, ctx.world, ctx.html_doc);
+        }
     }
 
-    doc.add_table(table);
+    ctx.doc.add_table(table);
 }
 
 /// Post-process table rows to insert `VMerge::Continue` cells for rowspans.
@@ -106,6 +162,10 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
                     vmerge: VMerge::Continue,
                     width_pct: None,
                     vertical_align: None,
+                    shading: None,
+                    width_twips: None,
+                    borders: None,
+                    zero_margins: false,
                 });
                 logical_col += colspan as usize;
             } else if src_idx < src_cells.len() {
@@ -146,7 +206,11 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
             }
         }
 
-        final_rows.push(TableRow { cells: new_cells });
+        final_rows.push(TableRow {
+            cells: new_cells,
+            height_twips: None,
+            is_header: false,
+        });
     }
 
     Table {
@@ -154,6 +218,10 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
         width_pct: None,
         border_size: None,
         borders: None,
+        cell_margins: None,
+        width_twips: None,
+        col_widths_twips: None,
+        alignment: None,
     }
 }
 
@@ -162,7 +230,7 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
 /// Returns `(TableRow, Vec<(cell_index, rowspan, colspan)>)` where the second
 /// element records which cells have `rowspan > 1` so the caller can insert
 /// `VMerge::Continue` cells in subsequent rows.
-pub(super) fn convert_table_row(tr: &HtmlElement, html_doc: &HtmlDocument) -> Option<RawTableRow> {
+pub(super) fn convert_table_row(tr: &HtmlElement, ctx: &mut WalkCtx) -> Option<RawTableRow> {
     let mut cells = Vec::new();
     let mut span_info = Vec::new();
     let mut cell_idx: usize = 0;
@@ -173,7 +241,7 @@ pub(super) fn convert_table_row(tr: &HtmlElement, html_doc: &HtmlDocument) -> Op
             if tag == "td" || tag == "th" {
                 let is_header = tag == "th";
                 // Check if <td> children include <p> elements for multi-paragraph cells
-                let paragraphs = convert_cell_paragraphs(td, is_header, html_doc);
+                let paragraphs = convert_cell_paragraphs(td, is_header, ctx);
 
                 // Parse colspan and rowspan attributes
                 let colspan = get_attr_value(td, "colspan")
@@ -195,7 +263,7 @@ pub(super) fn convert_table_row(tr: &HtmlElement, html_doc: &HtmlDocument) -> Op
 
                 // Check for nested tables within the cell
                 let (final_paragraphs, cell_content) =
-                    extract_cell_content_with_nested_tables(td, html_doc, paragraphs);
+                    extract_cell_content_with_nested_tables(td, paragraphs, ctx);
 
                 cells.push(TableCell {
                     paragraphs: final_paragraphs,
@@ -204,6 +272,10 @@ pub(super) fn convert_table_row(tr: &HtmlElement, html_doc: &HtmlDocument) -> Op
                     vmerge,
                     width_pct: None,
                     vertical_align: None,
+                    shading: None,
+                    width_twips: None,
+                    borders: None,
+                    zero_margins: false,
                 });
                 cell_idx += 1;
             }
@@ -212,7 +284,14 @@ pub(super) fn convert_table_row(tr: &HtmlElement, html_doc: &HtmlDocument) -> Op
     if cells.is_empty() {
         None
     } else {
-        Some((TableRow { cells }, span_info))
+        Some((
+            TableRow {
+                cells,
+                height_twips: None,
+                is_header: false,
+            },
+            span_info,
+        ))
     }
 }
 
@@ -223,7 +302,7 @@ pub(super) fn convert_table_row(tr: &HtmlElement, html_doc: &HtmlDocument) -> Op
 pub(super) fn convert_cell_paragraphs(
     td: &HtmlElement,
     is_header: bool,
-    html_doc: &HtmlDocument,
+    ctx: &mut WalkCtx,
 ) -> Vec<Paragraph> {
     // Every paragraph collected below shares the same formatting: bold iff this
     // is a header cell, nothing else set.
@@ -241,67 +320,99 @@ pub(super) fn convert_cell_paragraphs(
     // already turns an `equation` Tag into OMML and recurses through <p> wrappers
     // to pick up the surrounding text.
     let has_inline_equation =
-        (0..td.children.len()).any(|i| is_inline_equation_at(&td.children, i, html_doc));
+        (0..td.children.len()).any(|i| is_inline_equation_at(&td.children, i, ctx.html_doc));
     if has_inline_equation {
         let mut para = Paragraph::new();
         collect_inlines(
             &td.children,
             &mut para,
             None,
-            InlineOptions::generic(fmt, Some(html_doc)),
+            InlineOptions::generic(fmt, Some(ctx.html_doc)),
         );
         return vec![para];
     }
 
-    // Check if any direct children are <p> elements
-    let has_p_children = td.children.iter().any(|c| {
-        if let HtmlNode::Element(el) = c {
-            tag_name(el) == "p"
-        } else {
-            false
+    // Walk the cell's children in document order: a `<p>` becomes a paragraph,
+    // a `<ul>`/`<ol>` becomes list paragraphs carrying `w:numPr` (upstream
+    // #31), and contiguous inline content accumulates into one paragraph.
+    // Nested `<table>`s are skipped here — the nested-table path rebuilds them.
+    let mut paragraphs = Vec::new();
+    let mut range_start = 0;
+    for idx in 0..=td.children.len() {
+        if idx == td.children.len() {
+            push_cell_inline_paragraph(&td.children, range_start..idx, fmt, ctx, &mut paragraphs);
+            break;
         }
-    });
-
-    if has_p_children {
-        let mut paragraphs = Vec::new();
-        for child in &td.children {
-            if let HtmlNode::Element(el) = child
-                && tag_name(el) == "p"
-            {
-                let mut para = Paragraph::new();
-                collect_inlines(
-                    &el.children,
-                    &mut para,
-                    None,
-                    InlineOptions::generic(fmt, Some(html_doc)),
-                );
-                if !para.inlines.is_empty() {
-                    paragraphs.push(para);
-                }
-            }
-        }
-        if paragraphs.is_empty() {
-            // Fallback: collect all content as one paragraph
+        let HtmlNode::Element(el) = &td.children[idx] else {
+            continue;
+        };
+        let tag = tag_name(el);
+        if tag == "p" {
+            push_cell_inline_paragraph(&td.children, range_start..idx, fmt, ctx, &mut paragraphs);
             let mut para = Paragraph::new();
             collect_inlines(
-                &td.children,
+                &el.children,
                 &mut para,
                 None,
-                InlineOptions::generic(fmt, Some(html_doc)),
+                InlineOptions::generic(fmt, Some(ctx.html_doc)),
             );
-            vec![para]
-        } else {
-            paragraphs
+            if !para.inlines.is_empty() {
+                paragraphs.push(para);
+            }
+            range_start = idx + 1;
+        } else if tag == "ul" || tag == "ol" {
+            push_cell_inline_paragraph(&td.children, range_start..idx, fmt, ctx, &mut paragraphs);
+            let ordered = tag == "ol";
+            // The cell enum's numbering pattern lives on its Tag marker, a
+            // sibling immediately before this `<ol>` (same layout as the
+            // nested-enum case in lists.rs).
+            let numbering = enum_location_before(&td.children, idx)
+                .and_then(|loc| enum_numbering_at(ctx.html_doc, loc));
+            paragraphs.extend(convert_html_list_to_paragraphs(
+                el, ordered, numbering, ctx, fmt,
+            ));
+            range_start = idx + 1;
+        } else if tag == "table" {
+            push_cell_inline_paragraph(&td.children, range_start..idx, fmt, ctx, &mut paragraphs);
+            range_start = idx + 1;
         }
-    } else {
+    }
+    if paragraphs.is_empty() {
+        // Fallback: collect all content as one paragraph
         let mut para = Paragraph::new();
         collect_inlines(
             &td.children,
             &mut para,
             None,
-            InlineOptions::generic(fmt, Some(html_doc)),
+            InlineOptions::generic(fmt, Some(ctx.html_doc)),
         );
         vec![para]
+    } else {
+        paragraphs
+    }
+}
+
+/// Collect an inline range of a cell's children into one paragraph (if it has
+/// content) and push it — the shared flush step of the cell walk.
+fn push_cell_inline_paragraph(
+    children: &[HtmlNode],
+    range: std::ops::Range<usize>,
+    fmt: InlineFmt,
+    ctx: &WalkCtx,
+    paragraphs: &mut Vec<Paragraph>,
+) {
+    if range.is_empty() {
+        return;
+    }
+    let mut para = Paragraph::new();
+    collect_inlines(
+        &children[range],
+        &mut para,
+        None,
+        InlineOptions::generic(fmt, Some(ctx.html_doc)),
+    );
+    if !para.inlines.is_empty() {
+        paragraphs.push(para);
     }
 }
 
@@ -314,8 +425,8 @@ pub(super) fn convert_cell_paragraphs(
 /// - `content` is non-empty only when nested tables are present
 pub(super) fn extract_cell_content_with_nested_tables(
     td: &HtmlElement,
-    html_doc: &HtmlDocument,
     paragraphs: Vec<Paragraph>,
+    ctx: &mut WalkCtx,
 ) -> (Vec<Paragraph>, Vec<CellContent>) {
     // Check if any child (direct or nested in a wrapper div/span) is a <table>
     // `subtree_has_element` also sees tables represented as flattened
@@ -327,7 +438,7 @@ pub(super) fn extract_cell_content_with_nested_tables(
 
     // Walk children in order, collecting paragraphs and nested tables
     let mut content: Vec<CellContent> = Vec::new();
-    collect_cell_content_recursive(&td.children, html_doc, &mut content);
+    collect_cell_content_recursive(&td.children, &mut content, ctx);
 
     // Also build the flat paragraphs list for backward compat
     let flat_paragraphs: Vec<Paragraph> = content
@@ -354,18 +465,36 @@ pub(super) fn extract_cell_content_with_nested_tables(
 /// children, preserving document order.
 pub(super) fn collect_cell_content_recursive(
     children: &[HtmlNode],
-    html_doc: &HtmlDocument,
     content: &mut Vec<CellContent>,
+    ctx: &mut WalkCtx,
 ) {
-    for child in children {
+    for (idx, child) in children.iter().enumerate() {
         match child {
             HtmlNode::Element(el) => {
                 let tag = tag_name(el);
                 if tag == "table" {
                     // Convert this as a nested table
-                    let table = convert_html_table_to_model(el, html_doc);
+                    let table = convert_html_table_to_model(el, ctx);
                     if let Some(t) = table {
                         content.push(CellContent::Table(t));
+                    }
+                } else if tag == "ul" || tag == "ol" {
+                    // A list inside the cell: same list handling as body
+                    // lists, so its items carry `w:numPr` (upstream #31).
+                    // The enum's numbering pattern comes from its Tag
+                    // marker, a sibling immediately before this `<ol>`.
+                    let ordered = tag == "ol";
+                    let numbering = enum_location_before(children, idx)
+                        .and_then(|loc| enum_numbering_at(ctx.html_doc, loc));
+                    let paras = convert_html_list_to_paragraphs(
+                        el,
+                        ordered,
+                        numbering,
+                        ctx,
+                        InlineFmt::default(),
+                    );
+                    for para in paras {
+                        content.push(CellContent::Paragraph(para));
                     }
                 } else if tag == "p" {
                     let mut para = Paragraph::new();
@@ -373,7 +502,7 @@ pub(super) fn collect_cell_content_recursive(
                         &el.children,
                         &mut para,
                         None,
-                        InlineOptions::generic(InlineFmt::default(), Some(html_doc)),
+                        InlineOptions::generic(InlineFmt::default(), Some(ctx.html_doc)),
                     );
                     if !para.inlines.is_empty() {
                         content.push(CellContent::Paragraph(para));
@@ -383,7 +512,7 @@ pub(super) fn collect_cell_content_recursive(
                     // `<math>` (equation outside a `<p>`) is skipped: its OMML
                     // comes from the sibling equation Tag below — recursing
                     // would leak the MathML glyphs as literal cell text.
-                    collect_cell_content_recursive(&el.children, html_doc, content);
+                    collect_cell_content_recursive(&el.children, content, ctx);
                 }
             }
             HtmlNode::Text(text, _) => {
@@ -399,7 +528,7 @@ pub(super) fn collect_cell_content_recursive(
                 // through the introspector like the inline collector does.
                 if let Tag::Start(c, _) = tag
                     && c.elem().name() == "equation"
-                    && let Some(eq) = content_at_location(html_doc, tag.location())
+                    && let Some(eq) = content_at_location(ctx.html_doc, tag.location())
                 {
                     let omml = typort_math::equation_to_omml(&eq);
                     let mut para = Paragraph::new();
@@ -410,6 +539,17 @@ pub(super) fn collect_cell_content_recursive(
             HtmlNode::Frame(frame) => {
                 // Layouted-opaque content in a cell: rasterize in place.
                 if let Some(img) = image::rasterize_html_frame(frame) {
+                    // U21 (C1 only): the frame's vector/text content is no
+                    // longer editable. The frame carries no span or page,
+                    // so the degradation is span-less without a page hint.
+                    if ctx.compat == CompatMode::C1 {
+                        ctx.degradations.push(Degradation::new(
+                            None,
+                            "html-frame",
+                            DegradationAction::Approximated,
+                            "HTML frame rasterized to PNG; content is no longer editable text",
+                        ));
+                    }
                     let mut para = Paragraph::new();
                     para.add_image(img);
                     content.push(CellContent::Paragraph(para));
@@ -421,29 +561,26 @@ pub(super) fn collect_cell_content_recursive(
 
 /// Convert an HTML `<table>` element into a `Table` model (without adding to doc).
 /// Returns `None` if the table has no rows.
-pub(super) fn convert_html_table_to_model(
-    elem: &HtmlElement,
-    html_doc: &HtmlDocument,
-) -> Option<Table> {
-    let raw_rows = collect_table_rows(elem, html_doc);
+pub(super) fn convert_html_table_to_model(elem: &HtmlElement, ctx: &mut WalkCtx) -> Option<Table> {
+    let raw_rows = collect_table_rows(elem, ctx);
     (!raw_rows.is_empty()).then(|| postprocess_rowspans(raw_rows))
 }
 
 /// Collect direct and section-wrapped HTML table rows once for every table path.
-pub(super) fn collect_table_rows(elem: &HtmlElement, html_doc: &HtmlDocument) -> Vec<RawTableRow> {
+pub(super) fn collect_table_rows(elem: &HtmlElement, ctx: &mut WalkCtx) -> Vec<RawTableRow> {
     let mut raw_rows = Vec::new();
     for child in &elem.children {
         if let HtmlNode::Element(row_or_section) = child {
             let tag = tag_name(row_or_section);
             if tag == "tr" {
-                if let Some(result) = convert_table_row(row_or_section, html_doc) {
+                if let Some(result) = convert_table_row(row_or_section, ctx) {
                     raw_rows.push(result);
                 }
             } else if tag == "thead" || tag == "tbody" || tag == "tfoot" {
                 for inner in &row_or_section.children {
                     if let HtmlNode::Element(tr) = inner
                         && tag_name(tr) == "tr"
-                        && let Some(result) = convert_table_row(tr, html_doc)
+                        && let Some(result) = convert_table_row(tr, ctx)
                     {
                         raw_rows.push(result);
                     }

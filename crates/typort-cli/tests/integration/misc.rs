@@ -1,9 +1,6 @@
 //! Tests that don't fit a more specific area.
 
-use crate::common::{
-    fixture_dir, fixture_doc_xml, fixture_document, fixture_package, fixture_package_from_document,
-    fixture_styles_xml,
-};
+use crate::common::{fixture_doc_xml, fixture_document, fixture_package, fixture_styles_xml};
 
 #[test]
 fn italic_text_produces_w_i_element() {
@@ -72,45 +69,6 @@ fn metadata_title_extracted_from_first_heading() {
         doc.metadata.title.as_deref(),
         Some("Hello World"),
         "metadata title should be extracted from first heading"
-    );
-}
-
-#[test]
-fn preset_overrides_page_margins() {
-    let mut doc = fixture_document("hello");
-
-    // Load the test preset fixture
-    let preset = typort_presets::load_preset(&fixture_dir("presets"), "example").unwrap();
-    preset.apply(&mut doc);
-
-    // Verify margins were overridden
-    assert_eq!(
-        doc.page_settings.margin_top, 1440,
-        "top margin should be 2.54cm = 1440 twips"
-    );
-    assert_eq!(
-        doc.page_settings.margin_bottom, 1440,
-        "bottom margin should be 2.54cm = 1440 twips"
-    );
-    assert_eq!(
-        doc.page_settings.margin_left, 1797,
-        "left margin should be 3.17cm = 1797 twips"
-    );
-    assert_eq!(
-        doc.page_settings.margin_right, 1797,
-        "right margin should be 3.17cm = 1797 twips"
-    );
-
-    // Write and verify margins appear in the XML
-    let package = fixture_package_from_document(&doc);
-    let doc_xml = package.part_text("word/document.xml");
-    assert!(
-        doc_xml.contains("w:top=\"1440\""),
-        "page margins should reflect preset values"
-    );
-    assert!(
-        doc_xml.contains("w:left=\"1797\""),
-        "page margins should reflect preset values"
     );
 }
 
@@ -320,4 +278,38 @@ fn issue_custom_doc_properties_metadata() {
 fn issue_metadata_case_dedup() {
     let xml = fixture_doc_xml("issue_metadata_case_dedup");
     assert!(xml.contains("test document"), "document body text present");
+}
+
+#[test]
+fn body_size_baseline_samples_first_pages_not_all() {
+    // #27: the run-style baseline samples the same first pages as the
+    // document-style detector. The 9pt appendix holds most of this document's
+    // glyphs; if the baseline came from all pages it would be 9pt and every
+    // body run would carry a spurious size override.
+    let doc_xml = fixture_doc_xml("issue_body_size_appendix_sampling");
+    let body = crate::common::paragraph_containing(
+        &doc_xml,
+        "Body marker sentence for the sampling test.",
+    );
+    assert!(
+        !body.contains("<w:sz "),
+        "body runs must carry no size override when the baseline is the 10.5pt body size: {body}"
+    );
+}
+
+#[test]
+fn body_size_baseline_weights_glyphs_not_bytes() {
+    // #27: the CJK title carries more bytes than the ASCII body text (three
+    // bytes per CJK glyph) but fewer glyphs. Byte weighting would pick the
+    // title's size as the body size and put a spurious size override on body
+    // runs; glyph weighting picks the 10.5pt body size.
+    let doc_xml = fixture_doc_xml("issue_body_size_glyph_weighting");
+    let body = crate::common::paragraph_containing(
+        &doc_xml,
+        "Body marker sentence for the weighting test.",
+    );
+    assert!(
+        !body.contains("<w:sz "),
+        "body runs must carry no size override when the baseline is the 10.5pt body size: {body}"
+    );
 }

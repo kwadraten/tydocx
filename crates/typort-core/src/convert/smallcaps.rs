@@ -14,18 +14,26 @@ pub(super) fn apply_smallcaps_from_source(world: &TyportWorld, doc: &mut Documen
     for element in &mut doc.body.elements {
         if let BlockElement::Paragraph(p) = element {
             for inline in &mut p.inlines {
-                if let InlineElement::Text(run) = inline {
-                    let trimmed = run.text.trim();
-                    if sc_texts
-                        .iter()
-                        .any(|t| trimmed == *t || t.contains(trimmed))
-                    {
-                        run.smallcaps = true;
-                    }
+                if let InlineElement::Text(run) = inline
+                    && run_matches_smallcaps(&run.text, &sc_texts)
+                {
+                    run.smallcaps = true;
                 }
             }
         }
     }
+}
+
+/// Whether a run's text should be marked smallcaps: the trimmed text must be
+/// non-empty and match (exactly or as a substring of) a smallcaps text from
+/// the source. Whitespace-only runs never match — `str::contains("")` is
+/// always true, so without the empty check every space run would be marked.
+fn run_matches_smallcaps(run_text: &str, sc_texts: &[String]) -> bool {
+    let trimmed = run_text.trim();
+    !trimmed.is_empty()
+        && sc_texts
+            .iter()
+            .any(|t| trimmed == t.as_str() || t.contains(trimmed))
 }
 
 /// Extract text content from all `smallcaps` function calls in the source AST.
@@ -149,4 +157,35 @@ pub(super) fn collect_text_from_syntax_node(node: &typst_syntax::SyntaxNode) -> 
         result.push_str(&collect_text_from_syntax_node(child));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn texts(items: &[&str]) -> Vec<String> {
+        items.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn whitespace_only_run_never_matches_smallcaps() {
+        let sc = texts(&["A", "B"]);
+        assert!(!run_matches_smallcaps("", &sc));
+        assert!(!run_matches_smallcaps(" ", &sc));
+        assert!(!run_matches_smallcaps("  \n ", &sc));
+    }
+
+    #[test]
+    fn run_matches_smallcaps_exact_and_substring() {
+        let sc = texts(&["Small Caps Text"]);
+        assert!(run_matches_smallcaps("Small Caps Text", &sc));
+        // Run splitting can leave a fragment of the source text.
+        assert!(run_matches_smallcaps("Small Caps", &sc));
+        assert!(!run_matches_smallcaps("Other Text", &sc));
+    }
+
+    #[test]
+    fn run_matches_smallcaps_needs_a_source_text() {
+        assert!(!run_matches_smallcaps("A", &[]));
+    }
 }

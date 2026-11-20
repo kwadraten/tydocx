@@ -3,22 +3,19 @@
 //! Extracts the most-common font family and size plus paragraph spacing,
 //! indentation, justification, heading styles, and footnote sizing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use typort_ooxml::document::{Document, DocumentStyle, FootnoteFormat, InlineElement};
-use typst::layout::{Frame, FrameItem};
+use typst::layout::{Frame, FrameItem, Point};
 use typst_layout::PagedDocument;
 
+use super::body_size::{BODY_SIZE_SAMPLE_PAGES, DEFAULT_BODY_SIZE_HALF_PT};
 use super::language::is_cjk_char;
 use super::margin::{TextFragment, collect_text_fragments, find_body_zone};
 use super::units::{pt_to_half_pt, pt_to_twips};
 
 // Paged-style heuristic thresholds. Keep every tuning knob in this block.
 
-/// Pages sampled for the glyph-weighted document-style detector.
-const DOCUMENT_STYLE_SAMPLE_PAGES: usize = 3;
-/// Half-point fallback when no rendered body size is available.
-pub(in crate::convert) const DEFAULT_BODY_SIZE_HALF_PT: u32 = 21;
 /// Cap-height ratio used when rendered font metrics are unavailable.
 const DEFAULT_CAP_HEIGHT_RATIO: f64 = 0.66;
 /// Minimum text fragments needed to infer a first-line indent.
@@ -107,6 +104,8 @@ struct FontInfoHistograms {
     size_counts: HashMap<u32, usize>,
     y_positions: Vec<(f64, u32)>,
     body_cap_heights: Vec<f64>,
+    /// Families whose rendered faces carry Typst's `MONOSPACE` flag (#26).
+    monospace_fonts: HashSet<String>,
 }
 
 /// Extract document style (fonts, sizes, spacing) from the rendered `PagedDocument`.
@@ -117,7 +116,7 @@ struct FontInfoHistograms {
 pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
     let mut histograms = FontInfoHistograms::default();
 
-    for page in paged.pages().iter().take(DOCUMENT_STYLE_SAMPLE_PAGES) {
+    for page in paged.pages().iter().take(BODY_SIZE_SAMPLE_PAGES) {
         collect_font_info_split(&page.frame, &mut histograms);
     }
 
@@ -127,6 +126,7 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
         size_counts,
         y_positions,
         body_cap_heights,
+        monospace_fonts,
     } = histograms;
 
     // Detect body font (most common per script). On a count tie, fall back to
@@ -170,21 +170,7 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
     };
 
     // Detect code font (monospace font that isn't the body font)
-    let code_font = super::stats::dominant_key(
-        ascii_font_counts
-            .iter()
-            .filter(|(f, _)| {
-                let fl = f.to_lowercase();
-                (fl.contains("mono")
-                    || fl.contains("courier")
-                    || fl.contains("consol")
-                    || fl.contains("fira code")
-                    || fl.contains("source code"))
-                    && f.as_str() != body_font_ascii
-            })
-            .map(|(font, count)| (font.as_str(), *count)),
-    )
-    .map_or_else(|| "Courier New".to_string(), ToString::to_string);
+    let code_font = detect_code_font(&ascii_font_counts, &monospace_fonts, &body_font_ascii);
 
     // Detect sizes for code, footnotes, headings from actual rendered data
     let code_size_half_pt = detect_code_size(&size_counts, body_size_half_pt);
@@ -199,8 +185,11 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
     let (body_spacing_before, body_spacing_after) =
         detect_body_paragraph_spacing(body_size_half_pt, &heading_sizes, paged);
 
-    // Detect CJK content presence from rendered text
-    let has_cjk = !ascii_font_counts.is_empty() && cjk_font_counts.values().sum::<usize>() > 0;
+    // Detect CJK content presence from rendered text. Only CJK glyphs count:
+    // a CJK-only document (no Latin text at all) still has CJK content — the
+    // old "Latin text must also render" conjunct made such documents lose
+    // both the East-Asian hint and the zh-CN fallback language.
+    let has_cjk = cjk_font_counts.values().sum::<usize>() > 0;
 
     DocumentStyle {
         body_font_ascii,
@@ -213,6 +202,12 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
         first_line_indent_chars: None,
         first_line_indent_all: false,
         footnote_format: FootnoteFormat::default(),
+        // Geometry detection cannot see `footnote.entry` set rules; the
+        // source-AST override (apply_source_overrides) fills them.
+        footnote_entry: typort_ooxml::document::FootnoteEntryStyle::default(),
+        // Geometry detection cannot see the source header rule; the
+        // source-AST detection (apply_page_and_style) sets this.
+        footnote_restart_each_page: false,
         code_font,
         body_spacing_before,
         body_spacing_after,
@@ -231,6 +226,7 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
         has_cjk_content: has_cjk,
         hyperlink_color: "0563C1".to_string(),
         body_cap_height_ratio,
+        suppress_auto_hyphens: false,
     }
 }
 
@@ -434,6 +430,25 @@ fn collect_right_edges(
             }
         }
     });
+}
+
+/// Pick the code font: the most common monospace family that is not the body
+/// font. Monospace-ness is read from `monospace_fonts` — families whose
+/// rendered faces carry Typst's `MONOSPACE` flag (#26) — never from the family
+/// name, so a monospace face without "mono" in its name ("Cascadia Code",
+/// "Hack") is picked, and a proportional face that happens to carry one is not.
+fn detect_code_font(
+    ascii_font_counts: &HashMap<String, usize>,
+    monospace_fonts: &HashSet<String>,
+    body_font_ascii: &str,
+) -> String {
+    super::stats::dominant_key(
+        ascii_font_counts
+            .iter()
+            .filter(|(f, _)| monospace_fonts.contains(*f) && f.as_str() != body_font_ascii)
+            .map(|(font, count)| (font.as_str(), *count)),
+    )
+    .map_or_else(|| "Courier New".to_string(), ToString::to_string)
 }
 
 /// Detect code block font size: the most common size smaller than body that's used with mono fonts.
@@ -702,7 +717,28 @@ fn collect_y_and_size(frame: &Frame, items: &mut Vec<(f64, u32)>) {
 
 /// Recursively collect font info split by script (ASCII vs CJK), sizes, and y-positions.
 fn collect_font_info_split(frame: &Frame, histograms: &mut FontInfoHistograms) {
-    super::frames::visit_frame_items(frame, false, &mut |position, item| {
+    collect_font_info_at(frame, Point::zero(), histograms);
+}
+
+/// Recursive font-histogram walk, skipping footnote entry groups:
+/// footnote text renders at 0.85em, and in a document whose footnote
+/// text outnumbers its body text the body-size mode lands on the
+/// footnote size (`footnote_in_table`, `formatted_footnote`: Normal came
+/// out 9.5pt for an 11pt body, and the legacy path then had to re-add
+/// the body size onto every run). A group is a footnote entry when it
+/// has a parent and directly contains a `Tag::Start("entry")` — the same
+/// predicate the realize patch uses; outline entries carry an `"entry"`
+/// tag too, but their groups have no parent.
+fn collect_font_info_at(frame: &Frame, offset: Point, histograms: &mut FontInfoHistograms) {
+    for (position, item) in frame.items() {
+        let absolute = Point::new(offset.x + position.x, offset.y + position.y);
+        if let FrameItem::Group(group) = item {
+            if super::frames::is_footnote_entry_group(group) {
+                continue;
+            }
+            collect_font_info_at(&group.frame, absolute, histograms);
+            continue;
+        }
         if let FrameItem::Text(text_item) = item {
             let family = text_item.font.info().family.clone();
             let size_half_pt = pt_to_half_pt(text_item.size.to_pt());
@@ -710,12 +746,25 @@ fn collect_font_info_split(frame: &Frame, histograms: &mut FontInfoHistograms) {
             *histograms.size_counts.entry(size_half_pt).or_insert(0) += glyph_count;
             histograms
                 .y_positions
-                .push((position.y.to_pt(), size_half_pt));
+                .push((absolute.y.to_pt(), size_half_pt));
             let cap_h = text_item.font.metrics().cap_height.get();
             histograms.body_cap_heights.push(cap_h);
 
             let has_cjk = text_item.text.chars().any(is_cjk_char);
             let has_ascii = text_item.text.chars().any(|c| c.is_ascii_alphabetic());
+            // Monospace-ness is a property of the font face itself — Typst
+            // computes the `MONOSPACE` flag from the font tables — not of the
+            // family name (#26). A "mono" in the name proves nothing either
+            // way: "Cascadia Code" and "Hack" are monospace without one, and a
+            // proportional face can carry one.
+            if text_item
+                .font
+                .info()
+                .flags
+                .contains(typst_library::text::FontFlags::MONOSPACE)
+            {
+                histograms.monospace_fonts.insert(family.clone());
+            }
             if has_cjk {
                 *histograms.cjk_fonts.entry(family.clone()).or_insert(0) += glyph_count;
             }
@@ -723,5 +772,77 @@ fn collect_font_info_split(frame: &Frame, histograms: &mut FontInfoHistograms) {
                 *histograms.ascii_fonts.entry(family).or_insert(0) += glyph_count;
             }
         }
-    });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HashMap, HashSet, detect_code_font};
+
+    fn counts(pairs: &[(&str, usize)]) -> HashMap<String, usize> {
+        pairs
+            .iter()
+            .map(|(name, count)| ((*name).to_string(), *count))
+            .collect()
+    }
+
+    fn mono(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn detect_code_font_picks_dominant_monospace_not_body() {
+        // Liberation Mono dominates the monospace families and is not the body
+        // font, so it wins over the less-used DejaVu Sans Mono.
+        let ascii = counts(&[
+            ("Liberation Serif", 500),
+            ("Liberation Mono", 80),
+            ("DejaVu Sans Mono", 20),
+        ]);
+        let monospace = mono(&["Liberation Mono", "DejaVu Sans Mono"]);
+        assert_eq!(
+            detect_code_font(&ascii, &monospace, "Liberation Serif"),
+            "Liberation Mono"
+        );
+    }
+
+    #[test]
+    fn detect_code_font_ignores_name_substrings() {
+        // "Cascadia Code" and "Hack" are monospace without "mono" in the name,
+        // so the flag set — not the name — decides. A proportional face that
+        // happens to carry a substring ("Monotype Corsiva" is not monospace)
+        // must not be picked even though it dominates the counts.
+        let ascii = counts(&[
+            ("Liberation Serif", 500),
+            ("Monotype Corsiva", 90),
+            ("Cascadia Code", 80),
+            ("Hack", 10),
+        ]);
+        let monospace = mono(&["Cascadia Code", "Hack"]);
+        assert_eq!(
+            detect_code_font(&ascii, &monospace, "Liberation Serif"),
+            "Cascadia Code"
+        );
+    }
+
+    #[test]
+    fn detect_code_font_skips_body_font_even_when_monospace() {
+        // A monospace body font is the body font, not the code font.
+        let ascii = counts(&[("DejaVu Sans Mono", 500), ("Liberation Mono", 80)]);
+        let monospace = mono(&["DejaVu Sans Mono", "Liberation Mono"]);
+        assert_eq!(
+            detect_code_font(&ascii, &monospace, "DejaVu Sans Mono"),
+            "Liberation Mono"
+        );
+    }
+
+    #[test]
+    fn detect_code_font_falls_back_without_monospace() {
+        let ascii = counts(&[("Liberation Serif", 500)]);
+        let monospace = mono(&[]);
+        assert_eq!(
+            detect_code_font(&ascii, &monospace, "Liberation Serif"),
+            "Courier New"
+        );
+    }
 }

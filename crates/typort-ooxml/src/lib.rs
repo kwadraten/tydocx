@@ -1,5 +1,6 @@
 #![warn(clippy::pedantic)]
 
+pub mod canonical;
 pub mod document;
 pub mod styles;
 pub mod writer;

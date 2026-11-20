@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParagraphStyle {
     Normal,
@@ -5,11 +7,14 @@ pub enum ParagraphStyle {
 }
 
 impl ParagraphStyle {
+    /// The `w:pStyle` value string. `Normal` borrows its static name; a
+    /// heading level is formatted, so it owns its string — hence `Cow`
+    /// instead of `&'static str` like the sibling value methods.
     #[must_use]
-    pub fn ooxml_value(&self) -> String {
+    pub fn ooxml_value(&self) -> Cow<'static, str> {
         match self {
-            Self::Normal => "Normal".to_string(),
-            Self::Heading(level) => format!("Heading{level}"),
+            Self::Normal => Cow::Borrowed("Normal"),
+            Self::Heading(level) => Cow::Owned(format!("Heading{level}")),
         }
     }
 }
@@ -26,7 +31,7 @@ pub enum Alignment {
 impl Alignment {
     /// Return the OOXML `w:jc` value string for this alignment.
     #[must_use]
-    pub fn ooxml_value(&self) -> &'static str {
+    pub fn ooxml_value(self) -> &'static str {
         match self {
             Alignment::Left => "left",
             Alignment::Center => "center",
@@ -47,6 +52,7 @@ impl Alignment {
 pub enum ImageFormat {
     Png,
     Jpeg,
+    Svg,
 }
 
 impl ImageFormat {
@@ -55,6 +61,7 @@ impl ImageFormat {
         match self {
             Self::Png => "png",
             Self::Jpeg => "jpg",
+            Self::Svg => "svg",
         }
     }
 
@@ -63,21 +70,26 @@ impl ImageFormat {
         match self {
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
+            Self::Svg => "image/svg+xml",
         }
     }
 }
 
 /// Embedded image data with dimensions in EMU (English Metric Units).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ImageData {
     pub bytes: Vec<u8>,
     pub format: ImageFormat,
+    /// Original vector bytes when the source was vector: emitted as
+    /// `asvg:svgBlip` in `mc:AlternateContent`, with `bytes` as the PNG
+    /// fallback for consumers without the SVG extension.
+    pub svg: Option<Vec<u8>>,
     pub width_emu: u64,
     pub height_emu: u64,
 }
 
 /// List numbering info for a paragraph that is a list item.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ListInfo {
     /// Nesting level (0-based).
     pub level: u32,
@@ -86,7 +98,7 @@ pub struct ListInfo {
 }
 
 /// Word bibliography source type (`ST_SourceType`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceType {
     JournalArticle,
     Book,
@@ -101,7 +113,7 @@ pub enum SourceType {
 
 impl SourceType {
     #[must_use]
-    pub fn ooxml_value(&self) -> &'static str {
+    pub fn ooxml_value(self) -> &'static str {
         match self {
             Self::JournalArticle => "JournalArticle",
             Self::Book => "Book",
@@ -122,7 +134,7 @@ impl SourceType {
 }
 
 /// A person's name for Word bibliography author fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PersonName {
     pub last: String,
     pub first: Option<String>,
@@ -130,7 +142,7 @@ pub struct PersonName {
 }
 
 /// A citation source entry for Word's bibliography data store (`customXml/item1.xml`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CitationSource {
     /// Word keys sources by tag (and the writer derives the GUID from it), so
     /// tags must be unique within a `Document` — the writer does not dedup;
@@ -152,8 +164,61 @@ pub struct CitationSource {
     pub book_title: Option<String>,
 }
 
+/// A horizontal line drawn at an absolute position, anchored to a text run
+/// (`wp:anchor` + `wps:wsp` with a `line` preset geometry). Used for the
+/// overline trick: Typst renders overlines as line shapes, so the C2
+/// representation is the same kind of object — a floating line above the
+/// anchored line of text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchoredLine {
+    /// Horizontal position relative to the page edge (`relativeFrom="page"`),
+    /// in EMU.
+    pub x_emu: i64,
+    /// Vertical offset downward from the top of the anchor's text line
+    /// (`relativeFrom="line"`), in EMU. Typst draws the overline just below
+    /// the ascender top, so measured values are small positive numbers.
+    pub y_emu: i64,
+    /// Line length, in EMU.
+    pub length_emu: u64,
+    /// Stroke thickness, in EMU.
+    pub thickness_emu: u64,
+    /// Stroke color as a 6-digit hex string. `None` = automatic (black).
+    pub color: Option<String>,
+}
+
+/// Floating content anchored at a page-absolute position (`wp:anchor`), used
+/// for Typst `#place(.., float: true)`. The paragraph carrying this element
+/// keeps the float's logical position in document order (accessibility);
+/// the drawing itself holds the rendered position and wrap behavior.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchoredFloat {
+    /// Page-absolute position (`relativeFrom="page"` on both axes), EMU.
+    pub x_emu: i64,
+    pub y_emu: i64,
+    /// Drawing extent, EMU.
+    pub width_emu: u64,
+    pub height_emu: u64,
+    /// `place(clearance:)` mapped to `wp:anchor@distT`/`distB`, EMU.
+    pub clearance_emu: u64,
+    /// `wp:wrapTopAndBottom` when true, `wp:wrapSquare` when false. Typst
+    /// floats anchor at the top or bottom of their container, so the
+    /// top-and-bottom form is the normal case.
+    pub top_and_bottom: bool,
+    pub content: AnchoredContent,
+}
+
+/// What a `wp:anchor` draws: a picture or a text box.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnchoredContent {
+    /// A `pic:pic` — a floated image.
+    Image(ImageData),
+    /// A `wps:txbx` text box holding real block content so the float stays
+    /// editable text rather than a raster.
+    Text(Vec<BlockElement>),
+}
+
 /// A single inline element within a paragraph.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InlineElement {
     /// Normal text run.
     Text(Run),
@@ -177,6 +242,24 @@ pub enum InlineElement {
         bookmark_name: String,
         display_text: String,
     },
+    /// A page-number cross-reference field (PAGEREF field code pointing at a
+    /// bookmark). The cached `display_text` is the page number Typst rendered
+    /// for the target (e.g. from `counter(page).at(<label>)`).
+    FieldPageRef {
+        bookmark_name: String,
+        display_text: String,
+    },
+    /// A current-page field (PAGE field code). The cached `display_text` is the
+    /// page number Typst rendered at this spot (e.g. from a bare
+    /// `counter(page).display()` or `counter(page).at(here())`); Word recomputes
+    /// the field, the cache is only the pre-update display value. `bold` and
+    /// `size_half_pt` style the field's runs (the cached result and the field
+    /// chars) so a styled page-number token in a header/footer keeps its look.
+    FieldPage {
+        display_text: String,
+        bold: bool,
+        size_half_pt: Option<u32>,
+    },
     /// An external hyperlink using `fldSimple` with HYPERLINK field code.
     Hyperlink { url: String, runs: Vec<Run> },
     /// An internal hyperlink (`w:hyperlink w:anchor`) to a bookmark — e.g. a
@@ -185,6 +268,13 @@ pub enum InlineElement {
     InternalLink { anchor: String, runs: Vec<Run> },
     /// A page break (`w:br type="page"`).
     PageBreak,
+    /// A floating line shape anchored to this position in the text
+    /// (`wp:anchor`); used for the overline trick.
+    AnchoredLine(AnchoredLine),
+    /// A floating image or text box anchored to the page at this position
+    /// (`wp:anchor`); used for `#place(.., float: true)`. Its carrier
+    /// paragraph holds a 1pt mark in the flow.
+    AnchoredFloat(AnchoredFloat),
     /// A column break (`w:br type="column"`) — `#colbreak()` in a multi-column page.
     ColumnBreak,
     /// A Table of Contents field code (`TOC \o "1-N" \h \z \u`).
@@ -203,7 +293,7 @@ pub enum InlineElement {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "mirrors the independent w:rPr toggles"
@@ -217,9 +307,14 @@ pub struct Run {
     pub monospace: bool,
     pub underline: bool,
     pub strikethrough: bool,
+    pub overline: bool,
     /// Highlight color name (e.g. "yellow", "green", "cyan").
     /// `Some(...)` activates highlighting; `None` means no highlight.
     pub highlight_color: Option<String>,
+    /// Character shading fill as a 6-digit hex string (e.g. "FFCCCC").
+    /// Used for highlight fills that are not one of the sixteen named
+    /// `w:highlight` colors; `None` means no shading.
+    pub shading: Option<String>,
     pub smallcaps: bool,
     /// Text color as a 6-digit hex string (e.g. "FF0000" for red).
     /// `None` means inherit the default (black).
@@ -232,11 +327,24 @@ pub struct Run {
     /// Per-run font size override in half-points (e.g. 24 = 12pt).
     /// `None` means inherit the document default.
     pub size_half_pt: Option<u32>,
+    /// Character spacing (tracking) in twentieths of a point. `None` or
+    /// `Some(0)` means no expansion; `Some(n)` emits `w:spacing w:val="n"`.
+    pub tracking_twips: Option<u32>,
     /// Source span for cross-referencing with `PagedDocument` styling.
     pub span: Option<typst_syntax::Span>,
     /// A forced line break (`\` in Typst): the writer emits `<w:r><w:br/></w:r>`
     /// and ignores `text`. Kept distinct so it never coalesces with text runs.
     pub line_break: bool,
+    /// OOXML `w:ligatures` value (e.g. `"none"`, `"contextual"`,
+    /// `"historical"`). `None` inherits the document default.
+    pub ligatures: Option<&'static str>,
+    /// OOXML `w:numForm` value (`"lining"` or `"oldStyle"`).
+    pub num_form: Option<&'static str>,
+    /// OOXML `w:numberSpacing` value (`"proportional"` or `"tabular"`).
+    pub number_spacing: Option<&'static str>,
+    /// Baseline shift in half-points (`w:position/@w:val`, signed; positive
+    /// raises the text).
+    pub position_half_pt: Option<i32>,
 }
 
 impl Run {
@@ -251,14 +359,21 @@ impl Run {
             monospace: false,
             underline: false,
             strikethrough: false,
+            overline: false,
             highlight_color: None,
+            shading: None,
             smallcaps: false,
             color: None,
             font_ascii: None,
             font_east_asia: None,
             size_half_pt: None,
+            tracking_twips: None,
             span: None,
             line_break: false,
+            ligatures: None,
+            num_form: None,
+            number_spacing: None,
+            position_half_pt: None,
         }
     }
 
@@ -287,12 +402,19 @@ impl Run {
             monospace,
             underline,
             strikethrough,
+            overline,
             highlight_color,
+            shading,
             smallcaps,
             color,
             font_ascii,
             font_east_asia,
             size_half_pt,
+            tracking_twips,
+            ligatures,
+            num_form,
+            number_spacing,
+            position_half_pt,
         } = self;
         RunFormat {
             bold: *bold,
@@ -302,17 +424,24 @@ impl Run {
             monospace: *monospace,
             underline: *underline,
             strikethrough: *strikethrough,
+            overline: *overline,
             highlight_color: highlight_color.as_deref(),
+            shading: shading.as_deref(),
             smallcaps: *smallcaps,
             color: color.as_deref(),
             font_ascii: font_ascii.as_deref(),
             font_east_asia: font_east_asia.as_deref(),
             size_half_pt: *size_half_pt,
+            tracking_twips: tracking_twips.filter(|t| *t > 0),
+            ligatures: *ligatures,
+            num_form: *num_form,
+            number_spacing: *number_spacing,
+            position_half_pt: *position_half_pt,
         }
     }
 }
 
-/// The complete set of `Run` fields the writer serializes into `<w:rPr>`.
+/// The complete set of `Run` fields distinguishing run formatting.
 ///
 /// Single source of truth shared by `writer::run::write_run` (has-rPr gate via
 /// `is_plain`) and run coalescing (merge-eligibility via `PartialEq`).
@@ -331,12 +460,19 @@ pub struct RunFormat<'a> {
     monospace: bool,
     underline: bool,
     strikethrough: bool,
+    overline: bool,
     highlight_color: Option<&'a str>,
+    shading: Option<&'a str>,
     smallcaps: bool,
     color: Option<&'a str>,
     font_ascii: Option<&'a str>,
     font_east_asia: Option<&'a str>,
     size_half_pt: Option<u32>,
+    tracking_twips: Option<u32>,
+    ligatures: Option<&'a str>,
+    num_form: Option<&'a str>,
+    number_spacing: Option<&'a str>,
+    position_half_pt: Option<i32>,
 }
 
 impl RunFormat<'_> {
@@ -348,7 +484,7 @@ impl RunFormat<'_> {
 }
 
 /// A footnote with its content paragraphs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Footnote {
     /// 1-based footnote ID.
     pub id: u32,
@@ -365,7 +501,7 @@ pub enum HangingIndent {
     Twips(u32),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "mirrors the independent w:pPr toggles"
@@ -376,6 +512,10 @@ pub struct Paragraph {
     pub style: Option<ParagraphStyle>,
     /// If this paragraph is a list item, its numbering info (level + ID).
     pub list_info: Option<ListInfo>,
+    /// Heading-level numbering (`w:numPr` without the list indent): `level`
+    /// is the 0-based heading level, `id` is a heading numbering instance in
+    /// [`Document::heading_num_instances`].
+    pub num_pr: Option<ListInfo>,
     /// Paragraph alignment (left, center, right, justify).
     pub alignment: Option<Alignment>,
     /// Suppress first-line indent (e.g., first paragraph after a heading).
@@ -384,11 +524,22 @@ pub struct Paragraph {
     pub hanging_indent: Option<HangingIndent>,
     /// Left indent in twips (e.g., 720 for block quotes).
     pub left_indent: Option<u32>,
+    /// Right indent in twips (e.g., from `#pad(right:)` or `#block(inset:)`).
+    pub right_indent: Option<u32>,
+    /// Keep all lines of this paragraph on the same page (`w:keepLines`).
+    pub keep_lines: bool,
+    /// Keep this paragraph on the same page as the next one (`w:keepNext`).
+    pub keep_next: bool,
     /// Apply `CodeBlock` style (monospace, no indent, optional shading).
     pub code_block: bool,
     /// If set, this paragraph ends a section. The `w:sectPr` is emitted
     /// inside this paragraph's `w:pPr`.
     pub section_break: Option<SectionBreak>,
+    /// Paragraph-mark font size in half-points, emitted as
+    /// `w:pPr/w:rPr/w:sz`. Shrinks an empty paragraph's line height —
+    /// used for section-break markers so they do not spill onto a new
+    /// page when the section ends near the page bottom.
+    pub mark_size_half_pt: Option<u32>,
     /// If true, this paragraph represents a horizontal rule (bottom border).
     pub horizontal_rule: bool,
     /// Tab stop positions in twips (e.g., for grid/multi-column recovery).
@@ -397,11 +548,21 @@ pub struct Paragraph {
     /// Override the paragraph's `w:before` spacing (twips).
     /// Used to suppress heading above-spacing at the start of a page/document.
     pub spacing_before: Option<u32>,
-    /// 1-based page number this paragraph was recovered from (from the paged
-    /// frame it was scraped out of). `Some` only for content reinserted by the
-    /// recovery pass; lets the element→page map use the real page instead of a
-    /// proportional guess. Not emitted to OOXML.
-    pub page_from_paged: Option<usize>,
+    /// Override the paragraph's `w:after` spacing (twips).
+    pub spacing_after: Option<u32>,
+    /// Explicit `<w:ind w:left>` override (twips) for list-item paragraphs;
+    /// `None` inherits the numbering level's indentation.
+    pub list_left_twips: Option<u32>,
+    /// Explicit `<w:ind w:hanging>` override (twips) for list-item paragraphs;
+    /// `None` inherits the numbering level's hanging indent.
+    pub list_hanging_twips: Option<u32>,
+    /// Exact line height in twips: `w:spacing w:line` + `w:lineRule="exact"`.
+    /// Timetable whitespace cells pin 1pt paragraphs so Word does not inflate
+    /// empty rows to its minimum.
+    pub line_twips: Option<u32>,
+    /// Paragraph shading fill (`w:pPr/w:shd w:fill`), a six-digit hex like
+    /// `Run::shading`.
+    pub shading: Option<String>,
 }
 
 impl Paragraph {
@@ -421,7 +582,7 @@ impl Paragraph {
     }
 
     /// Apply `f` to every text run in the paragraph, including hyperlink
-    /// display runs.
+    /// display runs and runs inside anchored text boxes.
     pub fn for_each_run_mut(&mut self, f: &mut dyn FnMut(&mut Run)) {
         for inline in &mut self.inlines {
             match inline {
@@ -429,6 +590,15 @@ impl Paragraph {
                 InlineElement::Hyperlink { runs, .. } => {
                     for run in runs {
                         f(run);
+                    }
+                }
+                InlineElement::AnchoredFloat(float) => {
+                    if let AnchoredContent::Text(blocks) = &mut float.content {
+                        for element in blocks {
+                            for_each_paragraph_in_block_mut(element, &mut |p| {
+                                p.for_each_run_mut(f);
+                            });
+                        }
                     }
                 }
                 _ => {}
@@ -444,6 +614,15 @@ impl Paragraph {
                 InlineElement::Hyperlink { runs, .. } => {
                     for run in runs {
                         f(run);
+                    }
+                }
+                InlineElement::AnchoredFloat(float) => {
+                    if let AnchoredContent::Text(blocks) = &float.content {
+                        for element in blocks {
+                            for_each_paragraph_in_block(element, &mut |p| {
+                                p.for_each_run(f);
+                            });
+                        }
                     }
                 }
                 _ => {}
@@ -486,6 +665,8 @@ impl Paragraph {
                     }
                 }
                 InlineElement::FieldRef { display_text, .. }
+                | InlineElement::FieldPageRef { display_text, .. }
+                | InlineElement::FieldPage { display_text, .. }
                 | InlineElement::Citation { display_text, .. } => {
                     text.push_str(display_text);
                 }
@@ -564,6 +745,23 @@ impl Paragraph {
         });
     }
 
+    /// Add a page-number cross-reference field (PAGEREF field code).
+    pub fn add_field_pageref(&mut self, bookmark_name: String, display_text: String) {
+        self.inlines.push(InlineElement::FieldPageRef {
+            bookmark_name,
+            display_text,
+        });
+    }
+
+    /// Add a current-page field (PAGE field code).
+    pub fn add_field_page(&mut self, display_text: String) {
+        self.inlines.push(InlineElement::FieldPage {
+            display_text,
+            bold: false,
+            size_half_pt: None,
+        });
+    }
+
     /// Add an external hyperlink.
     pub fn add_hyperlink(&mut self, url: String, runs: Vec<Run>) {
         self.inlines.push(InlineElement::Hyperlink { url, runs });
@@ -603,14 +801,14 @@ impl Paragraph {
 }
 
 /// Content of a table cell: a mix of paragraphs and nested tables in order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CellContent {
     Paragraph(Paragraph),
     Table(Table),
 }
 
 /// A table cell containing paragraphs and optionally nested tables.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableCell {
     pub paragraphs: Vec<Paragraph>,
     /// Ordered cell content (paragraphs + nested tables). When non-empty, this
@@ -627,6 +825,37 @@ pub struct TableCell {
     /// Vertical alignment of the cell's content, read from the semantic
     /// `TableElem`. Maps to `w:vAlign`. `None` = unset (don't override Word).
     pub vertical_align: Option<VerticalAlign>,
+    /// Cell background as a 6-digit uppercase hex (e.g. `"DDEEFF"`), read from
+    /// the semantic `TableElem` fill. Maps to `w:shd` in `w:tcPr`, mirroring
+    /// `Run.shading`. `None` = unset.
+    pub shading: Option<String>,
+    /// Absolute cell width in twips (`w:tcW` `dxa`); used by fixed-layout
+    /// tables planned from a resolved Typst grid.
+    pub width_twips: Option<u32>,
+    /// Per-side cell strokes (`w:tcBorders`). `None` lets the table-level
+    /// borders show through; `Some` reproduces the grid's exact stroke
+    /// geometry, including `nil` sides.
+    pub borders: Option<CellBorders>,
+    /// Zero cell margins (`w:tcMar` 0) so empty timetable rows do not inflate.
+    pub zero_margins: bool,
+}
+
+/// Per-side cell borders (`w:tcBorders`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CellBorders {
+    pub top: Option<CellBorder>,
+    pub left: Option<CellBorder>,
+    pub bottom: Option<CellBorder>,
+    pub right: Option<CellBorder>,
+}
+
+/// One cell border side: thickness in eighths of a point (`w:sz`), optional
+/// hex colour, dashed or single.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CellBorder {
+    pub sz_eighths: u32,
+    pub color_hex: Option<String>,
+    pub dashed: bool,
 }
 
 /// Vertical alignment of a table cell's content. Maps to `w:vAlign`.
@@ -668,9 +897,14 @@ pub enum VMerge {
 }
 
 /// A table row containing cells.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableRow {
     pub cells: Vec<TableCell>,
+    /// Exact row height in twips (`w:trHeight` `hRule="exact"`). Timetable
+    /// slot heights pin rendered row pitch instead of inflating to content.
+    pub height_twips: Option<u32>,
+    /// `w:tblHeader`: repeat this row atop each page the table breaks onto.
+    pub is_header: bool,
 }
 
 /// Per-side table border thicknesses in eighths of a point (`None` = no border).
@@ -679,7 +913,7 @@ pub struct TableRow {
 /// three-line tables (`top`/`bottom` plus `header_sep`, everything else `None`).
 /// Derived by reading the rules actually drawn in the `PagedDocument`, so it is
 /// not tied to any particular table style.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TableBorders {
     pub top: Option<u32>,
     pub bottom: Option<u32>,
@@ -696,8 +930,17 @@ pub struct TableBorders {
     pub header_rows: usize,
 }
 
+/// Default cell margins for a table (`w:tblCellMar` in `w:tblPr`), in twips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableCellMargins {
+    pub top: u32,
+    pub left: u32,
+    pub bottom: u32,
+    pub right: u32,
+}
+
 /// A table with rows and cells.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Table {
     pub rows: Vec<TableRow>,
     /// Table width as percentage (in fiftieths of a percent, e.g. 5000 = 100%).
@@ -710,9 +953,22 @@ pub struct Table {
     /// writer emits exactly these (so a three-line table is not boxed into a
     /// grid); when `None`, it falls back to a uniform `border_size` grid.
     pub borders: Option<TableBorders>,
+    /// Cell margins applied to every cell (`w:tblCellMar`). `None` leaves the
+    /// Word default (left/right 108 twips).
+    pub cell_margins: Option<TableCellMargins>,
+    /// Absolute table width in twips (`w:tblW` `dxa`); fixed-layout tables
+    /// planned from a resolved Typst grid set this together with
+    /// `col_widths_twips`.
+    pub width_twips: Option<u32>,
+    /// Absolute column widths in twips (`w:tblGrid` + `w:tblLayout
+    /// w:type="fixed"`). `None` keeps percentage-based auto layout.
+    pub col_widths_twips: Option<Vec<u32>>,
+    /// Table-level alignment (`w:jc` in `w:tblPr`) — the horizontal part of
+    /// an `align(..)` wrapper around the table. `None` = Word's default left.
+    pub alignment: Option<Alignment>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BlockElement {
     Paragraph(Paragraph),
     Table(Table),
@@ -788,13 +1044,13 @@ fn for_each_paragraph_in_table(table: &Table, f: &mut dyn FnMut(&Paragraph)) {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Body {
     pub elements: Vec<BlockElement>,
 }
 
 /// Section break type for multi-section documents.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionBreakType {
     NextPage,
     Continuous,
@@ -804,7 +1060,7 @@ pub enum SectionBreakType {
 
 impl SectionBreakType {
     #[must_use]
-    pub fn ooxml_value(&self) -> &'static str {
+    pub fn ooxml_value(self) -> &'static str {
         match self {
             Self::NextPage => "nextPage",
             Self::Continuous => "continuous",
@@ -815,19 +1071,38 @@ impl SectionBreakType {
 }
 
 /// A section break that ends a section, optionally overriding page settings.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SectionBreak {
     pub break_type: SectionBreakType,
+    /// Page settings (`w:pgSz`/`w:pgMar`/`w:cols`) of the section that ends here.
     pub page_settings: Option<PageSettings>,
+    /// `w:titlePg` — the section that ends here has a distinct first page.
+    pub title_page: bool,
+    /// `w:pgNumType w:fmt` of the section that ends here.
+    pub page_numbering: Option<PageNumberFormat>,
+    /// `w:pgNumType w:start` restart of the section that ends here.
+    pub page_number_start: Option<u32>,
 }
 
 /// Header or footer content (a sequence of paragraphs).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HeaderFooter {
     pub paragraphs: Vec<Paragraph>,
 }
 
-#[derive(Debug, Clone)]
+/// Which footer slots carry a generated PAGE-field footer (a bare page
+/// number in the margin zone) instead of authored `footer*` content.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageNumberFooters {
+    /// Default (`w:type="default"`) slot.
+    pub default: bool,
+    /// Even-page (`w:type="even"`) slot.
+    pub even: bool,
+    /// First-page (`w:type="first"`) slot.
+    pub first: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PageSettings {
     pub width_twips: u32,
     pub height_twips: u32,
@@ -839,6 +1114,15 @@ pub struct PageSettings {
     pub columns: Option<u32>,
     /// Spacing between columns in twips (default 720 = 0.5 inch).
     pub column_spacing: Option<u32>,
+    /// `<w:pgMar w:header>` distance (twips) — Typst `page(header-ascent:)`.
+    pub header_twips: Option<u32>,
+    /// `<w:pgMar w:footer>` distance (twips) — Typst `page(footer-descent:)`.
+    pub footer_twips: Option<u32>,
+    /// When set, emit `<w:lnNumType w:distance="…">` — Typst
+    /// `par.line(numbering:)` enabled, value = `number-clearance`.
+    pub line_number_distance_twips: Option<u32>,
+    /// `<w:vAlign>` for the section — Typst `set align(horizon|bottom|top)`.
+    pub vertical_align: Option<VerticalAlign>,
 }
 
 impl Default for PageSettings {
@@ -852,16 +1136,24 @@ impl Default for PageSettings {
             margin_right: 1800,
             columns: None,
             column_spacing: None,
+            header_twips: None,
+            footer_twips: None,
+            line_number_distance_twips: None,
+            vertical_align: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DocumentMetadata {
     pub title: Option<String>,
     pub author: Option<String>,
     /// ISO 8601 timestamp for creation time. If not set, a default is used.
     pub created: Option<String>,
+    /// Typst `document(description:)` → `dc:description`.
+    pub description: Option<String>,
+    /// Typst `document(keywords:)` → `cp:keywords` (comma-joined).
+    pub keywords: Option<String>,
 }
 
 impl DocumentMetadata {
@@ -886,8 +1178,25 @@ pub enum FootnoteFormat {
     CircledNumber,
 }
 
+/// Footnote area layout overrides from Typst `set footnote.entry(...)`.
+/// Each `None` inherits the Word default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FootnoteEntryStyle {
+    /// First-line indent (twips) applied to each footnote's first paragraph.
+    /// Typst `footnote.entry(indent:)`.
+    pub indent_twips: Option<u32>,
+    /// Spacing above the separator line (twips). Typst `footnote.entry(clearance:)`.
+    pub clearance_twips: Option<u32>,
+    /// Gap between consecutive footnotes (twips) — `w:spacing w:after` on
+    /// footnote paragraphs. Typst `footnote.entry(gap:)`.
+    pub gap_twips: Option<u32>,
+    /// Separator rule thickness in eighths of a point (`w:sz`), declared via a
+    /// `line(...)` separator's `stroke` thickness.
+    pub separator_stroke_eighths: Option<u32>,
+}
+
 /// Page number format for footer page numbering.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageNumberFormat {
     Decimal,
     LowerRoman,
@@ -898,7 +1207,7 @@ pub enum PageNumberFormat {
 
 impl PageNumberFormat {
     #[must_use]
-    pub fn ooxml_value(&self) -> &'static str {
+    pub fn ooxml_value(self) -> &'static str {
         match self {
             Self::Decimal => "decimal",
             Self::LowerRoman => "lowerRoman",
@@ -909,7 +1218,11 @@ impl PageNumberFormat {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "flat bag of orthogonal document-level flags; a state machine would not model them"
+)]
 pub struct DocumentStyle {
     pub body_font_ascii: String,
     pub body_font_east_asia: String,
@@ -926,6 +1239,11 @@ pub struct DocumentStyle {
     /// first-line indent on the paragraph that follows a heading.
     pub first_line_indent_all: bool,
     pub footnote_format: FootnoteFormat,
+    /// Whether the footnote counter resets on every page. Typst's default is
+    /// continuous numbering across the whole document; per-page restart only
+    /// happens when the source resets the footnote counter in a page header
+    /// (`counter(footnote).update(0)` there).
+    pub footnote_restart_each_page: bool,
     /// Font used for code/raw blocks (detected from Typst rendering).
     pub code_font: String,
     /// Font size for code blocks in half-points.
@@ -955,6 +1273,10 @@ pub struct DocumentStyle {
     /// Body font's cap-height ratio (em units). Used to compute line pitch:
     /// `line_pitch = cap_height_ratio × body_size + leading`.
     pub body_cap_height_ratio: f64,
+    /// `#set text(hyphenate: false)` → `w:suppressAutoHyphens` in settings.
+    pub suppress_auto_hyphens: bool,
+    /// `set footnote.entry(...)` overrides (indent, clearance, gap, separator).
+    pub footnote_entry: FootnoteEntryStyle,
 }
 
 impl Default for DocumentStyle {
@@ -971,6 +1293,7 @@ impl Default for DocumentStyle {
             first_line_indent_chars: None,
             first_line_indent_all: false,
             footnote_format: FootnoteFormat::default(),
+            footnote_restart_each_page: false,
             code_font: "Courier New".to_string(),
             code_size_half_pt: 22, // Typst raw text uses body size by default
             footnote_size_half_pt: 18,
@@ -988,11 +1311,56 @@ impl Default for DocumentStyle {
             has_cjk_content: true,
             hyperlink_color: "0563C1".to_string(),
             body_cap_height_ratio: 0.66,
+            suppress_auto_hyphens: false,
+            footnote_entry: FootnoteEntryStyle::default(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+/// One numbering level's override for a list instance: an OOXML
+/// `w:lvlOverride` carrying a full `w:lvl` (numFmt + lvlText), e.g. a
+/// lower-letter enum level. Levels without an override keep the shared
+/// abstract definition (decimal `"%{n}."` / bullet).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelOverride {
+    /// Zero-based level (`w:ilvl`).
+    pub ilvl: u32,
+    /// OOXML `w:numFmt` value (`"decimal"`, `"lowerLetter"`, ...).
+    pub num_fmt: &'static str,
+    /// OOXML `w:lvlText` (e.g. `"%1)"` for an `"a)"` enum).
+    pub lvl_text: String,
+}
+
+/// A heading numbering instance: one `w:num`/`w:abstractNum` pair per
+/// distinct mappable heading numbering pattern. `levels` holds the full
+/// `w:lvl` definitions for ilvl 0..=8 (deeper heading levels reuse the
+/// pattern's last piece, matching Typst's pattern cycling).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadingNumInstance {
+    /// Unique `w:numId` for this heading numbering instance.
+    pub num_id: u32,
+    /// `w:abstractNumId` this instance points at (heading abstracts start at 3).
+    pub abstract_num_id: u32,
+    /// Per-level definitions, in ascending `ilvl` order.
+    pub levels: Vec<LevelOverride>,
+}
+
+/// A dynamically allocated list numbering instance: one top-level list's
+/// `w:num` entry, with its abstract numbering definition (1=ordered,
+/// 2=unordered), level-0 start value, and per-level overrides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListNumInstance {
+    /// Unique `w:numId` for this list.
+    pub num_id: u32,
+    /// `w:abstractNumId` this instance points at.
+    pub abstract_num_id: u32,
+    /// Level-0 start value (1 unless the author wrote `#enum(start: N)`).
+    pub start: u32,
+    /// Per-level overrides, in ascending `ilvl` order.
+    pub level_overrides: Vec<LevelOverride>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Document {
     pub body: Body,
     pub page_settings: PageSettings,
@@ -1004,20 +1372,45 @@ pub struct Document {
     pub style: DocumentStyle,
     /// Counter for generating unique bookmark IDs.
     pub bookmark_counter: u32,
-    /// Default header for the document (written to `word/header1.xml`).
+    /// Default (`w:type="default"`, odd/first) header (written to `word/header1.xml`).
     pub header: Option<HeaderFooter>,
+    /// Even-page header (`w:type="even"`, `word/header2.xml`). Only referenced
+    /// when `even_and_odd_headers` is set.
+    pub header_even: Option<HeaderFooter>,
+    /// First-page header (`w:type="first"`, `word/header3.xml`). Only
+    /// referenced when `title_page` is set.
+    pub header_first: Option<HeaderFooter>,
     /// Default footer for the document (written to `word/footer1.xml`).
     pub footer: Option<HeaderFooter>,
+    /// Even-page footer (`w:type="even"`, `word/footer2.xml`).
+    pub footer_even: Option<HeaderFooter>,
+    /// First-page footer (`w:type="first"`, `word/footer3.xml`).
+    pub footer_first: Option<HeaderFooter>,
     /// If set, footer contains a PAGE field code with this number format.
     /// When this is `Some`, a footer is always generated (even if `footer` is `None`).
     pub page_numbering: Option<PageNumberFormat>,
+    /// `w:start` on the final section's `w:pgNumType` — a page-number restart
+    /// declared for the last section (Typst `counter(page).update(n)`).
+    pub page_number_start: Option<u32>,
+    /// Whether each footer slot carries a generated PAGE field (a bare page
+    /// number in the footer margin zone). Decoupled from `page_numbering`: the
+    /// number format may be declared (`#set page(numbering:)`) without any
+    /// footer existing.
+    pub page_number_footers: PageNumberFooters,
+    /// `w:evenAndOddHeaders` in settings.xml — Typst's header/footer rendered
+    /// different content on odd vs even pages.
+    pub even_and_odd_headers: bool,
+    /// `w:titlePg` on the section that contains page 1 — Typst's header/footer
+    /// differed on the first page (e.g. a `page(header:)` suppressed there).
+    pub title_page: bool,
     /// Counter for generating unique list numbering IDs (starts at 4;
     /// 1=ordered, 2=unordered, 3=Chinese headings are reserved).
     pub next_list_id: u32,
-    /// Mapping of dynamically allocated list IDs to their abstract numbering
-    /// definition (1=ordered, 2=unordered) and level-0 start value. Used to
-    /// generate `w:num` entries with a `startOverride`.
-    pub list_num_instances: Vec<(u32, u32, u32)>,
+    /// Dynamically allocated list numbering instances. Used to generate
+    /// `w:num` entries with a `startOverride` and per-level overrides.
+    pub list_num_instances: Vec<ListNumInstance>,
+    /// Heading numbering instances, one per distinct numbering pattern.
+    pub heading_num_instances: Vec<HeadingNumInstance>,
     /// Bibliography sources for Word's citation data store (customXml/item1.xml).
     pub citation_sources: Vec<CitationSource>,
 }
@@ -1032,10 +1425,19 @@ impl Default for Document {
             style: DocumentStyle::default(),
             bookmark_counter: 0,
             header: None,
+            header_even: None,
+            header_first: None,
             footer: None,
+            footer_even: None,
+            footer_first: None,
             page_numbering: None,
+            page_number_start: None,
+            page_number_footers: PageNumberFooters::default(),
+            even_and_odd_headers: false,
+            title_page: false,
             next_list_id: 4,
             list_num_instances: Vec::new(),
+            heading_num_instances: Vec::new(),
             citation_sources: Vec::new(),
         }
     }
@@ -1083,11 +1485,39 @@ impl Document {
                 }
             }
         }
-        for hf in self.header.iter_mut().chain(self.footer.iter_mut()) {
+        for hf in self.header_footers_mut() {
             for para in &mut hf.paragraphs {
                 para.for_each_run_mut(f);
             }
         }
+    }
+
+    /// Mutable iterator over every header/footer part that will be serialized.
+    fn header_footers_mut(&mut self) -> impl Iterator<Item = &mut HeaderFooter> {
+        [
+            &mut self.header,
+            &mut self.header_even,
+            &mut self.header_first,
+            &mut self.footer,
+            &mut self.footer_even,
+            &mut self.footer_first,
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// Immutable iterator over every header/footer part that will be serialized.
+    pub fn header_footers(&self) -> impl Iterator<Item = &HeaderFooter> {
+        [
+            &self.header,
+            &self.header_even,
+            &self.header_first,
+            &self.footer,
+            &self.footer_even,
+            &self.footer_first,
+        ]
+        .into_iter()
+        .flatten()
     }
 
     /// Immutable twin of [`Self::for_each_run_mut`].
@@ -1108,7 +1538,7 @@ impl Document {
                 }
             }
         }
-        for hf in self.header.iter().chain(self.footer.iter()) {
+        for hf in self.header_footers() {
             for para in &hf.paragraphs {
                 para.for_each_run(f);
             }
@@ -1119,11 +1549,63 @@ impl Document {
     /// `ordered` selects abstractNum 1 (decimal) or 2 (bullet); `start` is the
     /// list's first number (1 unless the author wrote `#enum(start: N)`).
     pub fn allocate_list_id(&mut self, ordered: bool, start: u32) -> u32 {
+        self.allocate_list_id_with_overrides(ordered, start, Vec::new())
+    }
+
+    /// Allocate a unique list numbering ID, with per-level overrides (e.g. an
+    /// enum's non-decimal numbering pattern). Overrides are in ascending
+    /// `ilvl` order; levels without one keep the shared abstract definition.
+    pub fn allocate_list_id_with_overrides(
+        &mut self,
+        ordered: bool,
+        start: u32,
+        level_overrides: Vec<LevelOverride>,
+    ) -> u32 {
         let id = self.next_list_id;
         self.next_list_id += 1;
         let abstract_num = if ordered { 1 } else { 2 };
-        self.list_num_instances.push((id, abstract_num, start));
+        self.list_num_instances.push(ListNumInstance {
+            num_id: id,
+            abstract_num_id: abstract_num,
+            start,
+            level_overrides,
+        });
         id
+    }
+
+    /// Find the heading numbering instance for these level definitions, or
+    /// allocate a new `w:num`/`w:abstractNum` pair for them. Returns the
+    /// `w:numId` and whether a new instance was created.
+    pub fn find_or_allocate_heading_numbering(&mut self, levels: &[LevelOverride]) -> (u32, bool) {
+        if let Some(instance) = self
+            .heading_num_instances
+            .iter()
+            .find(|instance| instance.levels == levels)
+        {
+            return (instance.num_id, false);
+        }
+        let num_id = self.next_list_id;
+        self.next_list_id += 1;
+        let abstract_num_id =
+            u32::try_from(self.heading_num_instances.len() + 3).unwrap_or(u32::MAX);
+        self.heading_num_instances.push(HeadingNumInstance {
+            num_id,
+            abstract_num_id,
+            levels: levels.to_vec(),
+        });
+        (num_id, true)
+    }
+
+    /// Replace the per-level overrides of an already allocated list instance
+    /// (the walk discovers nested-level patterns after allocation).
+    pub fn set_list_overrides(&mut self, num_id: u32, level_overrides: Vec<LevelOverride>) {
+        if let Some(instance) = self
+            .list_num_instances
+            .iter_mut()
+            .find(|instance| instance.num_id == num_id)
+        {
+            instance.level_overrides = level_overrides;
+        }
     }
 
     /// Add a footnote and return its ID (starting from 2, since 0 and 1 are reserved by OOXML).
@@ -1179,6 +1661,11 @@ mod tests {
             {
                 let mut r = Run::new("x");
                 r.strikethrough = true;
+                r
+            },
+            {
+                let mut r = Run::new("x");
+                r.overline = true;
                 r
             },
             {

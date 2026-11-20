@@ -1,26 +1,52 @@
 use std::io::{self, Write};
 
 use quick_xml::Writer;
+use quick_xml::events::BytesText;
 
-use super::DocParts;
+use super::citation::write_bibliography_sdt;
+use super::paragraph::write_paragraph;
+use super::table::write_table;
+use super::{DocParts, WriteCtx};
 use crate::document::{
-    BlockElement, CellContent, Document, ImageData, InlineElement, Paragraph, Table,
+    AnchoredContent, AnchoredFloat, AnchoredLine, BlockElement, CellContent, Document, ImageData,
+    InlineElement, Paragraph, Table,
 };
 
 /// Collect all images from the document model in order of appearance.
 /// Returns a `Vec<&ImageData>` where the index corresponds to the 1-based image number.
+/// Body images come first, footnote images after them — the footnote writer
+/// relies on this order for the document-wide media numbering.
 pub(super) fn collect_images(doc: &Document) -> Vec<&ImageData> {
     let mut images = Vec::new();
-    for el in &doc.body.elements {
+    collect_images_from_blocks(&doc.body.elements, &mut images);
+    images.extend(collect_footnote_images(doc));
+    images
+}
+
+fn collect_images_from_blocks<'a>(blocks: &'a [BlockElement], images: &mut Vec<&'a ImageData>) {
+    for el in blocks {
         match el {
-            BlockElement::Paragraph(p) => collect_images_from_para(p, &mut images),
-            BlockElement::Table(t) => {
-                collect_images_from_table(t, &mut images);
-            }
+            BlockElement::Paragraph(p) => collect_images_from_para(p, images),
+            BlockElement::Table(t) => collect_images_from_table(t, images),
             BlockElement::BibliographyBlock { paragraphs } => {
                 for p in paragraphs {
-                    collect_images_from_para(p, &mut images);
+                    collect_images_from_para(p, images);
                 }
+            }
+        }
+    }
+}
+
+/// Collect the images embedded in footnotes, in document order. They are
+/// appended after the body images in [`collect_images`], so their media file
+/// numbers continue the document-wide numbering while their relationships
+/// live in `word/_rels/footnotes.xml.rels`.
+pub(super) fn collect_footnote_images(doc: &Document) -> Vec<&ImageData> {
+    let mut images = Vec::new();
+    for footnote in &doc.footnotes {
+        for inline in &footnote.content {
+            if let InlineElement::Image(img) = inline {
+                images.push(img);
             }
         }
     }
@@ -29,8 +55,13 @@ pub(super) fn collect_images(doc: &Document) -> Vec<&ImageData> {
 
 fn collect_images_from_para<'a>(para: &'a Paragraph, images: &mut Vec<&'a ImageData>) {
     for inline in &para.inlines {
-        if let InlineElement::Image(img) = inline {
-            images.push(img);
+        match inline {
+            InlineElement::Image(img) => images.push(img),
+            InlineElement::AnchoredFloat(float) => match &float.content {
+                AnchoredContent::Image(img) => images.push(img),
+                AnchoredContent::Text(blocks) => collect_images_from_blocks(blocks, images),
+            },
+            _ => {}
         }
     }
 }
@@ -59,10 +90,488 @@ fn collect_images_from_table<'a>(table: &'a Table, images: &mut Vec<&'a ImageDat
     }
 }
 
-/// Compute the relationship ID for an image given its 1-based index.
-/// Image relationships follow all fixed parts in `document.xml.rels`.
-pub(super) fn image_rel_id(image_index: usize, parts: &DocParts) -> String {
-    format!("rId{}", parts.relationships.len() + image_index)
+/// Compute the relationship ID for an image's raster (fallback) part given
+/// its 1-based index. Image relationships follow all fixed parts in
+/// `document.xml.rels`; an image with `svg` set consumes two consecutive
+/// relationships — raster first, SVG second.
+fn raster_rel_number(image_index: usize, images: &[&ImageData], parts: &DocParts) -> usize {
+    let extras = images
+        .iter()
+        .take(image_index.saturating_sub(1))
+        .filter(|img| img.svg.is_some())
+        .count();
+    parts.relationships.len() + image_index + extras
+}
+
+/// Relationship ID for the image's PNG/JPEG part.
+pub(super) fn image_rel_id(image_index: usize, images: &[&ImageData], parts: &DocParts) -> String {
+    format!("rId{}", raster_rel_number(image_index, images, parts))
+}
+
+/// Relationship ID for the image's SVG part, when it has one.
+pub(super) fn svg_rel_id(image_index: usize, images: &[&ImageData], parts: &DocParts) -> String {
+    format!("rId{}", raster_rel_number(image_index, images, parts) + 1)
+}
+
+fn inline_is_drawing(inline: &InlineElement) -> bool {
+    matches!(
+        inline,
+        InlineElement::Image(_) | InlineElement::AnchoredLine(_) | InlineElement::AnchoredFloat(_)
+    )
+}
+
+fn para_has_drawing(para: &Paragraph) -> bool {
+    para.inlines.iter().any(inline_is_drawing)
+}
+
+fn table_has_drawing(table: &Table) -> bool {
+    table.rows.iter().any(|row| {
+        row.cells.iter().any(|cell| {
+            if cell.content.is_empty() {
+                cell.paragraphs.iter().any(para_has_drawing)
+            } else {
+                cell.content.iter().any(|item| match item {
+                    CellContent::Paragraph(p) => para_has_drawing(p),
+                    CellContent::Table(t) => table_has_drawing(t),
+                })
+            }
+        })
+    })
+}
+
+/// Whether the document body holds any drawing (image or anchored line).
+/// Gates the wp/a/pic namespace declarations on `w:document`.
+pub(super) fn body_has_drawing(doc: &Document) -> bool {
+    doc.body.elements.iter().any(|el| match el {
+        BlockElement::Paragraph(p) => para_has_drawing(p),
+        BlockElement::Table(t) => table_has_drawing(t),
+        BlockElement::BibliographyBlock { paragraphs } => paragraphs.iter().any(para_has_drawing),
+    })
+}
+
+/// Whether any footnote holds a drawing; gates the same namespaces on
+/// `w:footnotes`.
+pub(super) fn footnotes_have_drawing(doc: &Document) -> bool {
+    doc.footnotes
+        .iter()
+        .any(|f| f.content.iter().any(inline_is_drawing))
+}
+
+/// Write a floating horizontal line as a `wp:anchor` + `wps:wsp` shape: an
+/// absolute page-x, line-relative y position, and a `line` preset geometry.
+/// This is the overline trick — the shape is anchored to a run on the text
+/// line it decorates, so it follows that line's vertical position.
+pub(super) fn write_anchored_line<W: Write>(
+    writer: &mut Writer<W>,
+    line: &AnchoredLine,
+    n: usize,
+) -> io::Result<()> {
+    writer.create_element("w:r").write_inner_content(|w| {
+        w.create_element("w:drawing").write_inner_content(|dw| {
+            dw.create_element("wp:anchor")
+                .with_attribute(("distT", "0"))
+                .with_attribute(("distB", "0"))
+                .with_attribute(("distL", "0"))
+                .with_attribute(("distR", "0"))
+                .with_attribute(("simplePos", "0"))
+                .with_attribute(("relativeHeight", "0"))
+                .with_attribute(("behindDoc", "0"))
+                .with_attribute(("locked", "0"))
+                .with_attribute(("layoutInCell", "1"))
+                .with_attribute(("allowOverlap", "1"))
+                .write_inner_content(|an| write_anchor_geometry(an, line, n))?;
+            Ok(())
+        })?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn write_anchor_geometry<W: Write>(
+    an: &mut quick_xml::Writer<W>,
+    line: &AnchoredLine,
+    n: usize,
+) -> io::Result<()> {
+    let x = line.x_emu.to_string();
+    let y = line.y_emu.to_string();
+    let cx = line.length_emu.to_string();
+    let id_str = n.to_string();
+    let name = format!("Line{n}");
+    an.create_element("wp:simplePos")
+        .with_attribute(("x", "0"))
+        .with_attribute(("y", "0"))
+        .write_empty()?;
+    an.create_element("wp:positionH")
+        .with_attribute(("relativeFrom", "page"))
+        .write_inner_content(|ph| {
+            ph.create_element("wp:posOffset")
+                .write_text_content(BytesText::new(&x))?;
+            Ok(())
+        })?;
+    an.create_element("wp:positionV")
+        .with_attribute(("relativeFrom", "line"))
+        .write_inner_content(|pv| {
+            pv.create_element("wp:posOffset")
+                .write_text_content(BytesText::new(&y))?;
+            Ok(())
+        })?;
+    an.create_element("wp:extent")
+        .with_attribute(("cx", cx.as_str()))
+        .with_attribute(("cy", "0"))
+        .write_empty()?;
+    an.create_element("wp:effectExtent")
+        .with_attribute(("l", "0"))
+        .with_attribute(("t", "0"))
+        .with_attribute(("r", "0"))
+        .with_attribute(("b", "0"))
+        .write_empty()?;
+    an.create_element("wp:wrapNone").write_empty()?;
+    an.create_element("wp:docPr")
+        .with_attribute(("id", id_str.as_str()))
+        .with_attribute(("name", name.as_str()))
+        .write_empty()?;
+    an.create_element("wp:cNvGraphicFramePr").write_empty()?;
+    an.create_element("a:graphic")
+        .with_attribute((
+            "xmlns:a",
+            "http://schemas.openxmlformats.org/drawingml/2006/main",
+        ))
+        .write_inner_content(|gr| {
+            gr.create_element("a:graphicData")
+                .with_attribute((
+                    "uri",
+                    "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+                ))
+                .write_inner_content(|gd| write_line_shape(gd, line))?;
+            Ok(())
+        })?;
+    Ok(())
+}
+
+fn write_line_shape<W: Write>(
+    gd: &mut quick_xml::Writer<W>,
+    line: &AnchoredLine,
+) -> io::Result<()> {
+    let cx = line.length_emu.to_string();
+    let thick = line.thickness_emu.to_string();
+    let color = line.color.as_deref().unwrap_or("000000");
+    gd.create_element("wps:wsp")
+        .with_attribute((
+            "xmlns:wps",
+            "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+        ))
+        .write_inner_content(|wsp| {
+            wsp.create_element("wps:cNvSpPr").write_empty()?;
+            wsp.create_element("wps:spPr").write_inner_content(|sp| {
+                sp.create_element("a:xfrm").write_inner_content(|xf| {
+                    xf.create_element("a:off")
+                        .with_attribute(("x", "0"))
+                        .with_attribute(("y", "0"))
+                        .write_empty()?;
+                    xf.create_element("a:ext")
+                        .with_attribute(("cx", cx.as_str()))
+                        .with_attribute(("cy", "0"))
+                        .write_empty()?;
+                    Ok(())
+                })?;
+                sp.create_element("a:prstGeom")
+                    .with_attribute(("prst", "line"))
+                    .write_inner_content(|pg| {
+                        pg.create_element("a:avLst").write_empty()?;
+                        Ok(())
+                    })?;
+                sp.create_element("a:ln")
+                    .with_attribute(("w", thick.as_str()))
+                    .write_inner_content(|ln| {
+                        ln.create_element("a:solidFill").write_inner_content(|sf| {
+                            sf.create_element("a:srgbClr")
+                                .with_attribute(("val", color))
+                                .write_empty()?;
+                            Ok(())
+                        })?;
+                        Ok(())
+                    })?;
+                Ok(())
+            })?;
+            wsp.create_element("wps:bodyPr").write_empty()?;
+            Ok(())
+        })?;
+    Ok(())
+}
+
+/// Relationship ids and the media filename for a floated image, precomputed
+/// from the shared image counter so `pic:pic` inside a `wp:anchor` resolves
+/// the same `document.xml.rels` entries an inline image would.
+struct AnchorImage<'a> {
+    rid: &'a str,
+    svg_rid: Option<&'a str>,
+    filename: String,
+}
+
+/// Write a `wp:anchor` drawing for a `#place(.., float: true)`: a
+/// page-absolute position, `distT`/`distB` from `place(clearance:)`, and
+/// either a `pic:pic` or a `wps:txbx` text box as the floating content.
+pub(super) fn write_anchored_float<W: Write>(
+    writer: &mut Writer<W>,
+    float: &AnchoredFloat,
+    n: usize,
+    ctx: &WriteCtx,
+) -> io::Result<()> {
+    match &float.content {
+        AnchoredContent::Image(img) => {
+            let i = ctx.image_counter.get() + 1;
+            ctx.image_counter.set(i);
+            let rid = image_rel_id(i, ctx.images, ctx.parts);
+            let svg_rid = img
+                .svg
+                .is_some()
+                .then(|| svg_rel_id(i, ctx.images, ctx.parts));
+            let filename = format!("image{i}.{}", img.format.extension());
+            if let Some(svg) = &svg_rid {
+                let choice_image = AnchorImage {
+                    rid: &rid,
+                    svg_rid: Some(svg.as_str()),
+                    filename: filename.clone(),
+                };
+                let fallback_image = AnchorImage {
+                    rid: &rid,
+                    svg_rid: None,
+                    filename,
+                };
+                writer
+                    .create_element("mc:AlternateContent")
+                    .with_attribute((
+                        "xmlns:mc",
+                        "http://schemas.openxmlformats.org/markup-compatibility/2006",
+                    ))
+                    .write_inner_content(|mc| {
+                        mc.create_element("mc:Choice")
+                            .with_attribute((
+                                "xmlns:asvg",
+                                "http://schemas.microsoft.com/office/drawing/2016/SVG/main",
+                            ))
+                            .with_attribute(("Requires", "asvg"))
+                            .write_inner_content(|choice| {
+                                write_anchor_run(choice, float, n, Some(&choice_image), ctx)
+                            })?;
+                        mc.create_element("mc:Fallback")
+                            .write_inner_content(|fallback| {
+                                write_anchor_run(fallback, float, n, Some(&fallback_image), ctx)
+                            })?;
+                        Ok(())
+                    })?;
+                Ok(())
+            } else {
+                let image = AnchorImage {
+                    rid: &rid,
+                    svg_rid: None,
+                    filename,
+                };
+                write_anchor_run(writer, float, n, Some(&image), ctx)
+            }
+        }
+        AnchoredContent::Text(_) => write_anchor_run(writer, float, n, None, ctx),
+    }
+}
+
+fn write_anchor_run<W: Write>(
+    writer: &mut Writer<W>,
+    float: &AnchoredFloat,
+    n: usize,
+    image: Option<&AnchorImage<'_>>,
+    ctx: &WriteCtx,
+) -> io::Result<()> {
+    let dist = float.clearance_emu.to_string();
+    writer.create_element("w:r").write_inner_content(|w| {
+        w.create_element("w:drawing").write_inner_content(|dw| {
+            dw.create_element("wp:anchor")
+                .with_attribute(("distT", dist.as_str()))
+                .with_attribute(("distB", dist.as_str()))
+                .with_attribute(("distL", "0"))
+                .with_attribute(("distR", "0"))
+                .with_attribute(("simplePos", "0"))
+                .with_attribute(("relativeHeight", "0"))
+                .with_attribute(("behindDoc", "0"))
+                .with_attribute(("locked", "0"))
+                .with_attribute(("layoutInCell", "1"))
+                .with_attribute(("allowOverlap", "1"))
+                .write_inner_content(|an| write_float_geometry(an, float, n, image, ctx))?;
+            Ok(())
+        })?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// The `wp:anchor` children: page-absolute position, extent, wrap mode, and
+/// the `a:graphic` payload (picture or text box).
+fn write_float_geometry<W: Write>(
+    an: &mut Writer<W>,
+    float: &AnchoredFloat,
+    n: usize,
+    image: Option<&AnchorImage<'_>>,
+    ctx: &WriteCtx,
+) -> io::Result<()> {
+    let x = float.x_emu.to_string();
+    let y = float.y_emu.to_string();
+    let cx = float.width_emu.to_string();
+    let cy = float.height_emu.to_string();
+    let id_str = n.to_string();
+    let name = format!("Float{n}");
+    an.create_element("wp:simplePos")
+        .with_attribute(("x", "0"))
+        .with_attribute(("y", "0"))
+        .write_empty()?;
+    an.create_element("wp:positionH")
+        .with_attribute(("relativeFrom", "page"))
+        .write_inner_content(|ph| {
+            ph.create_element("wp:posOffset")
+                .write_text_content(BytesText::new(&x))?;
+            Ok(())
+        })?;
+    an.create_element("wp:positionV")
+        .with_attribute(("relativeFrom", "page"))
+        .write_inner_content(|pv| {
+            pv.create_element("wp:posOffset")
+                .write_text_content(BytesText::new(&y))?;
+            Ok(())
+        })?;
+    an.create_element("wp:extent")
+        .with_attribute(("cx", cx.as_str()))
+        .with_attribute(("cy", cy.as_str()))
+        .write_empty()?;
+    an.create_element("wp:effectExtent")
+        .with_attribute(("l", "0"))
+        .with_attribute(("t", "0"))
+        .with_attribute(("r", "0"))
+        .with_attribute(("b", "0"))
+        .write_empty()?;
+    if float.top_and_bottom {
+        an.create_element("wp:wrapTopAndBottom").write_empty()?;
+    } else {
+        an.create_element("wp:wrapSquare")
+            .with_attribute(("wrapText", "bothSides"))
+            .write_empty()?;
+    }
+    an.create_element("wp:docPr")
+        .with_attribute(("id", id_str.as_str()))
+        .with_attribute(("name", name.as_str()))
+        .write_empty()?;
+    an.create_element("wp:cNvGraphicFramePr").write_empty()?;
+    an.create_element("a:graphic")
+        .with_attribute((
+            "xmlns:a",
+            "http://schemas.openxmlformats.org/drawingml/2006/main",
+        ))
+        .write_inner_content(|gr| {
+            gr.create_element("a:graphicData")
+                .with_attribute(("uri", graphic_data_uri(&float.content)))
+                .write_inner_content(|gd| match &float.content {
+                    AnchoredContent::Image(_) => {
+                        let Some(image) = image else { return Ok(()) };
+                        gd.create_element("pic:pic")
+                            .with_attribute((
+                                "xmlns:pic",
+                                "http://schemas.openxmlformats.org/drawingml/2006/picture",
+                            ))
+                            .write_inner_content(|pic| {
+                                write_pic_body(
+                                    pic,
+                                    &id_str,
+                                    &image.filename,
+                                    &cx,
+                                    &cy,
+                                    image.rid,
+                                    image.svg_rid,
+                                )
+                            })?;
+                        Ok(())
+                    }
+                    AnchoredContent::Text(blocks) => write_float_textbox(gd, blocks, &cx, &cy, ctx),
+                })?;
+            Ok(())
+        })?;
+    Ok(())
+}
+
+fn graphic_data_uri(content: &AnchoredContent) -> &'static str {
+    match content {
+        AnchoredContent::Image(_) => "http://schemas.openxmlformats.org/drawingml/2006/picture",
+        AnchoredContent::Text(_) => {
+            "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+        }
+    }
+}
+
+/// A `wps:wsp` text box (`txBox="1"` + `wps:txbx` + `w:txbxContent`) holding
+/// real block content, so a text float stays editable rather than raster.
+fn write_float_textbox<W: Write>(
+    gd: &mut Writer<W>,
+    blocks: &[BlockElement],
+    cx: &str,
+    cy: &str,
+    ctx: &WriteCtx,
+) -> io::Result<()> {
+    gd.create_element("wps:wsp")
+        .with_attribute((
+            "xmlns:wps",
+            "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+        ))
+        .write_inner_content(|wsp| {
+            wsp.create_element("wps:cNvSpPr")
+                .with_attribute(("txBox", "1"))
+                .write_empty()?;
+            wsp.create_element("wps:spPr").write_inner_content(|sp| {
+                sp.create_element("a:xfrm").write_inner_content(|xf| {
+                    xf.create_element("a:off")
+                        .with_attribute(("x", "0"))
+                        .with_attribute(("y", "0"))
+                        .write_empty()?;
+                    xf.create_element("a:ext")
+                        .with_attribute(("cx", cx))
+                        .with_attribute(("cy", cy))
+                        .write_empty()?;
+                    Ok(())
+                })?;
+                sp.create_element("a:prstGeom")
+                    .with_attribute(("prst", "rect"))
+                    .write_inner_content(|pg| {
+                        pg.create_element("a:avLst").write_empty()?;
+                        Ok(())
+                    })?;
+                Ok(())
+            })?;
+            wsp.create_element("wps:txbx").write_inner_content(|tx| {
+                tx.create_element("w:txbxContent")
+                    .write_inner_content(|c| {
+                        for element in blocks {
+                            match element {
+                                BlockElement::Paragraph(para) => write_paragraph(c, para, ctx)?,
+                                BlockElement::Table(table) => write_table(c, table, ctx)?,
+                                BlockElement::BibliographyBlock { paragraphs } => {
+                                    write_bibliography_sdt(c, paragraphs, ctx)?;
+                                }
+                            }
+                        }
+                        Ok(())
+                    })?;
+                Ok(())
+            })?;
+            // `a:spAutoFit` over a fixed height: Word line heights can exceed
+            // the measured frame, and clipping is worse than a taller box.
+            wsp.create_element("wps:bodyPr")
+                .with_attribute(("lIns", "0"))
+                .with_attribute(("tIns", "0"))
+                .with_attribute(("rIns", "0"))
+                .with_attribute(("bIns", "0"))
+                .with_attribute(("anchor", "t"))
+                .write_inner_content(|bp| {
+                    bp.create_element("a:spAutoFit").write_empty()?;
+                    Ok(())
+                })?;
+            Ok(())
+        })?;
+    Ok(())
 }
 
 /// Write a `wp:inline` drawing element for an embedded image.
@@ -71,6 +580,43 @@ pub(super) fn write_image_inline<W: Write>(
     img: &ImageData,
     n: usize,
     rid: &str,
+    svg_rid: Option<&str>,
+) -> io::Result<()> {
+    if let Some(svg_rid) = svg_rid {
+        writer
+            .create_element("mc:AlternateContent")
+            .with_attribute((
+                "xmlns:mc",
+                "http://schemas.openxmlformats.org/markup-compatibility/2006",
+            ))
+            .write_inner_content(|mc| {
+                mc.create_element("mc:Choice")
+                    .with_attribute((
+                        "xmlns:asvg",
+                        "http://schemas.microsoft.com/office/drawing/2016/SVG/main",
+                    ))
+                    .with_attribute(("Requires", "asvg"))
+                    .write_inner_content(|choice| {
+                        write_drawing_run(choice, img, n, rid, Some(svg_rid))
+                    })?;
+                mc.create_element("mc:Fallback")
+                    .write_inner_content(|fallback| {
+                        write_drawing_run(fallback, img, n, rid, None)
+                    })?;
+                Ok(())
+            })?;
+        Ok(())
+    } else {
+        write_drawing_run(writer, img, n, rid, None)
+    }
+}
+
+fn write_drawing_run<W: Write>(
+    writer: &mut Writer<W>,
+    img: &ImageData,
+    n: usize,
+    rid: &str,
+    svg_rid: Option<&str>,
 ) -> io::Result<()> {
     let cx = img.width_emu.to_string();
     let cy = img.height_emu.to_string();
@@ -104,45 +650,7 @@ pub(super) fn write_image_inline<W: Write>(
                                     gd.create_element("pic:pic")
                                         .with_attribute(("xmlns:pic", "http://schemas.openxmlformats.org/drawingml/2006/picture"))
                                         .write_inner_content(|pic| {
-                                            pic.create_element("pic:nvPicPr").write_inner_content(|nv| {
-                                                nv.create_element("pic:cNvPr")
-                                                    .with_attribute(("id", id_str.as_str()))
-                                                    .with_attribute(("name", filename.as_str()))
-                                                    .write_empty()?;
-                                                nv.create_element("pic:cNvPicPr").write_empty()?;
-                                                Ok(())
-                                            })?;
-                                            pic.create_element("pic:blipFill").write_inner_content(|bf| {
-                                                bf.create_element("a:blip")
-                                                    .with_attribute(("r:embed", rid))
-                                                    .write_empty()?;
-                                                bf.create_element("a:stretch").write_inner_content(|st| {
-                                                    st.create_element("a:fillRect").write_empty()?;
-                                                    Ok(())
-                                                })?;
-                                                Ok(())
-                                            })?;
-                                            pic.create_element("pic:spPr").write_inner_content(|sp| {
-                                                sp.create_element("a:xfrm").write_inner_content(|xf| {
-                                                    xf.create_element("a:off")
-                                                        .with_attribute(("x", "0"))
-                                                        .with_attribute(("y", "0"))
-                                                        .write_empty()?;
-                                                    xf.create_element("a:ext")
-                                                        .with_attribute(("cx", cx.as_str()))
-                                                        .with_attribute(("cy", cy.as_str()))
-                                                        .write_empty()?;
-                                                    Ok(())
-                                                })?;
-                                                sp.create_element("a:prstGeom")
-                                                    .with_attribute(("prst", "rect"))
-                                                    .write_inner_content(|pg| {
-                                                        pg.create_element("a:avLst").write_empty()?;
-                                                        Ok(())
-                                                    })?;
-                                                Ok(())
-                                            })?;
-                                            Ok(())
+                                            write_pic_body(pic, &id_str, &filename, &cx, &cy, rid, svg_rid)
                                         })?;
                                     Ok(())
                                 })?;
@@ -152,6 +660,79 @@ pub(super) fn write_image_inline<W: Write>(
                 })?;
             Ok(())
         })?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn write_pic_body<W: Write>(
+    pic: &mut Writer<W>,
+    id_str: &str,
+    filename: &str,
+    cx: &str,
+    cy: &str,
+    rid: &str,
+    svg_rid: Option<&str>,
+) -> io::Result<()> {
+    pic.create_element("pic:nvPicPr")
+        .write_inner_content(|nv| {
+            nv.create_element("pic:cNvPr")
+                .with_attribute(("id", id_str))
+                .with_attribute(("name", filename))
+                .write_empty()?;
+            nv.create_element("pic:cNvPicPr").write_empty()?;
+            Ok(())
+        })?;
+    pic.create_element("pic:blipFill")
+        .write_inner_content(|bf| {
+            let blip = bf.create_element("a:blip").with_attribute(("r:embed", rid));
+            if let Some(svg_rid) = svg_rid {
+                blip.write_inner_content(|blip| {
+                    blip.create_element("a:extLst").write_inner_content(|lst| {
+                        lst.create_element("a:ext")
+                            .with_attribute(("uri", "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"))
+                            .write_inner_content(|ext_el| {
+                                ext_el
+                                    .create_element("asvg:svgBlip")
+                                    .with_attribute((
+                                        "xmlns:asvg",
+                                        "http://schemas.microsoft.com/office/drawing/2016/SVG/main",
+                                    ))
+                                    .with_attribute(("r:embed", svg_rid))
+                                    .write_empty()?;
+                                Ok(())
+                            })?;
+                        Ok(())
+                    })?;
+                    Ok(())
+                })?;
+            } else {
+                blip.write_empty()?;
+            }
+            bf.create_element("a:stretch").write_inner_content(|st| {
+                st.create_element("a:fillRect").write_empty()?;
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+    pic.create_element("pic:spPr").write_inner_content(|sp| {
+        sp.create_element("a:xfrm").write_inner_content(|xf| {
+            xf.create_element("a:off")
+                .with_attribute(("x", "0"))
+                .with_attribute(("y", "0"))
+                .write_empty()?;
+            xf.create_element("a:ext")
+                .with_attribute(("cx", cx))
+                .with_attribute(("cy", cy))
+                .write_empty()?;
+            Ok(())
+        })?;
+        sp.create_element("a:prstGeom")
+            .with_attribute(("prst", "rect"))
+            .write_inner_content(|pg| {
+                pg.create_element("a:avLst").write_empty()?;
+                Ok(())
+            })?;
         Ok(())
     })?;
     Ok(())

@@ -1,4 +1,6 @@
-//! Geometry-recovery heuristic tests (see convert/recovery/ and convert/page/).
+//! Geometry-recovery heuristic tests — the `convert/recovery/` module is
+//! deleted (step 4); these tests now pin that the realize/IR path emits the
+//! content natively, with no recovery pass and no scraped duplicates.
 
 use crate::common;
 use crate::common::{
@@ -467,50 +469,6 @@ fn grid_content_recovered_in_output() {
 }
 
 #[test]
-fn grid_multi_column_has_tab_stops() {
-    let doc_xml = fixture_doc_xml("grid_test");
-
-    // Multi-column grid lines should produce tab stops in the XML
-    assert!(
-        doc_xml.contains("<w:tab"),
-        "grid layout should produce tab elements in the output"
-    );
-}
-
-#[test]
-fn grid_document_model_has_tab_inlines() {
-    use typort_ooxml::document::{BlockElement, InlineElement};
-
-    let doc = fixture_document("grid_test");
-
-    // Find paragraphs with Tab inline elements (multi-column grid lines)
-    let has_tab = doc.body.elements.iter().any(|e| {
-        if let BlockElement::Paragraph(p) = e {
-            p.inlines.iter().any(|i| matches!(i, InlineElement::Tab))
-        } else {
-            false
-        }
-    });
-    assert!(
-        has_tab,
-        "document model should have Tab inline elements for multi-column grid lines"
-    );
-
-    // Paragraphs with Tab should also have tab_stops set
-    let has_tab_stops = doc.body.elements.iter().any(|e| {
-        if let BlockElement::Paragraph(p) = e {
-            !p.tab_stops.is_empty()
-        } else {
-            false
-        }
-    });
-    assert!(
-        has_tab_stops,
-        "document model should have tab_stops for multi-column grid lines"
-    );
-}
-
-#[test]
 fn footnote_and_table_not_recovered_as_body_orphans() {
     // The footnote body must live in the footnote zone, not be scraped into the
     // document body; and no horizontal rule may be invented from the footnote
@@ -627,6 +585,9 @@ fn issue_caption_not_duplicated_by_recovery() {
 
 #[test]
 fn issue_rotate_content_recovered() {
+    // IR path: `#rotate()` content is collected natively by
+    // `transform_parts` in `realize/collect.rs` (the earlier Paged-only
+    // gap noted in docs/fallback-registry.md is closed).
     let xml = fixture_doc_xml("issue_rotate_content");
     assert!(
         xml.contains("This text is normal."),
@@ -644,6 +605,9 @@ fn issue_rotate_content_recovered() {
 
 #[test]
 fn edge_bordered_blocks_text_preserved() {
+    // IR path: `#rect()` text is collected natively by `shape_parts` in
+    // `realize/collect.rs` (the earlier Paged-only gap noted in
+    // docs/fallback-registry.md is closed).
     let xml = fixture_doc_xml("edge_bordered_blocks");
     assert!(
         xml.contains("full border"),
@@ -744,5 +708,24 @@ fn issue_inline_context_no_duplicate_paragraph() {
             "block-level ctx",
         ],
         "each inline-context paragraph must appear exactly once, with its context content"
+    );
+}
+
+#[test]
+fn issue_block_source_lines_stay_one_paragraph() {
+    // Regression for #35: `#block[ab\ncd]` used to emit three paragraphs —
+    // "ab" and "cd" from the HTML walk (one paragraph per text node, since
+    // Typst's HTML export splits text at source newlines) plus a centered
+    // "ab cd" re-inserted by recovery. A block's lines are one flowing
+    // paragraph; the paged line must not be recovered as a duplicate.
+    let xml = fixture_doc_xml("issue_block_linebreaks");
+    let texts: Vec<String> = crate::common::paragraph_texts(&xml)
+        .into_iter()
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    assert_eq!(
+        texts,
+        ["ab cd", "aaa bbb ccc ddd eee fff ggg hhh iii jjj"],
+        "block lines must stay one paragraph each, with no recovery duplicates"
     );
 }

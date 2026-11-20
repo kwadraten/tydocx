@@ -372,7 +372,12 @@ mod tests {
     // ── 10. Footnote reference (circled) ────────────────────────────────
 
     #[test]
-    fn footnote_ref_circled_emits_custom_mark_follows() {
+    fn footnote_ref_circled_is_word_generated() {
+        // Circled footnote numbering used to be emitted as a literal ①
+        // character with `customMarkFollows`, freezing the global sequence.
+        // Word now generates the mark from `decimalEnclosedCircle`: the
+        // reference is a plain `w:footnoteReference`, and the footnote body
+        // starts with a `w:footnoteRef` mark run — no literal mark anywhere.
         let mut doc = Document::new();
         doc.style.footnote_format = FootnoteFormat::CircledNumber;
         let fn_id = doc.add_footnote(vec![document::InlineElement::Text(document::Run::new(
@@ -384,14 +389,25 @@ mod tests {
 
         let buf = build_docx(&doc);
         let xml = read_zip_entry(&buf, "word/document.xml");
+        let expected = format!(r#"<w:footnoteReference w:id="{fn_id}"/>"#);
+        assert!(xml.contains(&expected), "expected {expected} in: {xml}");
         assert!(
-            xml.contains(r#"w:customMarkFollows="1""#),
-            "expected customMarkFollows in: {xml}"
+            !xml.contains("customMarkFollows"),
+            "circled mode should not have customMarkFollows"
         );
         // fn_id=2, seq_num=1 => circled char U+2460 = \u{2460}
         assert!(
-            xml.contains('\u{2460}'),
-            "expected circled digit 1 (\u{2460}) in: {xml}"
+            !xml.contains('\u{2460}'),
+            "no literal circled digit should be emitted in the body: {xml}"
+        );
+        let fn_xml = read_zip_entry(&buf, "word/footnotes.xml");
+        assert!(
+            fn_xml.contains("w:footnoteRef"),
+            "footnote body should start with a generated mark run: {fn_xml}"
+        );
+        assert!(
+            !fn_xml.contains('\u{2460}'),
+            "no literal circled digit should be emitted in footnote bodies: {fn_xml}"
         );
     }
 
@@ -437,13 +453,25 @@ mod tests {
             vmerge: document::VMerge::None,
             width_pct: None,
             vertical_align: None,
+            shading: None,
+            width_twips: None,
+            borders: None,
+            zero_margins: false,
         };
-        let row = document::TableRow { cells: vec![cell] };
+        let row = document::TableRow {
+            cells: vec![cell],
+            height_twips: None,
+            is_header: false,
+        };
         let table = document::Table {
             rows: vec![row],
             width_pct: None,
             border_size: None,
             borders: None,
+            cell_margins: None,
+            width_twips: None,
+            col_widths_twips: None,
+            alignment: None,
         };
         doc.add_table(table);
 
@@ -760,6 +788,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0x89, 0x50, 0x4E, 0x47], // PNG magic bytes
             format: document::ImageFormat::Png,
             width_emu: 914_400,  // 1 inch
@@ -788,6 +817,7 @@ mod tests {
         let mut para = document::Paragraph::new();
         let png_data = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG header
         para.add_image(document::ImageData {
+            svg: None,
             bytes: png_data.clone(),
             format: document::ImageFormat::Png,
             width_emu: 914_400,
@@ -814,6 +844,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0x89],
             format: document::ImageFormat::Png,
             width_emu: 100,
@@ -834,6 +865,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0xFF, 0xD8],
             format: document::ImageFormat::Jpeg,
             width_emu: 100,
@@ -858,6 +890,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0x89],
             format: document::ImageFormat::Png,
             width_emu: 100,
@@ -882,6 +915,7 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_image(document::ImageData {
+            svg: None,
             bytes: vec![0x89],
             format: document::ImageFormat::Png,
             width_emu: 100,
@@ -918,6 +952,117 @@ mod tests {
             !xml.contains("xmlns:wp="),
             "document without images should not have wp namespace"
         );
+    }
+
+    fn anchored_line() -> document::AnchoredLine {
+        document::AnchoredLine {
+            x_emu: 1_306_527,
+            y_emu: 18_999,
+            length_emu: 789_864,
+            thickness_emu: 5_588,
+            color: None,
+        }
+    }
+
+    /// Every `prefix:` used by element/attribute names must be declared via
+    /// `xmlns:prefix` somewhere in the part — an unbound prefix makes it
+    /// unparseable.
+    fn assert_bound_prefixes(xml: &str) {
+        use std::collections::BTreeSet;
+        let mut used = BTreeSet::new();
+        let mut declared = BTreeSet::new();
+        let mut reader = quick_xml::Reader::from_str(xml);
+        let mut buf = Vec::new();
+        loop {
+            let event = reader
+                .read_event_into(&mut buf)
+                .unwrap_or_else(|e| panic!("{xml} is not well-formed XML: {e}"));
+            match event {
+                quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e) => {
+                    collect_prefix(e.name().as_ref(), &mut used);
+                    for attr in e.attributes().flatten() {
+                        let key = attr.key.as_ref();
+                        if let Some(rest) = key.strip_prefix(b"xmlns:") {
+                            declared.insert(rest.to_vec());
+                        } else {
+                            collect_prefix(key, &mut used);
+                        }
+                    }
+                }
+                quick_xml::events::Event::End(e) => {
+                    collect_prefix(e.name().as_ref(), &mut used);
+                }
+                quick_xml::events::Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        // `xml` is reserved by the XML spec; it never needs a declaration.
+        used.remove(&b"xml".to_vec());
+        let unbound: Vec<_> = used.difference(&declared).collect();
+        assert!(
+            unbound.is_empty(),
+            "unbound prefixes {unbound:?} used but never declared: {xml}"
+        );
+    }
+
+    fn collect_prefix(name: &[u8], prefixes: &mut std::collections::BTreeSet<Vec<u8>>) {
+        if let Some(colon) = name.iter().position(|b| *b == b':') {
+            prefixes.insert(name[..colon].to_vec());
+        }
+    }
+
+    #[test]
+    fn anchored_line_declares_drawing_namespaces() {
+        let mut doc = Document::new();
+        let mut para = document::Paragraph::new();
+        para.inlines
+            .push(document::InlineElement::AnchoredLine(anchored_line()));
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        let xml = read_zip_entry(&buf, "word/document.xml");
+        assert_bound_prefixes(&xml);
+        assert!(xml.contains("xmlns:wp="), "anchored line needs wp: {xml}");
+        assert!(xml.contains("xmlns:a="), "anchored line needs a: {xml}");
+    }
+
+    #[test]
+    fn anchored_line_strokes_black_by_default() {
+        let mut doc = Document::new();
+        let mut para = document::Paragraph::new();
+        para.inlines
+            .push(document::InlineElement::AnchoredLine(anchored_line()));
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        let xml = read_zip_entry(&buf, "word/document.xml");
+        let ln_pos = xml.find("<a:ln").expect("the line needs an a:ln stroke");
+        let ln_end = xml[ln_pos..]
+            .find("</a:ln>")
+            .map(|i| ln_pos + i)
+            .unwrap_or(xml.len());
+        assert!(
+            xml[ln_pos..ln_end].contains(r#"<a:srgbClr val="000000""#),
+            "a colorless anchored line must fill its stroke black: {xml}"
+        );
+    }
+
+    #[test]
+    fn footnote_anchored_line_declares_drawing_namespaces() {
+        let mut doc = Document::new();
+        doc.add_footnote(vec![
+            document::InlineElement::Text(document::Run::new("note ")),
+            document::InlineElement::AnchoredLine(anchored_line()),
+        ]);
+        let mut para = document::Paragraph::new();
+        para.add_footnote_ref(2);
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        let xml = read_zip_entry(&buf, "word/footnotes.xml");
+        assert_bound_prefixes(&xml);
+        assert!(xml.contains("xmlns:wp="), "anchored line needs wp: {xml}");
     }
 
     // ── 25. Bookmark start/end ──────────────────────────────────────────
@@ -1176,6 +1321,9 @@ mod tests {
     fn page_numbering_decimal_generates_footer_with_page_field() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
+        // The format alone does not conjure a footer; the generated footer
+        // is requested separately (a bare number was detected in the margin).
+        doc.page_number_footers.default = true;
         let mut para = document::Paragraph::new();
         para.add_run("body text");
         doc.add_paragraph(para);
@@ -1217,6 +1365,7 @@ mod tests {
     fn page_numbering_footer_does_not_contain_static_page_number_body() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
+        doc.page_number_footers.default = true;
         let mut para = document::Paragraph::new();
         para.add_run("body text");
         doc.add_paragraph(para);
@@ -1237,6 +1386,7 @@ mod tests {
     fn page_numbering_sect_pr_references_footer() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
+        doc.page_number_footers.default = true;
         let mut para = document::Paragraph::new();
         para.add_run("text");
         doc.add_paragraph(para);
@@ -1291,6 +1441,7 @@ mod tests {
     fn page_numbering_generates_content_types_and_rels() {
         let mut doc = Document::new();
         doc.page_numbering = Some(PageNumberFormat::Decimal);
+        doc.page_number_footers.default = true;
         let mut para = document::Paragraph::new();
         para.add_run("text");
         doc.add_paragraph(para);
@@ -1321,6 +1472,35 @@ mod tests {
         assert!(
             !zip_has_entry(&buf, "word/footer1.xml"),
             "ZIP should NOT contain footer1.xml when no page numbering and no footer"
+        );
+    }
+
+    // ── 42b. Numbering format alone does not conjure a footer ──────────
+
+    #[test]
+    fn page_numbering_format_without_footer_flag_generates_no_footer() {
+        // `page_numbering` is only the `pgNumType` format; the generated
+        // footer needs `page_number_footer`. A declared `#set
+        // page(numbering:)` with no rendered footer must not conjure one.
+        let mut doc = Document::new();
+        doc.page_numbering = Some(PageNumberFormat::LowerRoman);
+        let mut para = document::Paragraph::new();
+        para.add_run("text");
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        assert!(
+            !zip_has_entry(&buf, "word/footer1.xml"),
+            "ZIP should NOT contain footer1.xml when only the format is set"
+        );
+        let doc_xml = read_zip_entry(&buf, "word/document.xml");
+        assert!(
+            !doc_xml.contains("w:footerReference"),
+            "sectPr should not reference a footer: {doc_xml}"
+        );
+        assert!(
+            doc_xml.contains(r#"<w:pgNumType w:fmt="lowerRoman"/>"#),
+            "sectPr should still carry the declared format: {doc_xml}"
         );
     }
 

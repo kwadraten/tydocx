@@ -1,9 +1,11 @@
 //! Document structure: TOC, headers/footers, columns, section breaks, pagebreaks, hrules, page numbering.
 
 use crate::common::{
-    fixture_doc_xml, fixture_document, fixture_package, fixture_package_from_document,
-    paragraph_texts,
+    fixture_doc_xml, fixture_document, fixture_outcome, fixture_outcome_with_options,
+    fixture_package, fixture_package_from_document, fixture_package_with_options,
+    paragraph_containing, paragraph_texts,
 };
+use typort_core::{CompatMode, ConvertOptions};
 
 #[test]
 fn toc_produces_field_code() {
@@ -129,6 +131,29 @@ fn columns_detected_in_document_model() {
 }
 
 #[test]
+fn issue_margin_em_resolves_against_body_size() {
+    // 2em at a declared 10.5pt body = 21pt = 420 twips. The old hardcoded
+    // 12pt base produced 480 twips instead (upstream #32).
+    let doc = fixture_document("issue_margin_em");
+    assert_eq!(
+        doc.page_settings.margin_top, 420,
+        "2em margin at 10.5pt body should be 420 twips"
+    );
+    assert_eq!(
+        doc.page_settings.margin_bottom, 420,
+        "2em margin at 10.5pt body should be 420 twips"
+    );
+    assert_eq!(
+        doc.page_settings.margin_left, 420,
+        "2em margin at 10.5pt body should be 420 twips"
+    );
+    assert_eq!(
+        doc.page_settings.margin_right, 420,
+        "2em margin at 10.5pt body should be 420 twips"
+    );
+}
+
+#[test]
 fn wide_table_is_not_misread_as_page_columns() {
     // business_report has a 4-column #table but no page-level columns. The page
     // column count comes only from the source AST, so a wide table's aligned
@@ -169,6 +194,9 @@ fn columns_produces_w_cols_in_xml() {
 
 #[test]
 fn section_break_produces_multiple_sect_pr() {
+    // IR path (step 4): section breaks come from `ir.sections` — the
+    // `PageSnapshot` chains collected from page-setting pairs — lowered by
+    // `lower_body`/`attach_section_break` in `typort-ir/lower.rs`.
     let doc_xml = fixture_doc_xml("section_break_test");
 
     // Count w:sectPr elements — should be at least 2 (one inline break + final section)
@@ -187,6 +215,8 @@ fn section_break_produces_multiple_sect_pr() {
 
 #[test]
 fn section_break_document_model_has_section_break() {
+    // IR path (step 4): `lower_body` attaches the section-ending
+    // `SectionBreak` to the section's last paragraph.
     use typort_ooxml::document::{BlockElement, SectionBreakType};
 
     let doc = fixture_document("section_break_test");
@@ -543,6 +573,115 @@ fn page_numbering_typ_generates_page_field_footer() {
 }
 
 #[test]
+fn mixed_header_footer_page_numbers_become_page_fields() {
+    // A page number inside a mixed margin zone ("1 标题", "Page 1") must be
+    // split out as a PAGE field; the surrounding text stays literal.
+    let package = fixture_package("issue_mixed_header_footer_page_number");
+
+    let header_xml = package.part_text("word/header1.xml");
+    assert!(
+        header_xml.contains(" PAGE "),
+        "header page number should be a PAGE field, got: {header_xml}"
+    );
+    assert!(
+        header_xml.contains("标题"),
+        "header title text should survive, got: {header_xml}"
+    );
+    assert!(
+        !header_xml.contains(">1 标题</w:t>"),
+        "the header number must not survive as literal text, got: {header_xml}"
+    );
+
+    let footer_xml = package.part_text("word/footer1.xml");
+    assert!(
+        footer_xml.contains(" PAGE "),
+        "footer page number should be a PAGE field, got: {footer_xml}"
+    );
+    assert!(
+        footer_xml.contains("Page "),
+        "footer label text should survive, got: {footer_xml}"
+    );
+    assert!(
+        !footer_xml.contains(">Page 1</w:t>"),
+        "the footer number must not survive as literal text, got: {footer_xml}"
+    );
+}
+
+#[test]
+fn declared_page_numbering_format_wins_over_glyphs() {
+    use typort_ooxml::document::PageNumberFormat;
+    // The declaration ("1" → decimal) wins over the misleading footer glyph
+    // ("i", static text that merely looks like a Roman numeral): glyph
+    // guessing alone would find no consecutive numbering here, but the
+    // declared format still drives `pgNumType` — and the static footer must
+    // not become a generated page-number footer.
+    let doc = fixture_document("issue_page_numbering_declared_wins");
+    assert_eq!(
+        doc.page_numbering,
+        Some(PageNumberFormat::Decimal),
+        "declared numbering \"1\" must drive pgNumType despite the \"i\" glyph"
+    );
+    assert!(
+        !doc.page_number_footers.default,
+        "a static footer glyph must not become a generated page-number footer"
+    );
+}
+
+#[test]
+fn declared_page_numbering_does_not_conjure_footer() {
+    use typort_ooxml::document::PageNumberFormat;
+    // The declaration ("i") drives `pgNumType`; a declaration alone must not
+    // conjure a generated footer.
+    let doc = fixture_document("issue_page_numbering_declared");
+    assert_eq!(
+        doc.page_numbering,
+        Some(PageNumberFormat::LowerRoman),
+        "declared numbering \"i\" must drive pgNumType"
+    );
+    assert!(
+        !doc.page_number_footers.default,
+        "a declaration alone must not conjure a generated footer"
+    );
+
+    let package = fixture_package_from_document(&doc);
+    let names: Vec<&str> = package.part_names().collect();
+    assert!(
+        !names.contains(&"word/footer1.xml"),
+        "no footer part should exist without a footer, got: {names:?}"
+    );
+
+    let doc_xml = package.part_text("word/document.xml");
+    assert!(
+        doc_xml.contains("w:pgNumType"),
+        "sectPr should contain pgNumType: {doc_xml}"
+    );
+    assert!(
+        doc_xml.contains("lowerRoman"),
+        "sectPr should carry the declared lowerRoman format: {doc_xml}"
+    );
+}
+
+#[test]
+fn unmappable_page_numbering_is_reported() {
+    // A function-valued numbering has no `w:pgNumType` equivalent: the format
+    // falls back to glyph detection (which finds no footer number here) and
+    // the declaration is reported.
+    let outcome = fixture_outcome("issue_page_numbering_unmappable");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "page-numbering-pattern"),
+        "a function-valued numbering should be reported, got: {:?}",
+        outcome.degradations
+    );
+    assert!(
+        outcome.document.page_numbering.is_none(),
+        "glyph detection finds no footer number here, so no format is set"
+    );
+}
+
+#[test]
 fn source_line_call_still_produces_a_rule() {
     // Guard the gate: a document that DOES declare `#line()` must still get its
     // horizontal rule (the gate only suppresses invented ones).
@@ -655,6 +794,10 @@ fn edge_academic_template_structure() {
 
 #[test]
 fn edge_landscape_pages_orientation() {
+    // `PageSnapshot` carries `flipped`; a `#set page(flipped:)` transition is
+    // an `IrSection` boundary lowered to a mid-body `w:sectPr`, and the
+    // writer emits `w:orient="landscape"` whenever the page is wider than
+    // tall (the same rule Word uses).
     let xml = fixture_doc_xml("edge_landscape_pages");
     assert!(
         xml.contains("Portrait Section"),
@@ -668,19 +811,21 @@ fn edge_landscape_pages_orientation() {
         xml.contains("Back to Portrait"),
         "return-to-portrait heading should be present"
     );
-    assert!(
-        xml.contains("orient"),
-        "landscape section should produce orient attribute"
-    );
     let sect_count = xml.matches("<w:sectPr>").count() + xml.matches("<w:sectPr ").count();
     assert!(
         sect_count >= 3,
-        "should have at least 3 section breaks for orientation changes, got {sect_count}"
+        "flipped transitions should produce section breaks, got {sect_count}"
+    );
+    assert!(
+        xml.contains("w:orient=\"landscape\""),
+        "landscape sections should carry w:orient"
     );
 }
 
 #[test]
 fn edge_multi_section_different_page_sizes() {
+    // IR path (step 4): each `#set page(...)` transition is an `IrSection`
+    // boundary lowered to a mid-body `w:sectPr`.
     let xml = fixture_doc_xml("edge_multi_section");
     for text in ["Section One", "Section Two", "Section Three"] {
         assert!(xml.contains(text), "heading '{text}' should be present");
@@ -724,6 +869,8 @@ fn issue_long_crossref_label_bookmarks() {
 
 #[test]
 fn issue_final_section_landscape_sections() {
+    // IR path (step 4): the final section's page settings close the body
+    // `w:sectPr`; the boundary break is an `IrSection`.
     let xml = fixture_doc_xml("issue_final_section_landscape");
     assert!(
         xml.contains("Portrait Section"),
@@ -791,4 +938,151 @@ fn issue_column_break() {
         first < br && br < second,
         "column break should fall between the first and second column content"
     );
+}
+
+#[test]
+fn issue_place_absolute_c1_reports_and_keeps_text() {
+    let outcome = fixture_outcome_with_options(
+        "issue_place_absolute_dx",
+        &ConvertOptions::new(CompatMode::C1),
+    );
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "placed-content"),
+        "expected a placed-content degradation, got {:?}",
+        outcome.degradations
+    );
+    let xml = fixture_package_with_options(
+        "issue_place_absolute_dx",
+        &ConvertOptions::new(CompatMode::C1),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
+    assert!(
+        xml.contains("PLACE ME"),
+        "placed text is kept as a normal paragraph:\n{xml}"
+    );
+}
+
+#[test]
+fn issue_rect_text_band_c1_reports_shape_and_keeps_text() {
+    let outcome =
+        fixture_outcome_with_options("issue_rect_text_band", &ConvertOptions::new(CompatMode::C1));
+    assert!(
+        outcome.degradations.iter().any(|d| d.construct == "shape"),
+        "expected a shape degradation, got {:?}",
+        outcome.degradations
+    );
+    let xml =
+        fixture_package_with_options("issue_rect_text_band", &ConvertOptions::new(CompatMode::C1))
+            .part_text("word/document.xml")
+            .to_owned();
+    assert!(
+        xml.contains("A rectangular color band"),
+        "the rect's text content survives as a paragraph:\n{xml}"
+    );
+}
+
+#[test]
+fn issue_weak_pagebreak_after_hard_break_emits_one_break() {
+    let doc_xml = fixture_doc_xml("issue_pagebreak_weak");
+    assert_eq!(
+        doc_xml.matches(r#"w:br w:type="page""#).count(),
+        1,
+        "a weak pagebreak following a hard break must not add a second break:\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let first = texts.iter().position(|t| t.contains("First page."));
+    let second = texts
+        .iter()
+        .position(|t| t.contains("Second page starts here."));
+    assert!(first.is_some() && second.is_some() && first < second);
+}
+
+#[test]
+fn issue_block_breakable_false_keeps_together() {
+    let doc_xml = fixture_doc_xml("issue_block_breakable_false");
+    let first = paragraph_containing(&doc_xml, "Block line one.");
+    assert!(
+        first.contains("<w:keepNext/>") && first.contains("<w:keepLines/>"),
+        "first paragraph of an unbreakable block keeps with the next:\n{first}"
+    );
+    let second = paragraph_containing(&doc_xml, "Block line two.");
+    assert!(
+        second.contains("<w:keepLines/>"),
+        "last paragraph of an unbreakable block stays unbroken:\n{second}"
+    );
+    let after = paragraph_containing(&doc_xml, "Body text after the block.");
+    assert!(
+        !after.contains("<w:keep"),
+        "content after the block is not glued to it:\n{after}"
+    );
+}
+
+#[test]
+fn issue_outline_title_emitted_before_toc() {
+    let doc_xml = fixture_doc_xml("issue_outline_title");
+    let title = doc_xml
+        .find("Contents")
+        .expect("outline title text present");
+    let field = doc_xml.find("TOC \\o").expect("TOC field present");
+    assert!(
+        title < field,
+        "the outline title paragraph precedes the TOC field"
+    );
+    assert!(
+        doc_xml.contains("1-2"),
+        "outline depth 2 reaches the TOC switch"
+    );
+}
+
+#[test]
+fn issue_weak_pagebreak_after_content_emits_one_break() {
+    let doc_xml = fixture_doc_xml("issue_pagebreak_weak_after_content");
+    assert_eq!(
+        doc_xml.matches(r#"w:br w:type="page""#).count(),
+        1,
+        "a weak pagebreak after content must emit one hard break:\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let first = texts.iter().position(|t| t.contains("First page."));
+    let second = texts.iter().position(|t| t.contains("Second page."));
+    assert!(first.is_some() && second.is_some() && first < second);
+}
+
+#[test]
+fn issue_consecutive_strong_pagebreaks_emit_two_breaks() {
+    let doc_xml = fixture_doc_xml("issue_pagebreak_consecutive_strong");
+    assert_eq!(
+        doc_xml.matches(r#"w:br w:type="page""#).count(),
+        2,
+        "two consecutive strong pagebreaks must emit two hard breaks (blank page):\n{doc_xml}"
+    );
+    let texts = paragraph_texts(&doc_xml);
+    let first = texts.iter().position(|t| t.contains("First page."));
+    let second = texts.iter().position(|t| t.contains("Second page."));
+    assert!(first.is_some() && second.is_some() && first < second);
+}
+
+#[test]
+fn issue_odd_pagebreak_then_set_page_keeps_parity_and_margins() {
+    let doc_xml = fixture_doc_xml("issue_pagebreak_odd_then_set_page");
+    assert_eq!(
+        doc_xml.matches("oddPage").count(),
+        1,
+        "exactly one oddPage section break:\n{doc_xml}"
+    );
+    assert_eq!(
+        doc_xml.matches(r#"<w:pgMar w:top="1417""#).count(),
+        1,
+        "the oddPage break ends the first section, so it carries that section's margins (Typst default 2.5cm), not the new ones:\n{doc_xml}"
+    );
+    assert_eq!(
+        doc_xml.matches(r#"<w:pgMar w:top="1134""#).count(),
+        1,
+        "the following 2cm margins belong to the new section's own sectPr:\n{doc_xml}"
+    );
+    assert!(doc_xml.contains("Second page."));
 }

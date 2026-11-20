@@ -5,6 +5,8 @@
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
+pub mod ir;
+
 /// The path to `tests/fixtures/<fixture>.typ`.
 pub fn fixture_path(fixture: &str) -> PathBuf {
     PathBuf::from(format!("../../tests/fixtures/{fixture}.typ"))
@@ -15,13 +17,53 @@ pub fn fixture_document(fixture: &str) -> typort_ooxml::Document {
     fixture_document_with_font_dirs(fixture, &[])
 }
 
+/// Convert `tests/fixtures/<fixture>.typ` through the LEGACY path
+/// (`convert_legacy`) and return the public document model.
+///
+/// Retargeted tests use this: assertions that pin legacy-only behavior
+/// (Paged recovery, bibliography entries, figure rasterization, section
+/// breaks, `#line` rules) run against the path that implements it, until
+/// the IR path covers the registered gap. See `docs/fallback-registry.md`.
+pub fn fixture_document_legacy(fixture: &str) -> typort_ooxml::Document {
+    let world = typort_core::TyportWorld::new(&fixture_path(fixture)).unwrap();
+    typort_core::convert::convert_legacy(&world, &typort_core::ConvertOptions::default())
+        .unwrap()
+        .document
+}
+
 /// Convert a fixture and return both its world and public document model.
 pub fn fixture_document_with_world(
     fixture: &str,
 ) -> (typort_core::TyportWorld, typort_ooxml::Document) {
     let world = typort_core::TyportWorld::new(&fixture_path(fixture)).unwrap();
-    let document = typort_core::convert::convert(&world).unwrap();
-    (world, document)
+    let outcome =
+        typort_core::convert::convert(&world, &typort_core::ConvertOptions::default()).unwrap();
+    (world, outcome.document)
+}
+
+/// Convert `tests/fixtures/<fixture>.typ` and return the full conversion
+/// outcome (document + degradation report).
+pub fn fixture_outcome(fixture: &str) -> typort_core::ConvertOutcome {
+    fixture_outcome_with_options(fixture, &typort_core::ConvertOptions::default())
+}
+
+/// Convert `tests/fixtures/<fixture>.typ` with explicit options and return
+/// the full conversion outcome (document + degradation report).
+pub fn fixture_outcome_with_options(
+    fixture: &str,
+    options: &typort_core::ConvertOptions,
+) -> typort_core::ConvertOutcome {
+    let world = typort_core::TyportWorld::new(&fixture_path(fixture)).unwrap();
+    typort_core::convert::convert(&world, options).unwrap()
+}
+
+/// Convert `tests/fixtures/<fixture>.typ` with explicit options and return
+/// the public document model.
+pub fn fixture_document_with_options(
+    fixture: &str,
+    options: &typort_core::ConvertOptions,
+) -> typort_ooxml::Document {
+    fixture_document_with_font_dirs_and_options(fixture, &[], options)
 }
 
 /// Convert `tests/fixtures/<fixture>.typ` with extra font directories loaded and
@@ -30,9 +72,66 @@ pub fn fixture_document_with_font_dirs(
     fixture: &str,
     font_dirs: &[PathBuf],
 ) -> typort_ooxml::Document {
+    fixture_document_with_font_dirs_and_options(
+        fixture,
+        font_dirs,
+        &typort_core::ConvertOptions::default(),
+    )
+}
+
+/// Convert a fixture with extra font directories and explicit options.
+pub fn fixture_document_with_font_dirs_and_options(
+    fixture: &str,
+    font_dirs: &[PathBuf],
+    options: &typort_core::ConvertOptions,
+) -> typort_ooxml::Document {
     let world =
         typort_core::TyportWorld::with_font_dirs(&fixture_path(fixture), font_dirs).unwrap();
-    typort_core::convert::convert(&world).unwrap()
+    typort_core::convert::convert(&world, options)
+        .unwrap()
+        .document
+}
+
+/// Compile `tests/fixtures/<fixture>.typ` once and return both the patched
+/// IR (what `lower` actually consumed) and the full conversion outcome.
+pub fn fixture_ir_and_outcome(
+    fixture: &str,
+) -> (typort_ir::IrDocument, typort_core::ConvertOutcome) {
+    let world = typort_core::TyportWorld::new(&fixture_path(fixture)).unwrap();
+    let docx_doc = typst::compile::<typort_core::convert::DocxDocument>(&world)
+        .output
+        .unwrap();
+    let paged = typst::compile::<typst_layout::PagedDocument>(&world)
+        .output
+        .ok();
+    let (outcome, ir) = typort_core::convert::export_ir_with_ir(
+        &docx_doc,
+        paged.as_ref(),
+        &world,
+        &typort_core::ConvertOptions::default(),
+    );
+    (ir, outcome)
+}
+
+/// Every `tests/fixtures/**/*.typ` name, relative without the extension, in
+/// sorted order (`conformance/conf-overline` for subdirectory fixtures).
+pub fn all_fixtures() -> Vec<String> {
+    fn walk(dir: &Path, prefix: &str, names: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("fixture directory") {
+            let entry = entry.expect("fixture entry");
+            let name = entry.file_name().into_string().expect("utf-8 name");
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, &format!("{prefix}{name}/"), names);
+            } else if let Some(stem) = name.strip_suffix(".typ") {
+                names.push(format!("{prefix}{stem}"));
+            }
+        }
+    }
+    let mut names = Vec::new();
+    walk(Path::new("../../tests/fixtures"), "", &mut names);
+    names.sort();
+    names
 }
 
 /// The parts produced by one fixture conversion.
@@ -70,6 +169,20 @@ pub fn fixture_package(fixture: &str) -> FixturePackage {
     fixture_package_from_document(&fixture_document(fixture))
 }
 
+/// Convert `tests/fixtures/<fixture>.typ` through the LEGACY path and
+/// return all package parts (see `fixture_document_legacy`).
+pub fn fixture_package_legacy(fixture: &str) -> FixturePackage {
+    fixture_package_from_document(&fixture_document_legacy(fixture))
+}
+
+/// Convert a fixture with explicit options and return all package parts.
+pub fn fixture_package_with_options(
+    fixture: &str,
+    options: &typort_core::ConvertOptions,
+) -> FixturePackage {
+    fixture_package_from_document(&fixture_document_with_options(fixture, options))
+}
+
 /// Package a converted fixture document and return all parts.
 pub fn fixture_package_from_document(doc: &typort_ooxml::Document) -> FixturePackage {
     let mut buf = Vec::new();
@@ -102,14 +215,17 @@ pub fn fixture_part_with_font_dirs(fixture: &str, part: &str, font_dirs: &[PathB
         .to_owned()
 }
 
-/// The directory containing a fixture-relative path.
-pub fn fixture_dir(path: impl AsRef<Path>) -> PathBuf {
-    PathBuf::from("../../tests/fixtures").join(path)
-}
-
 /// Convert `tests/fixtures/<fixture>.typ` and return `word/document.xml`.
 pub fn fixture_doc_xml(fixture: &str) -> String {
     fixture_part(fixture, "word/document.xml")
+}
+
+/// Convert `tests/fixtures/<fixture>.typ` through the LEGACY path and
+/// return `word/document.xml` (see `fixture_document_legacy`).
+pub fn fixture_doc_xml_legacy(fixture: &str) -> String {
+    fixture_package_legacy(fixture)
+        .part_text("word/document.xml")
+        .to_owned()
 }
 
 /// Convert `tests/fixtures/<fixture>.typ` and return `word/styles.xml`.

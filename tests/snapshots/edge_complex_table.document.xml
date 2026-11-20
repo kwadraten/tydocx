@@ -12,6 +12,12 @@
           <w:insideH w:val="single" w:sz="4" w:space="0"/>
           <w:insideV w:val="single" w:sz="4" w:space="0"/>
         </w:tblBorders>
+        <w:tblCellMar>
+          <w:top w:w="100" w:type="dxa"/>
+          <w:left w:w="100" w:type="dxa"/>
+          <w:bottom w:w="100" w:type="dxa"/>
+          <w:right w:w="100" w:type="dxa"/>
+        </w:tblCellMar>
       </w:tblPr>
       <w:tr>
         <w:tc>
@@ -168,7 +174,6 @@
     </w:tbl>
     <w:sectPr>
       <w:footnotePr>
-        <w:numRestart w:val="eachPage"/>
       </w:footnotePr>
       <w:pgSz w:w="11906" w:h="16838"/>
       <w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417"/>

@@ -1,5 +1,7 @@
 # typort
 
+[中文](README.zh-CN.md)
+
 Universal Typst to Word (.docx) converter. Any valid `.typ` file should convert to an editable `.docx`.
 
 ## Install
@@ -13,25 +15,23 @@ cargo install --path crates/typort-cli  # from a checkout
 
 ```bash
 typort input.typ -o output.docx
-typort input.typ --preset myjournal   # applies ./presets/myjournal.toml (page margins, footnote style)
 ```
 
-Presets are user-supplied TOML files (see `tests/fixtures/presets/example.toml`
-for the schema); none are bundled.
+Layout (page margins, footnote style, …) is controlled entirely by the
+Typst source (`#set page(margin: …)`, `#set footnote(numbering: …)`); there
+are no sidecar presets.
 
 ## What it does
 
 typort compiles your Typst document and generates a Word file directly — no intermediate PDF, no Pandoc, no template required.
 
-```
-input.typ ──► Typst compiler ──► HtmlDocument (structure)
-                               ──► PagedDocument (layout)
-                                        │
-                                        ▼
-                              typort conversion engine
-                                        │
-                                        ▼
-                                   output.docx
+```mermaid
+flowchart TD
+    SRC["input.typ"] --> EVAL["Typst evaluator"]
+    EVAL --> REAL["Realization: Content + StyleChain"]
+    REAL --> IR["Styled Semantic IR"]
+    IR --> LOW["OOXML lowering"]
+    LOW --> OUT["output.docx"]
 ```
 
 ## Supported features
@@ -67,27 +67,37 @@ input.typ ──► Typst compiler ──► HtmlDocument (structure)
 
 ## How it works
 
-typort reads the document from **three sources**:
+typort is a real DOCX compiler backend, not a format converter. Compilation realizes the document into `typst-realize` `(Content, StyleChain)` pairs: every element with the style chain that applies to it (plus a companion Paged compile for geometry the pairs cannot carry). Styles are computed from the `StyleChain`, never inferred back from rendered glyphs. Layout content (`#align`, `#place`, `#grid`, …) is positioned naturally while walking the Content tree — no geometric recovery afterwards.
 
-1. **HtmlDocument** — Typst's HTML export gives us semantic structure: which text is a heading, which is a footnote, where tables begin and end.
-
-2. **PagedDocument** — Typst's page layout gives us visual properties: actual fonts, sizes, colors, alignment, page dimensions, and content that has no HTML representation (like `#align(center)[...]` or `#grid(...)`).
-
-3. **Source AST** — typort also re-parses the `.typ` source (and its imports) for `set` rules like `#set text(font: ...)`. Values the author declared explicitly are authoritative and override the heuristics derived from rendering.
-
-The converter walks the HTML structure for document ordering, queries the Introspector for content details, and cross-references the PagedDocument for styling. All values (fonts, sizes, spacing, indentation, alignment) are detected from the actual rendering or the source — nothing is hardcoded for any particular document. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
+The pairs lower into an owned **Styled Semantic IR** (plain data, no lifetimes), and a pure lowering turns the IR into WordprocessingML, OMML for math, and DrawingML for vector graphics, packaged as a `.docx`. Nothing is hardcoded for any particular document. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design, [`docs/spec-ecma376.md`](docs/spec-ecma376.md) for how each Typst feature maps to ECMA-376 at the three compatibility levels, and [`docs/fallback-registry.md`](docs/fallback-registry.md) for the live gaps (the legacy tag-walker path is kept as an explicit fallback and equivalence baseline).
 
 OOXML XML is generated directly via `quick-xml`. No docx-rs, no intermediate format.
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    CRATES["crates/"] --> CLI["typort-cli/ — CLI binary (clap)"]
+    CRATES --> CORE["typort-core/ — Typst compilation + conversion engine"]
+    CRATES --> IR["typort-ir/ — Owned realize IR + pure lowering"]
+    CRATES --> OOXML["typort-ooxml/ — OOXML document model + XML writer + ZIP packaging"]
+    CRATES --> MATH["typort-math/ — Typst math → OMML conversion"]
 ```
-crates/
-  typort-cli/     CLI binary (clap)
-  typort-core/    Typst compilation + conversion engine
-  typort-ooxml/   OOXML document model + XML writer + ZIP packaging
-  typort-math/    Typst math → OMML conversion
-  typort-presets/ Journal preset loading
+
+## Prerequisites
+
+Building from source vendors OpenSSL (`vendor-openssl` in `Cargo.toml`).
+On Fedora 44 the vendored OpenSSL build needs Perl `Time::Piece`, which is
+not in the base install:
+
+```bash
+sudo dnf install perl-Time-Piece
+```
+
+To use the system OpenSSL instead:
+
+```bash
+OPENSSL_NO_VENDOR=1 cargo build --workspace
 ```
 
 ## Build & test

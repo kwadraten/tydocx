@@ -780,42 +780,90 @@ fn convert_cases<W: Write>(writer: &mut Writer<W>, cases: &CasesElem) -> std::io
     })
 }
 
+/// Try to convert a group-character element (`overbrace`, `underbrace`,
+/// `overbracket`, `underbracket`, `overparen`, `underparen`, `overshell`,
+/// `undershell`) to `m:groupChr`. Returns `true` when `content` was one of
+/// them.
+///
+/// One plain arm per element instead of an in-function `macro_rules!`: the
+/// list is fixed, and each arm reads directly — the element type, its
+/// character, and its position.
 fn convert_group_character<W: Write>(
     writer: &mut Writer<W>,
     content: &Content,
 ) -> std::io::Result<bool> {
-    macro_rules! group_characters {
-        ($(($construct:ty, $character:literal, $position:literal)),+ $(,)?) => {
-            $(
-                if let Some(group) = content.to_packed::<$construct>() {
-                    let annotation = group
-                        .annotation
-                        .as_option()
-                        .as_ref()
-                        .and_then(|value| value.as_ref());
-                    convert_groupchr(
-                        writer,
-                        &group.body,
-                        annotation,
-                        $character,
-                        $position,
-                    )?;
-                    return Ok(true);
-                }
-            )+
-        };
+    if let Some(group) = content.to_packed::<OverbraceElem>() {
+        let annotation = group
+            .annotation
+            .as_option()
+            .as_ref()
+            .and_then(|value| value.as_ref());
+        convert_groupchr(writer, &group.body, annotation, "\u{23DE}", "top")?;
+        return Ok(true);
     }
-
-    group_characters![
-        (OverbraceElem, "\u{23DE}", "top"),
-        (UnderbraceElem, "\u{23DF}", "bot"),
-        (OverbracketElem, "\u{23B4}", "top"),
-        (UnderbracketElem, "\u{23B5}", "bot"),
-        (OverparenElem, "\u{23DC}", "top"),
-        (UnderparenElem, "\u{23DD}", "bot"),
-        (OvershellElem, "\u{23E0}", "top"),
-        (UndershellElem, "\u{23E1}", "bot"),
-    ];
+    if let Some(group) = content.to_packed::<UnderbraceElem>() {
+        let annotation = group
+            .annotation
+            .as_option()
+            .as_ref()
+            .and_then(|value| value.as_ref());
+        convert_groupchr(writer, &group.body, annotation, "\u{23DF}", "bot")?;
+        return Ok(true);
+    }
+    if let Some(group) = content.to_packed::<OverbracketElem>() {
+        let annotation = group
+            .annotation
+            .as_option()
+            .as_ref()
+            .and_then(|value| value.as_ref());
+        convert_groupchr(writer, &group.body, annotation, "\u{23B4}", "top")?;
+        return Ok(true);
+    }
+    if let Some(group) = content.to_packed::<UnderbracketElem>() {
+        let annotation = group
+            .annotation
+            .as_option()
+            .as_ref()
+            .and_then(|value| value.as_ref());
+        convert_groupchr(writer, &group.body, annotation, "\u{23B5}", "bot")?;
+        return Ok(true);
+    }
+    if let Some(group) = content.to_packed::<OverparenElem>() {
+        let annotation = group
+            .annotation
+            .as_option()
+            .as_ref()
+            .and_then(|value| value.as_ref());
+        convert_groupchr(writer, &group.body, annotation, "\u{23DC}", "top")?;
+        return Ok(true);
+    }
+    if let Some(group) = content.to_packed::<UnderparenElem>() {
+        let annotation = group
+            .annotation
+            .as_option()
+            .as_ref()
+            .and_then(|value| value.as_ref());
+        convert_groupchr(writer, &group.body, annotation, "\u{23DD}", "bot")?;
+        return Ok(true);
+    }
+    if let Some(group) = content.to_packed::<OvershellElem>() {
+        let annotation = group
+            .annotation
+            .as_option()
+            .as_ref()
+            .and_then(|value| value.as_ref());
+        convert_groupchr(writer, &group.body, annotation, "\u{23E0}", "top")?;
+        return Ok(true);
+    }
+    if let Some(group) = content.to_packed::<UndershellElem>() {
+        let annotation = group
+            .annotation
+            .as_option()
+            .as_ref()
+            .and_then(|value| value.as_ref());
+        convert_groupchr(writer, &group.body, annotation, "\u{23E1}", "bot")?;
+        return Ok(true);
+    }
     Ok(false)
 }
 
