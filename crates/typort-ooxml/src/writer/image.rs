@@ -9,7 +9,7 @@ use super::table::write_table;
 use super::{DocParts, WriteCtx};
 use crate::document::{
     AnchorWrap, AnchoredContent, AnchoredFloat, AnchoredLine, BlockElement, CellContent, Document,
-    ImageData, InlineElement, Paragraph, Table,
+    ImageData, InlineElement, Paragraph, SrcRect, Table,
 };
 
 /// Collect all images from the document model in order of appearance.
@@ -426,7 +426,7 @@ fn write_float_geometry<W: Write>(
         .with_attribute(("y", "0"))
         .write_empty()?;
     an.create_element("wp:positionH")
-        .with_attribute(("relativeFrom", "page"))
+        .with_attribute(("relativeFrom", float.horz_rel.attr()))
         .write_inner_content(|ph| {
             ph.create_element("wp:posOffset")
                 .write_text_content(BytesText::new(&x))?;
@@ -476,7 +476,7 @@ fn write_float_geometry<W: Write>(
             gr.create_element("a:graphicData")
                 .with_attribute(("uri", graphic_data_uri(&float.content)))
                 .write_inner_content(|gd| match &float.content {
-                    AnchoredContent::Image(_) => {
+                    AnchoredContent::Image(img) => {
                         let Some(image) = image else { return Ok(()) };
                         gd.create_element("pic:pic")
                             .with_attribute((
@@ -492,6 +492,7 @@ fn write_float_geometry<W: Write>(
                                     &cy,
                                     image.rid,
                                     image.svg_rid,
+                                    img.src_rect,
                                 )
                             })?;
                         Ok(())
@@ -694,7 +695,16 @@ fn write_drawing_run<W: Write>(
                                     gd.create_element("pic:pic")
                                         .with_attribute(("xmlns:pic", "http://schemas.openxmlformats.org/drawingml/2006/picture"))
                                         .write_inner_content(|pic| {
-                                            write_pic_body(pic, &id_str, &filename, &cx, &cy, rid, svg_rid)
+                                            write_pic_body(
+                                                pic,
+                                                &id_str,
+                                                &filename,
+                                                &cx,
+                                                &cy,
+                                                rid,
+                                                svg_rid,
+                                                img.src_rect,
+                                            )
                                         })?;
                                     Ok(())
                                 })?;
@@ -709,6 +719,10 @@ fn write_drawing_run<W: Write>(
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the pic:pic parts are all fields of the same drawing"
+)]
 fn write_pic_body<W: Write>(
     pic: &mut Writer<W>,
     id_str: &str,
@@ -717,6 +731,7 @@ fn write_pic_body<W: Write>(
     cy: &str,
     rid: &str,
     svg_rid: Option<&str>,
+    src_rect: Option<SrcRect>,
 ) -> io::Result<()> {
     pic.create_element("pic:nvPicPr")
         .write_inner_content(|nv| {
@@ -752,6 +767,14 @@ fn write_pic_body<W: Write>(
                 })?;
             } else {
                 blip.write_empty()?;
+            }
+            if let Some(rect) = src_rect {
+                bf.create_element("a:srcRect")
+                    .with_attribute(("l", rect.l.to_string().as_str()))
+                    .with_attribute(("t", rect.t.to_string().as_str()))
+                    .with_attribute(("r", rect.r.to_string().as_str()))
+                    .with_attribute(("b", rect.b.to_string().as_str()))
+                    .write_empty()?;
             }
             bf.create_element("a:stretch").write_inner_content(|st| {
                 st.create_element("a:fillRect").write_empty()?;

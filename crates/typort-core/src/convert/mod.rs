@@ -109,7 +109,7 @@ struct WalkCtx<'a> {
     /// frames. Image CONTENT comes from each `<img>`'s own src data-URL, so
     /// there is no positional queue to desync — this map only answers "how
     /// large did Typst draw these bytes".
-    image_sizes: &'a HashMap<u64, (u64, u64)>,
+    image_sizes: &'a HashMap<u64, image::ImagePlacement>,
     /// Rasterized vector-drawing canvases, keyed by their owning figure's
     /// introspection `Location` (a drawing body is dropped from the HTML
     /// export, so its pixels come from the paged frames). Keyed — not a FIFO —

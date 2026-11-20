@@ -203,6 +203,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
         width_twips: None,
         col_widths_twips: None,
         alignment: None,
+        float: None,
     };
     doc.add_table(table);
 

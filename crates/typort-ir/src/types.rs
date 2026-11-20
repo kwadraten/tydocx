@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 pub use typort_ooxml::document::{
     Alignment, AnchoredLine, CitationSource, DocumentStyle, FootnoteFormat, HangingIndent,
-    PageNumberFormat, PageSettings, ParagraphStyle, Run, TableBorders, TableCellMargins,
+    PageNumberFormat, PageSettings, ParagraphStyle, Run, SrcRect, TableBorders, TableCellMargins,
     VerticalAlign,
 };
 
@@ -320,6 +320,9 @@ pub struct IrImage {
     /// Original SVG bytes for vector content; emitted as `asvg:svgBlip`
     /// inside `mc:AlternateContent` with `bytes` (PNG) as the fallback.
     pub svg: Option<Vec<u8>>,
+    /// `a:srcRect` crop window derived from the paged frame's clip geometry
+    /// (`block/box(clip:)`, `image(fit: "cover")`), filled by the paged patch.
+    pub src_rect: Option<SrcRect>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

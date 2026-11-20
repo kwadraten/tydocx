@@ -6,6 +6,7 @@ use crate::compat::{CompatMode, Degradation, DegradationAction};
 
 use typst_library::visualize::ImageElem;
 
+use super::image::ImagePlacement;
 use super::{
     Alignment, CiteElem, CiteGroup, EmphElem, EquationElem, HighlightElem, HighlightStyle,
     HtmlDocument, HtmlElement, HtmlNode, InlineFmt, LinkElem, Paragraph, RefElem, Run, StrongElem,
@@ -33,7 +34,7 @@ pub(super) struct InlineOptions<'a> {
     /// Display sizes of rendered images, keyed by content hash. Only
     /// populated for footnote walks — body walks read sizes through the
     /// shared `WalkCtx` instead.
-    image_sizes: Option<&'a HashMap<u64, (u64, u64)>>,
+    image_sizes: Option<&'a HashMap<u64, ImagePlacement>>,
 }
 
 impl<'a> InlineOptions<'a> {
@@ -64,7 +65,7 @@ impl<'a> InlineOptions<'a> {
         }
     }
 
-    pub(super) fn footnote(fmt: InlineFmt, image_sizes: &'a HashMap<u64, (u64, u64)>) -> Self {
+    pub(super) fn footnote(fmt: InlineFmt, image_sizes: &'a HashMap<u64, ImagePlacement>) -> Self {
         Self {
             fmt,
             html_doc: None,

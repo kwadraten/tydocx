@@ -1423,22 +1423,28 @@ impl Collector<'_> {
         };
         for (content, pair_styles) in group {
             let rendered = if let Some(block) = content.to_packed::<BlockElem>() {
-                block_body_content(block, *pair_styles)
+                block_body_content(block, *pair_styles).map(|body| (body, None))
             } else if let Some(place) = content.to_packed::<PlaceElem>()
                 && let Some(block) = place.body.to_packed::<BlockElem>()
             {
-                block_body_content(block, *pair_styles)
+                block_body_content(block, *pair_styles).map(|body| (body, Some(place)))
             } else {
                 None
             };
-            if let Some(body_content) = rendered {
-                return self.collect_figure_body(
-                    &meta,
-                    body_content,
-                    *pair_styles,
-                    engine,
-                    locator,
-                );
+            if let Some((body_content, place)) = rendered {
+                let figure_block =
+                    self.collect_figure_body(&meta, body_content, *pair_styles, engine, locator)?;
+                // `figure(placement:)` realizes as a floating `PlaceElem`
+                // carrying the figure's span; keep that float instead of
+                // absorbing it into the flow.
+                return Ok(match place {
+                    Some(place)
+                        if content.span() == inner.span() && place.float.get(*pair_styles) =>
+                    {
+                        place_block(place, content, *pair_styles, vec![figure_block])
+                    }
+                    _ => figure_block,
+                });
             }
         }
         self.collect_figure_body(&meta, &figure.body, styles, engine, locator)
@@ -2435,18 +2441,7 @@ impl Collector<'_> {
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
         let body = self.collect_content_blocks(&place.body, styles, engine, locator)?;
-        let wrap = match place.alignment.get(styles) {
-            Smart::Custom(align) if align.y() == Some(VAlignment::Horizon) => IrPlaceWrap::Square,
-            _ => IrPlaceWrap::TopAndBottom,
-        };
-        Ok(IrBlock::Place {
-            float: place.float.get(styles),
-            wrap,
-            clearance_emu: typort_ir::pt_to_emu(place.clearance.resolve(styles).to_pt()),
-            location_hash: content.location().map(location_hash64),
-            anchor: None,
-            body,
-        })
+        Ok(place_block(place, content, styles, body))
     }
 
     fn collect_pagebreak(pagebreak: &PagebreakElem, styles: StyleChain<'_>) -> IrBlock {
@@ -2691,6 +2686,26 @@ fn apply_block_props(blocks: &mut [IrBlock], block: &BlockElem, styles: StyleCha
     }
     if sticky && let IrBlock::Paragraph(para) = &mut blocks[last] {
         para.keep_next = true;
+    }
+}
+
+fn place_block(
+    place: &PlaceElem,
+    content: &Content,
+    styles: StyleChain<'_>,
+    body: Vec<IrBlock>,
+) -> IrBlock {
+    let wrap = match place.alignment.get(styles) {
+        Smart::Custom(align) if align.y() == Some(VAlignment::Horizon) => IrPlaceWrap::Square,
+        _ => IrPlaceWrap::TopAndBottom,
+    };
+    IrBlock::Place {
+        float: place.float.get(styles),
+        wrap,
+        clearance_emu: typort_ir::pt_to_emu(place.clearance.resolve(styles).to_pt()),
+        location_hash: content.location().map(location_hash64),
+        anchor: None,
+        body,
     }
 }
 

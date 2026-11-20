@@ -22,6 +22,24 @@ pub(super) fn write_table<W: Write>(
         // Table properties with borders
         let tbl_width = table.width_pct.unwrap_or(5000).to_string();
         w.create_element("w:tblPr").write_inner_content(|tpr| {
+            if let Some(float) = table.float {
+                let (x, y, dist) = (
+                    float.x_twips.to_string(),
+                    float.y_twips.to_string(),
+                    float.distance_twips.to_string(),
+                );
+                tpr.create_element("w:tblpPr")
+                    .with_attribute(("w:leftFromText", dist.as_str()))
+                    .with_attribute(("w:rightFromText", dist.as_str()))
+                    .with_attribute(("w:topFromText", dist.as_str()))
+                    .with_attribute(("w:bottomFromText", dist.as_str()))
+                    .with_attribute(("w:vertAnchor", "page"))
+                    .with_attribute(("w:horzAnchor", "page"))
+                    .with_attribute(("w:tblpX", x.as_str()))
+                    .with_attribute(("w:tblpY", y.as_str()))
+                    .with_attribute(("w:overlap", "never"))
+                    .write_empty()?;
+            }
             if let Some(dxa) = table.width_twips {
                 let w_str = dxa.to_string();
                 tpr.create_element("w:tblW")

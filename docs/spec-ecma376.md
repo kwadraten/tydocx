@@ -131,11 +131,13 @@ flowchart LR
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
 | `#figure` | body + caption paragraph; `gap` → spacing; label → bookmark; supplement + number literal in the caption | same | same |
-| `figure(placement: top/bottom)` explicit | flows inline | + `"figure-placement"` skipped | flows inline silently |
+| `figure(placement: top/bottom)` explicit | lone-table body → `w:tblpPr` floating table (caption becomes a grid-spanning row); other bodies → anchored `wps:txbx` at the measured position | body kept in flow + `"figure-placement"`/`"placed-content"` | `w:tblpPr` / anchored `txbx`; unmeasured → flow fallback + `"placed-content"` |
 | `$x$` / `$ x $` | `m:oMath` inline / `m:oMathPara` block; equation numbering `(1)` literal | same | same |
 | `#image` (raster) | `w:drawing` + `wp:inline` + `a:blip` (`pic:pic`) | same | same |
 | `#image` (SVG) | `mc:AlternateContent`: `asvg:svgBlip` (Choice) + PNG `a:blip` (Fallback) | PNG bytes only + `"vector-image"` | full AlternateContent |
-| `image(fit:)` other than cover | fit aspect dropped; display size still comes from the measured frame | + `"image-fit"` | silently dropped |
+| `image(fit: "cover")` | `a:srcRect` l/t/r/b derived from the measured clip window; the declared box stays the `wp:extent` and the full bytes stay embedded | same | same |
+| `image(fit: "contain"/"stretch")` | fit aspect dropped; display size still comes from the measured frame | + `"image-fit"` | silently dropped |
+| `block(clip: true)`/`box(clip:)` + negative `inset:` | `a:srcRect` l/t/r/b from the clip window vs the image bounds (composes with a cover fit) | same | same |
 | `image(alt:)` | no `wp:docPr descr` emitted | + `"image-alt"` | silently dropped |
 | PDF image source | skipped + `"pdf-image"` (all levels — the IR path has no rasterizer; the legacy path rasterizes PDF pages) | same | same |
 
@@ -203,8 +205,8 @@ flowchart LR
 | `#linebreak` | `w:br` | same | same |
 | `#colbreak` | `w:br w:type="column"` | same | same |
 | `#columns(n)[…]` block | body kept flat + `"column-block"` (all levels) | same | same |
-| `#place(float: true)` | `wp:anchor` `w:drawing` with measured page-absolute position; `wrapTopAndBottom` or `wrapSquare`, `distT`/`distB` from `clearance:`, `behindDoc="0"` | body kept in flow + `"placed-content"` report | anchored float; unmeasured → flow fallback + `"placed-content"` |
-| `#place` non-float | `wp:anchor` measured the same way: `wp:wrapNone`, `behindDoc` from paint order (behind when the page paints more content after the place); text in editable `wps:txbx` (`w:jc` pinned), images as `pic:pic`, a filled `rect` as `a:solidFill` on the shape | + `"placed-content"` | anchored overlay; unmeasured → flow fallback + `"placed-content"` |
+| `#place(float: true)` | `wp:anchor` `w:drawing` with measured page-absolute position; `wrapTopAndBottom` or `wrapSquare`, `distT`/`distB` from `clearance:`, `behindDoc="0"`; a lone-table body → `w:tblpPr` floating table instead | body kept in flow + `"placed-content"` report | anchored float / `w:tblpPr`; unmeasured → flow fallback + `"placed-content"` |
+| `#place` non-float | `wp:anchor` measured the same way: `wp:wrapNone`, `behindDoc` from paint order (behind when the page paints more content after the place); text in editable `wps:txbx` (`w:jc` pinned), images as `pic:pic`, a filled `rect` as `a:solidFill` on the shape; a lone-table body → `w:tblpPr`; a box fully inside a side margin anchors `relativeFrom="margin"` | + `"placed-content"` | anchored overlay / `w:tblpPr`; unmeasured → flow fallback + `"placed-content"` |
 | `float(dx:/dy:)` offsets | included in the anchor position | n/a | same |
 
 ## Shapes, lines, transforms
@@ -299,6 +301,7 @@ per-feature *degradation* list above is exhaustive.
 - **Dual `CompatMode`/`Degradation` definitions** in `typort-core` and
   `typort-ir` remain to be unified.
 - **Image `alt:`** is never emitted (`wp:docPr descr` is a backlog item at
-  every level); `fit:` other than cover is silently dropped at C2/C3.
+  every level); `fit:` contain/stretch is silently dropped at C2/C3 (cover
+  lowers to `a:srcRect`).
 - **Grid row heights** are fixed from Typst layout (`trHeight`), not Word
   reflow; wide grids split at 63 columns.

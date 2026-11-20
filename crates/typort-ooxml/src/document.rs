@@ -86,6 +86,20 @@ pub struct ImageData {
     pub svg: Option<Vec<u8>>,
     pub width_emu: u64,
     pub height_emu: u64,
+    /// `a:srcRect` — a crop window into the full image, derived from the
+    /// paged frame's clip geometry (`block/box(clip:)`, `image(fit: "cover")`).
+    /// The original bytes stay embedded; Word displays only the window.
+    pub src_rect: Option<SrcRect>,
+}
+
+/// `a:srcRect` — the visible window of an embedded image as a fraction of the
+/// full image bounds, each side in thousandths of a percent (100000 = 100%).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SrcRect {
+    pub l: i32,
+    pub t: i32,
+    pub r: i32,
+    pub b: i32,
 }
 
 /// List numbering info for a paragraph that is a list item.
@@ -194,9 +208,15 @@ pub struct AnchoredLine {
 /// position and wrap behavior.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnchoredFloat {
-    /// Page-absolute position (`relativeFrom="page"` on both axes), EMU.
+    /// `wp:positionH` offset in EMU, measured against `horz_rel`: from the
+    /// page edge when `Page`, from the text-area edge when `Margin`
+    /// (negative values reach into the page's side margin).
     pub x_emu: i64,
+    /// Vertical offset from the page edge (`relativeFrom="page"`), EMU.
     pub y_emu: i64,
+    /// `wp:positionH@relativeFrom` — the reference edge `x_emu` is measured
+    /// against.
+    pub horz_rel: RelFrom,
     /// Drawing extent, EMU.
     pub width_emu: u64,
     pub height_emu: u64,
@@ -215,6 +235,26 @@ pub struct AnchoredFloat {
     /// leave stacking to renderer fallbacks.
     pub z_order: u32,
     pub content: AnchoredContent,
+}
+
+/// The reference edge a `wp:positionH` offset is measured against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelFrom {
+    /// `relativeFrom="page"` — offset from the paper's left edge.
+    Page,
+    /// `relativeFrom="margin"` — offset from the text area's left edge, so a
+    /// negative `x_emu` lands inside the page's left margin (margin notes).
+    Margin,
+}
+
+impl RelFrom {
+    #[must_use]
+    pub fn attr(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Margin => "margin",
+        }
+    }
 }
 
 /// The `wp:anchor` wrap element.
@@ -1016,6 +1056,22 @@ pub struct Table {
     /// Table-level alignment (`w:jc` in `w:tblPr`) — the horizontal part of
     /// an `align(..)` wrapper around the table. `None` = Word's default left.
     pub alignment: Option<Alignment>,
+    /// `w:tblpPr` — the table floats at a page-absolute position instead of
+    /// flowing inline (a lone `table` inside a `#place` or a
+    /// `figure(placement:)`).
+    pub float: Option<TableFloat>,
+}
+
+/// `w:tblpPr` — a table floated at a page-absolute position, anchored to its
+/// position in the flow instead of displacing it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableFloat {
+    /// `w:tblpX` — left edge, twips from the page's left (`w:horzAnchor="page"`).
+    pub x_twips: i32,
+    /// `w:tblpY` — top edge, twips from the page's top (`w:vertAnchor="page"`).
+    pub y_twips: i32,
+    /// `place(clearance:)` mapped to `w:*FromText` distances, twips.
+    pub distance_twips: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -6,6 +6,7 @@ use typst_html::HtmlNode;
 use typst_layout::PagedDocument;
 
 use super::fmt::InlineFmt;
+use super::image::ImagePlacement;
 use super::{InlineOptions, collect_inlines, has_attr_value, tag_name};
 
 /// Extract the footnote bodies from the HTML `doc-endnotes` section, add them to the
@@ -18,7 +19,7 @@ pub(super) fn extract_add_and_size_footnotes(
     doc: &mut Document,
     body_children: &[HtmlNode],
     paged: Option<&PagedDocument>,
-    image_sizes: &HashMap<u64, (u64, u64)>,
+    image_sizes: &HashMap<u64, ImagePlacement>,
 ) {
     let contents = extract_footnote_contents(body_children, image_sizes);
     for content in &contents {
@@ -101,7 +102,7 @@ pub(super) fn parse_circled_number(s: &str) -> Option<u32> {
 /// Extract footnote content from the `<section role="doc-endnotes">` at the end of body.
 pub(super) fn extract_footnote_contents(
     children: &[HtmlNode],
-    image_sizes: &HashMap<u64, (u64, u64)>,
+    image_sizes: &HashMap<u64, ImagePlacement>,
 ) -> Vec<Vec<InlineElement>> {
     let mut footnotes = Vec::new();
 
@@ -126,7 +127,7 @@ pub(super) fn extract_footnote_contents(
 fn extract_footnotes_from_ol(
     children: &[HtmlNode],
     footnotes: &mut Vec<Vec<InlineElement>>,
-    image_sizes: &HashMap<u64, (u64, u64)>,
+    image_sizes: &HashMap<u64, ImagePlacement>,
 ) {
     for child in children {
         if let HtmlNode::Element(li) = child

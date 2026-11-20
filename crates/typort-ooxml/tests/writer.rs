@@ -472,6 +472,7 @@ mod tests {
             width_twips: None,
             col_widths_twips: None,
             alignment: None,
+            float: None,
         };
         doc.add_table(table);
 
@@ -793,6 +794,7 @@ mod tests {
             format: document::ImageFormat::Png,
             width_emu: 914_400,  // 1 inch
             height_emu: 457_200, // 0.5 inch
+            src_rect: None,
         });
         doc.add_paragraph(para);
 
@@ -822,6 +824,7 @@ mod tests {
             format: document::ImageFormat::Png,
             width_emu: 914_400,
             height_emu: 914_400,
+            src_rect: None,
         });
         doc.add_paragraph(para);
 
@@ -849,6 +852,7 @@ mod tests {
             format: document::ImageFormat::Png,
             width_emu: 100,
             height_emu: 100,
+            src_rect: None,
         });
         doc.add_paragraph(para);
 
@@ -870,6 +874,7 @@ mod tests {
             format: document::ImageFormat::Jpeg,
             width_emu: 100,
             height_emu: 100,
+            src_rect: None,
         });
         doc.add_paragraph(para);
 
@@ -895,6 +900,7 @@ mod tests {
             format: document::ImageFormat::Png,
             width_emu: 100,
             height_emu: 100,
+            src_rect: None,
         });
         doc.add_paragraph(para);
 
@@ -920,6 +926,7 @@ mod tests {
             format: document::ImageFormat::Png,
             width_emu: 100,
             height_emu: 100,
+            src_rect: None,
         });
         doc.add_paragraph(para);
 
