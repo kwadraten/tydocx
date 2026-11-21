@@ -193,7 +193,9 @@ flowchart LR
 | page number restart | `w:pgNumType w:start` when the rendered footer numbering diverges | same | same |
 | `#set page(header:/footer:)` | `w:headerReference`/`w:footerReference` (default, first, even) + `w:titlePg`/`w:evenAndOddHeaders`; bare page numbers become ` PAGE ` fields inside the generated part. C3: a zone whose whole content is a heading query (`query(selector(heading).before(here()))`, `where(level: N)` picked up) renders as ` STYLEREF "Heading N" ` with the extracted heading text cached; mixed-markup zones stay literal | page-1 zone kept as literal paragraphs + `"header-footer-variant"` | three slots; mid-document variants beyond what the slots express → `"header-footer-variant"` report |
 | `#set page(margin: (inside/outside))` two-sided | `w:mirrorMargins` is **not** emitted | + `"mirrored-margins"` | silently kept as resolved left/right |
-| `#set page(foreground:/background:)`, `page(fill:)` | not emitted; in C1 the furniture text is literalized into the body | + `"page-foreground"` literalized | silently dropped |
+| `#set page(foreground:/background:)` | `wp:anchor` (never `wp:inline`) inside the default/even/first **header** part selected by the layer's page-variation shape; `positionH`/`positionV` `relativeFrom="page"`; text editable in `wps:txbx`, images as `pic:pic`, solid rects as `a:solidFill` shapes; background units get `behindDoc="1"`, foreground `behindDoc="0"` | furniture text literalized into the header part + `"page-foreground"` | anchored; transformed/clipped groups keep their content but lose the transform + `"page-foreground"`; unrepresentable per-page variation keeps page 1's layer on `first` + `"page-foreground"` approximated |
+| `page(fill:)` solid | full-page `wp:anchor` `a:solidFill` shape, `behindDoc="1"`, in the default header part | + `"page-foreground"` literalized | non-solid fills → `"page-foreground"` skipped |
+| `#place` inside the header/footer zones | `wp:anchor` paragraph in the same header/footer part (`relativeFrom="page"`), coexisting with the zone's literal/field paragraphs | + `"placed-content"` | anchored in the zone part |
 | `#set document(title/author/description/keywords/date)` | `docProps/core.xml` (`dc:title`, `dc:creator`, `dc:subject`, `cp:keywords`, `dcterms:created`); title falls back to the first heading | same | same |
 | `context document.<field>` reads | C3: ` DOCPROPERTY <name> ` with the rendered text cached — `title`→`Title`, `author`→`Author`, `keywords`→`Keywords`, `description`→`Comments`, `date`→`CreateDate`; other fields stay literal | same | C3 emits the field |
 | `context datetime.today()`/`now()` (any display form) | C3: ` DATE `/` TIME ` with the rendered text cached — an explicit `.display(format)` keeps its rendered text as the cached result; the field carries no `\@` switch | same | C3 emits the field |
@@ -310,8 +312,11 @@ per-feature *degradation* list above is exhaustive.
   effect at C2/C3; only C1 reports it.
 - **Two-sided margins** keep resolved left/right at C2/C3 without emitting
   `w:mirrorMargins`; only C1 reports it.
-- **`page(fill:)`/foreground/background** are dropped at C2/C3 silently; only
-  C1 literalizes the furniture text and reports.
+- **`page(fill:)`/foreground/background** anchor into header parts at C2/C3
+  (solid fills as a full-page shape, furniture units as `wp:anchor` drawings);
+  what Word cannot carry — non-solid fills, transformed/clipped groups,
+  unsupported item kinds, per-physical-page variation — is reported as
+  `page-foreground`. C1 keeps its literalized-text contract.
 - **Bare/angled shapes** are silently dropped at C2/C3; only C1 reports them.
 - **Dual `CompatMode`/`Degradation` definitions** in `typort-core` and
   `typort-ir` remain to be unified.

@@ -14,13 +14,43 @@ use crate::document::{
 
 /// Collect all images from the document model in order of appearance.
 /// Returns a `Vec<&ImageData>` where the index corresponds to the 1-based image number.
-/// Body images come first, footnote images after them — the footnote writer
-/// relies on this order for the document-wide media numbering.
+/// Body images come first, footnote images after them, header/footer-part
+/// images last — the footnote and header/footer writers rely on this order
+/// for the document-wide media numbering.
 pub(super) fn collect_images(doc: &Document) -> Vec<&ImageData> {
     let mut images = Vec::new();
     collect_images_from_blocks(&doc.body.elements, &mut images);
     images.extend(collect_footnote_images(doc));
+    for part in collect_header_footer_images(doc) {
+        images.extend(part);
+    }
     images
+}
+
+/// Images inside each header/footer part, in part order
+/// (header default/even/first, then footer default/even/first). Each entry is
+/// that part's image list in encounter order; the media numbering continues
+/// the document-wide sequence while the relationships live in the part's own
+/// `word/_rels/headerN.xml.rels` / `word/_rels/footerN.xml.rels`.
+pub(super) fn collect_header_footer_images(doc: &Document) -> Vec<Vec<&ImageData>> {
+    let mut parts = Vec::new();
+    for hf in [
+        &doc.header,
+        &doc.header_even,
+        &doc.header_first,
+        &doc.footer,
+        &doc.footer_even,
+        &doc.footer_first,
+    ] {
+        let mut images = Vec::new();
+        if let Some(hf) = hf {
+            for para in &hf.paragraphs {
+                collect_images_from_para(para, &mut images);
+            }
+        }
+        parts.push(images);
+    }
+    parts
 }
 
 fn collect_images_from_blocks<'a>(blocks: &'a [BlockElement], images: &mut Vec<&'a ImageData>) {

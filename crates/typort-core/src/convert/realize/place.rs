@@ -14,10 +14,10 @@ use std::collections::{HashMap, HashSet};
 use typort_ir::{IrAnchor, IrBlock, IrDocument, pt_to_emu};
 use typst_layout::PagedDocument;
 use typst_library::introspection::Tag;
-use typst_library::layout::{Abs, Frame, FrameItem, Point};
+use typst_library::layout::{Frame, FrameItem, Point};
 
 use super::collect::location_hash64;
-use crate::convert::frames::visit_frame_items;
+use crate::convert::frames::{ItemBounds, visit_frame_items};
 
 /// Fill `anchor` on every `IrBlock::Place` whose `Location` hash matches a
 /// rendered placement in the paged document.
@@ -93,7 +93,7 @@ fn scan_placed_events(frame: &Frame, wanted: &HashSet<u64>, geometry: &mut HashM
         // Collect the union bounds of items at the same depth until the
         // matching `Tag::End`. A shallower item means the frame ended
         // without the place's closing tag — an unusable bracket.
-        let mut bounds = Bounds::default();
+        let mut bounds = ItemBounds::default();
         let mut end = None;
         for (j, &(item_depth, position, inner)) in events.iter().enumerate().skip(i + 1) {
             if item_depth < depth {
@@ -112,7 +112,8 @@ fn scan_placed_events(frame: &Frame, wanted: &HashSet<u64>, geometry: &mut HashM
         let Some(end_index) = end else {
             continue;
         };
-        if let Some(anchor) = bounds.anchor(
+        if let Some(anchor) = anchor_from(
+            &bounds,
             events[end_index..]
                 .iter()
                 .any(|(_, _, it)| matches!(it, FrameItem::Text(_))),
@@ -137,61 +138,16 @@ fn collect_events<'a>(
     }
 }
 
-/// Union bounding box of placed items, in page points.
-#[derive(Default)]
-struct Bounds {
-    min: Option<Point>,
-    max: Option<Point>,
-}
-
-impl Bounds {
-    fn add(&mut self, position: Point, item: &FrameItem) {
-        match item {
-            FrameItem::Group(group) => {
-                self.extend(position);
-                self.extend(position + Point::new(group.frame.size().x, group.frame.size().y));
-            }
-            FrameItem::Text(text) => {
-                // `bbox` is frame-oriented (baseline origin, y-down after the
-                // item's own coordinate flip), so `position + min` is the
-                // ink's top-left.
-                let rect = text.bbox();
-                self.extend(position + rect.min);
-                self.extend(position + rect.max);
-            }
-            FrameItem::Shape(shape, _) => {
-                let rect = shape.bbox(true);
-                self.extend(position + rect.min);
-                self.extend(position + rect.max);
-            }
-            FrameItem::Image(_, size, _) => {
-                self.extend(position);
-                self.extend(position + Point::new(size.x, size.y));
-            }
-            FrameItem::Link(..) | FrameItem::Tag(_) => {}
-        }
-    }
-
-    fn extend(&mut self, point: Point) {
-        self.min = Some(self.min.map_or(point, |min| min.min(point)));
-        self.max = Some(self.max.map_or(point, |max| max.max(point)));
-    }
-
-    fn anchor(&self, behind_doc: bool) -> Option<IrAnchor> {
-        let (min, max) = (self.min?, self.max?);
-        let width = max.x - min.x;
-        let height = max.y - min.y;
-        if width <= Abs::zero() || height <= Abs::zero() {
-            return None;
-        }
-        Some(IrAnchor {
-            x_emu: emu_i64(min.x.to_pt()),
-            y_emu: emu_i64(min.y.to_pt()),
-            width_emu: pt_to_emu(width.to_pt()),
-            height_emu: pt_to_emu(height.to_pt()),
-            behind_doc,
-        })
-    }
+/// The union bounds of a place's items as an `IrAnchor`, when non-empty.
+fn anchor_from(bounds: &ItemBounds, behind_doc: bool) -> Option<IrAnchor> {
+    let (x, y, width, height) = bounds.rect()?;
+    Some(IrAnchor {
+        x_emu: emu_i64(x),
+        y_emu: emu_i64(y),
+        width_emu: pt_to_emu(width),
+        height_emu: pt_to_emu(height),
+        behind_doc,
+    })
 }
 
 /// Visit the `location_hash` of every `IrBlock::Place` in the IR.

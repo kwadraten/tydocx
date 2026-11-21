@@ -343,10 +343,17 @@ fn apply_headers_and_footers(
     // so a small author margin never misfiles body text as header/footer.
     if let Some(paged) = paged_doc {
         let margins = page::MarginsPt::from_settings(&doc.page_settings);
+        // C2/C3: measure the page furniture layers (background/foreground,
+        // `#place` inside the header/footer zones, `page(fill:)`) so they can
+        // ride as `wp:anchor` drawings in header/footer parts. C1 keeps its
+        // literalize-furniture contract and skips all of this.
+        let furniture_maps = analyze_furniture(paged, world, &margins, compat);
+        let maps = furniture_maps.as_ref();
         // The declared page-numbering format (from `#set page(numbering:)`,
         // consumed in `apply_source_overrides`) wins over glyph guessing.
         let declared = doc.page_numbering;
-        let mut top = page::extract_zone_parts(paged, page::MarginZone::Top, margins, declared);
+        let mut top =
+            page::extract_zone_parts(paged, page::MarginZone::Top, margins, declared, maps);
         let zones = zone_heading_levels(world, compat);
         // A pure heading-query header is exactly the case `extract_zone_parts`
         // calls unrepresentable — the STYLEREF field makes it representable.
@@ -369,20 +376,21 @@ fn apply_headers_and_footers(
         doc.header_first.clone_from(&top.first);
         // Detect page numbering before extracting footer. If the footer is just
         // a page number, the writer generates a PAGE field footer instead.
-        let numbering = page::detect_page_numbering(paged, margins)
-            .or_else(|| page::detect_multi_format_page_numbering(paged, margins));
+        let numbering = page::detect_page_numbering(paged, margins, maps)
+            .or_else(|| page::detect_multi_format_page_numbering(paged, margins, maps));
         let mut footer_first_differs = false;
         let mut footer_even_differs = false;
         let mut bottom: Option<page::ZoneParts> = None;
-        if let Some(fmt) = numbering {
-            doc.page_number_footers.default = true;
-            if declared.is_none() {
-                doc.page_numbering = Some(fmt);
-            }
-            // Don't set doc.footer — the writer will generate a PAGE field footer
-        } else if doc.footer.is_none() {
+        // A `#place` in the footer zone can't ride inside the generated
+        // PAGE-field footer — its zone has to be extracted instead (a pure
+        // page-number token in it still becomes a live `PAGE` field).
+        let footer_has_places =
+            maps.is_some_and(|m| m.per_page.iter().any(|f| !f.footer.is_empty()));
+        // Read before the closure below captures `doc` mutably.
+        let footer_absent = doc.footer.is_none();
+        let mut extract_bottom = |bottom_slot: &mut Option<page::ZoneParts>| {
             let parts =
-                page::extract_zone_parts(paged, page::MarginZone::Bottom, margins, declared);
+                page::extract_zone_parts(paged, page::MarginZone::Bottom, margins, declared, maps);
             footer_first_differs = parts.title_page;
             footer_even_differs = parts.even_and_odd;
             doc.even_and_odd_headers |= parts.even_and_odd;
@@ -391,52 +399,157 @@ fn apply_headers_and_footers(
             doc.footer.clone_from(&parts.default);
             doc.footer_even.clone_from(&parts.even);
             doc.footer_first.clone_from(&parts.first);
-            bottom = Some(parts);
+            *bottom_slot = Some(parts);
+        };
+        if let Some(fmt) = numbering {
+            if declared.is_none() {
+                doc.page_numbering = Some(fmt);
+            }
+            if footer_has_places {
+                if footer_absent {
+                    extract_bottom(&mut bottom);
+                }
+            } else {
+                doc.page_number_footers.default = true;
+                // Don't set doc.footer — the writer generates a PAGE field footer
+            }
+        } else if footer_absent {
+            extract_bottom(&mut bottom);
         }
         if doc.title_page {
-            if !header_first_differs && doc.header_first.is_none() && doc.header.is_some() {
-                doc.header_first = doc.header.clone();
-            }
-            if !footer_first_differs && doc.footer_first.is_none() && doc.footer.is_some() {
-                doc.footer_first = doc.footer.clone();
-            }
             doc.page_number_footers.first =
                 doc.page_number_footers.default && !footer_first_differs;
         }
         if doc.even_and_odd_headers {
-            if !header_even_differs && doc.header_even.is_none() && doc.header.is_some() {
-                doc.header_even = doc.header.clone();
-            }
-            if !footer_even_differs && doc.footer_even.is_none() && doc.footer.is_some() {
-                doc.footer_even = doc.footer.clone();
-            }
             doc.page_number_footers.even = doc.page_number_footers.default && !footer_even_differs;
         }
+        let differs = ZoneDiffers {
+            header: ZoneSlotDiffers {
+                first: header_first_differs,
+                even: header_even_differs,
+            },
+            footer: ZoneSlotDiffers {
+                first: footer_first_differs,
+                even: footer_even_differs,
+            },
+        };
+        propagate_slot_parts(doc, &differs);
+        // Furniture anchors ride in after propagation: parts that the
+        // first/even slots just cloned also carry the matching anchors.
+        if let Some(maps) = furniture_maps {
+            apply_furniture_plan(&maps, doc, &differs, degradations);
+        }
         if compat == CompatMode::C1 {
-            if let Some(degradation) = page::header_footer_variant(paged, margins) {
-                degradations.push(degradation);
-            }
-            let page_one = |parts: &page::ZoneParts, default: Option<HeaderFooter>| {
-                if parts.title_page && parts.first.is_none() {
-                    None
-                } else {
-                    parts.first.clone().or(default)
-                }
-            };
-            doc.header = page_one(&top, doc.header.take());
-            doc.footer = bottom.as_ref().map_or(doc.footer.take(), |parts| {
-                page_one(parts, doc.footer.take())
-            });
-            doc.header_even = None;
-            doc.header_first = None;
-            doc.footer_even = None;
-            doc.footer_first = None;
-            doc.title_page = false;
-            doc.even_and_odd_headers = false;
-            doc.page_number_footers.even = false;
-            doc.page_number_footers.first = false;
+            c1_zone_collapse(paged, margins, doc, &top, bottom.as_ref(), degradations);
         }
     }
+}
+
+/// C1 keeps one header and one footer: variants report, even/first parts
+/// drop, and a suppressed first-page zone stays suppressed.
+fn c1_zone_collapse(
+    paged: &PagedDocument,
+    margins: page::MarginsPt,
+    doc: &mut Document,
+    top: &page::ZoneParts,
+    bottom: Option<&page::ZoneParts>,
+    degradations: &mut Vec<Degradation>,
+) {
+    if let Some(degradation) = page::header_footer_variant(paged, margins) {
+        degradations.push(degradation);
+    }
+    let page_one = |parts: &page::ZoneParts, default: Option<HeaderFooter>| {
+        if parts.title_page && parts.first.is_none() {
+            None
+        } else {
+            parts.first.clone().or(default)
+        }
+    };
+    doc.header = page_one(top, doc.header.take());
+    doc.footer = bottom.map_or(doc.footer.take(), |parts| {
+        page_one(parts, doc.footer.take())
+    });
+    doc.header_even = None;
+    doc.header_first = None;
+    doc.footer_even = None;
+    doc.footer_first = None;
+    doc.title_page = false;
+    doc.even_and_odd_headers = false;
+    doc.page_number_footers.even = false;
+    doc.page_number_footers.first = false;
+}
+
+/// Measure the page furniture layers for C2/C3 — `None` at C1, which keeps
+/// its literalize-furniture contract.
+fn analyze_furniture(
+    paged: &PagedDocument,
+    world: &TyportWorld,
+    margins: &page::MarginsPt,
+    compat: CompatMode,
+) -> Option<page::furniture::FurnitureMaps> {
+    (compat != CompatMode::C1).then(|| {
+        let overrides = gather_source_overrides(world);
+        page::furniture::analyze(
+            paged,
+            margins,
+            page::furniture::DeclaredFurniture {
+                foreground: overrides.page_foreground,
+                background: overrides.page_background,
+            },
+        )
+    })
+}
+
+/// Which first/even slots one zone classified as genuinely different —
+/// cloning the default part over one of those would fabricate a slot the
+/// source deliberately suppressed.
+struct ZoneSlotDiffers {
+    first: bool,
+    even: bool,
+}
+
+/// Header and footer `ZoneSlotDiffers` pairs.
+struct ZoneDiffers {
+    header: ZoneSlotDiffers,
+    footer: ZoneSlotDiffers,
+}
+
+/// Clone the default header/footer parts into the first/even slots that
+/// `title_page`/`even_and_odd_headers` just enabled — never over a slot the
+/// source left different on purpose.
+fn propagate_slot_parts(doc: &mut Document, differs: &ZoneDiffers) {
+    if doc.title_page {
+        if !differs.header.first && doc.header_first.is_none() && doc.header.is_some() {
+            doc.header_first = doc.header.clone();
+        }
+        if !differs.footer.first && doc.footer_first.is_none() && doc.footer.is_some() {
+            doc.footer_first = doc.footer.clone();
+        }
+    }
+    if doc.even_and_odd_headers {
+        if !differs.header.even && doc.header_even.is_none() && doc.header.is_some() {
+            doc.header_even = doc.header.clone();
+        }
+        if !differs.footer.even && doc.footer_even.is_none() && doc.footer.is_some() {
+            doc.footer_even = doc.footer.clone();
+        }
+    }
+}
+
+/// Plan the furniture layers' header-part slots, OR the plan's flag needs
+/// into the document, re-propagate default parts into any slots the plan
+/// enabled, then attach the measured anchors.
+fn apply_furniture_plan(
+    maps: &page::furniture::FurnitureMaps,
+    doc: &mut Document,
+    differs: &ZoneDiffers,
+    degradations: &mut Vec<Degradation>,
+) {
+    let plan = page::furniture::plan(maps, degradations);
+    doc.title_page |= plan.needs_title_page;
+    doc.even_and_odd_headers |= plan.needs_even_odd;
+    propagate_slot_parts(doc, differs);
+    page::furniture::attach(&plan, doc);
 }
 
 /// The heading level each margin zone queries, when C3 is active — read from

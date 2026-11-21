@@ -8,6 +8,7 @@ use typst_library::model::Numbering;
 
 use crate::compat::{Degradation, DegradationAction};
 
+use super::furniture::{FurnitureMaps, PageFurniture};
 use super::run_style::effective_weight;
 use super::units::pt_to_twips;
 
@@ -50,6 +51,130 @@ pub(super) fn collect_text_fragments(frame: &Frame, items: &mut Vec<TextFragment
     });
 }
 
+/// The tag-bracket kind relevant to zone-text exclusion.
+enum ZoneTag {
+    /// An `ArtifactKind::Header`/`Footer` bracket — inside it, `place`
+    /// brackets are furniture and their text is skipped.
+    MarginArtifact,
+    /// A `place` bracket inside a margin artifact.
+    Place,
+    /// Anything else.
+    Other,
+}
+
+/// Open bracket state for [`collect_fragments_skip_furniture`]: the tag
+/// stack plus the counts that decide whether text is furniture.
+#[derive(Default)]
+struct ZoneTagState {
+    stack: Vec<(typst::introspection::Location, ZoneTag)>,
+    /// Open `ArtifactKind::Header`/`Footer` brackets.
+    artifact_depth: usize,
+    /// Open `place` brackets inside a margin artifact.
+    place_depth: usize,
+}
+
+/// Collect text fragments, skipping the furniture layers listed in
+/// `furn.excluded_top` (background/foreground zones at top level) and the
+/// contents of `place` tag brackets inside header/footer artifact brackets
+/// (which are emitted as `wp:anchor` drawings instead). `place` brackets
+/// inside the body keep their historical behavior — their text still counts
+/// as zone text when it lands in a margin band.
+pub(super) fn collect_fragments_skip_furniture(
+    frame: &Frame,
+    furn: &PageFurniture,
+    items: &mut Vec<TextFragment>,
+) {
+    let mut state = ZoneTagState::default();
+    collect_fragments_at(
+        frame,
+        typst::layout::Point::zero(),
+        furn,
+        true,
+        &mut state,
+        items,
+    );
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "font sizes are small non-negative values"
+)]
+fn collect_fragments_at(
+    frame: &Frame,
+    offset: typst::layout::Point,
+    furn: &PageFurniture,
+    top_level: bool,
+    state: &mut ZoneTagState,
+    out: &mut Vec<TextFragment>,
+) {
+    for (index, (pos, item)) in frame.items().enumerate() {
+        if top_level && furn.excluded_top.iter().any(|r| r.contains(&index)) {
+            continue;
+        }
+        let absolute = offset + *pos;
+        match item {
+            FrameItem::Group(group) => {
+                collect_fragments_at(&group.frame, absolute, furn, false, state, out);
+            }
+            FrameItem::Tag(typst::introspection::Tag::Start(elem, _)) => {
+                let kind = zone_tag_kind(elem);
+                match kind {
+                    ZoneTag::MarginArtifact => state.artifact_depth += 1,
+                    ZoneTag::Place => state.place_depth += 1,
+                    ZoneTag::Other => {}
+                }
+                if let Some(location) = elem.location() {
+                    state.stack.push((location, kind));
+                }
+            }
+            FrameItem::Tag(typst::introspection::Tag::End(location, ..)) => {
+                if state.stack.last().is_some_and(|(l, _)| l == location)
+                    && let Some((_, kind)) = state.stack.pop()
+                {
+                    match kind {
+                        ZoneTag::MarginArtifact => {
+                            state.artifact_depth = state.artifact_depth.saturating_sub(1);
+                        }
+                        ZoneTag::Place => state.place_depth = state.place_depth.saturating_sub(1),
+                        ZoneTag::Other => {}
+                    }
+                }
+            }
+            FrameItem::Text(text)
+                if (state.artifact_depth == 0 || state.place_depth == 0)
+                    && !text.text.is_empty() =>
+            {
+                out.push(TextFragment {
+                    y: absolute.y.to_pt(),
+                    x: absolute.x.to_pt(),
+                    text: text.text.to_string(),
+                    size_half_pt: (text.size.to_pt() * 2.0).round().max(1.0) as u32,
+                    bold: effective_weight(&text.font) >= 600,
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Classify a `Tag::Start` element for zone-text exclusion.
+fn zone_tag_kind(elem: &typst::foundations::Content) -> ZoneTag {
+    use typst_library::pdf::{ArtifactElem, ArtifactKind};
+    if let Some(artifact) = elem.to_packed::<ArtifactElem>()
+        && matches!(
+            artifact.kind.as_option(),
+            Some(ArtifactKind::Header | ArtifactKind::Footer)
+        )
+    {
+        return ZoneTag::MarginArtifact;
+    }
+    if elem.elem().name() == "place" {
+        return ZoneTag::Place;
+    }
+    ZoneTag::Other
+}
+
 /// Compute the default Typst margin for a page in pt.
 ///
 /// Typst uses `2.5/21 * min(width, height)` as the default margin.
@@ -87,6 +212,10 @@ pub fn extract_page_settings(paged: &PagedDocument, settings: &mut PageSettings)
 pub struct MarginsPt {
     pub top: f64,
     pub bottom: f64,
+    /// Left/right are needed by the furniture zone classifier (the inner
+    /// frame sits at `(margin.left, margin.top)`).
+    pub left: f64,
+    pub right: f64,
 }
 
 impl MarginsPt {
@@ -96,6 +225,8 @@ impl MarginsPt {
         Self {
             top: f64::from(settings.margin_top) / 20.0,
             bottom: f64::from(settings.margin_bottom) / 20.0,
+            left: f64::from(settings.margin_left) / 20.0,
+            right: f64::from(settings.margin_right) / 20.0,
         }
     }
 }
@@ -170,11 +301,12 @@ fn zone_text_at(
     zone: MarginZone,
     margins: MarginsPt,
     page_index: usize,
+    furn: Option<&PageFurniture>,
 ) -> String {
     let Some(page) = paged.pages().get(page_index) else {
         return String::new();
     };
-    zone_fragments(&page.frame, zone, margins)
+    zone_fragments(&page.frame, zone, margins, furn)
         .iter()
         .map(|f| f.text.as_str())
         .collect()
@@ -182,23 +314,38 @@ fn zone_text_at(
 
 /// Extract all header/footer parts of one margin zone. `declared` is the
 /// `#set page(numbering:)` format, trusted to identify a page-number token
-/// when a group has only one page to check.
+/// when a group has only one page to check. `maps` (C2/C3 only) carries the
+/// furniture analysis: background/foreground text is excluded from the zone
+/// text and `#place` units become anchors appended to the part.
 pub fn extract_zone_parts(
     paged: &PagedDocument,
     zone: MarginZone,
     margins: MarginsPt,
     declared: Option<PageNumberFormat>,
+    maps: Option<&FurnitureMaps>,
 ) -> ZoneParts {
     let page_count = paged.pages().len();
     if page_count == 0 {
         return ZoneParts::default();
     }
+    let furn_at = |i: usize| maps.and_then(|m| m.per_page.get(i));
     let texts: Vec<String> = (0..page_count)
-        .map(|i| zone_text_at(paged, zone, margins, i))
+        .map(|i| zone_text_at(paged, zone, margins, i, furn_at(i)))
         .collect();
     let norm: Vec<String> = texts
         .iter()
-        .map(|t| normalize_zone_text_for_comparison(t))
+        .enumerate()
+        .map(|(i, t)| {
+            let mut n = normalize_zone_text_for_comparison(t);
+            if let Some(furn) = furn_at(i) {
+                let sig = super::furniture::zone_sig(furn, zone);
+                if !sig.is_empty() {
+                    n.push('\u{1F}');
+                    n.push_str(sig);
+                }
+            }
+            n
+        })
         .collect();
     if norm.iter().all(String::is_empty) {
         return ZoneParts::default();
@@ -215,12 +362,13 @@ pub fn extract_zone_parts(
                 declared,
                 0,
                 &rest_after(&texts, &indices),
+                furn_at(0),
             ),
             ..ZoneParts::default()
         };
     }
 
-    classify_zone_parts(paged, zone, margins, declared, &texts, &norm)
+    classify_zone_parts(paged, zone, margins, declared, &texts, &norm, maps)
 }
 
 /// Consecutive same-group pages for page-number verification:
@@ -260,10 +408,19 @@ fn classify_zone_parts(
     declared: Option<PageNumberFormat>,
     texts: &[String],
     norm: &[String],
+    maps: Option<&FurnitureMaps>,
 ) -> ZoneParts {
     let page_count = norm.len();
     let extract = |index: usize, rest: &[(String, u32)], declared| {
-        extract_margin_zone_on(paged, zone, margins, declared, index, rest)
+        extract_margin_zone_on(
+            paged,
+            zone,
+            margins,
+            declared,
+            index,
+            rest,
+            maps.and_then(|m| m.per_page.get(index)),
+        )
     };
     let first = &norm[0];
     if norm[1..].iter().all(|n| n == &norm[1]) {
@@ -338,12 +495,14 @@ fn extract_margin_zone_on(
     declared: Option<PageNumberFormat>,
     page_index: usize,
     rest: &[(String, u32)],
+    furn: Option<&PageFurniture>,
 ) -> Option<HeaderFooter> {
     let page = paged.pages().get(page_index)?;
     let page_width = page.frame.width().to_pt();
 
-    let fragments = zone_fragments(&page.frame, zone, margins);
-    if fragments.is_empty() {
+    let fragments = zone_fragments(&page.frame, zone, margins, furn);
+    let anchors = furn.map_or(&[][..], |f| super::furniture::zone_anchors(f, zone));
+    if fragments.is_empty() && anchors.is_empty() {
         return None;
     }
 
@@ -399,18 +558,39 @@ fn extract_margin_zone_on(
         para.alignment = Some(Alignment::Center);
     }
 
-    Some(HeaderFooter {
-        paragraphs: vec![para],
-    })
+    let mut paragraphs = Vec::new();
+    if !fragments.is_empty() {
+        paragraphs.push(para);
+    }
+    // `#place` units inside the zone become anchored drawings in this part
+    // (C2/C3) — each on its own zero-height carrier paragraph.
+    for (i, anchor) in anchors.iter().enumerate() {
+        paragraphs.push(super::furniture::anchor_paragraph(
+            anchor,
+            zone,
+            u32::try_from(i + 1).unwrap_or(u32::MAX),
+        ));
+    }
+    Some(HeaderFooter { paragraphs })
 }
 
 /// Text fragments in one page frame's margin zone, in reading (x) order.
-fn zone_fragments(frame: &Frame, zone: MarginZone, margins: MarginsPt) -> Vec<TextFragment> {
+/// `furn` (C2/C3) excludes furniture layers and `#place`-bracket items —
+/// both are emitted as anchored drawings instead of flat zone text.
+fn zone_fragments(
+    frame: &Frame,
+    zone: MarginZone,
+    margins: MarginsPt,
+    furn: Option<&PageFurniture>,
+) -> Vec<TextFragment> {
     let page_width = frame.width().to_pt();
     let page_height = frame.height().to_pt();
 
     let mut fragments = Vec::new();
-    collect_text_fragments(frame, &mut fragments);
+    match furn {
+        Some(furn) => collect_fragments_skip_furniture(frame, furn, &mut fragments),
+        None => collect_text_fragments(frame, &mut fragments),
+    }
 
     let (body_top, body_bottom) = find_body_zone(
         page_width,
@@ -757,13 +937,15 @@ pub fn page_number_format_from_declaration(pattern: &str) -> Option<PageNumberFo
 pub fn detect_page_numbering(
     paged: &PagedDocument,
     margins: MarginsPt,
+    maps: Option<&FurnitureMaps>,
 ) -> Option<PageNumberFormat> {
     if paged.pages().is_empty() {
         return None;
     }
 
     // Extract footer text from the first page
-    let first_footer = extract_footer_text_from_page(&paged.pages()[0].frame, margins)?;
+    let first_footer =
+        extract_footer_text_from_page(&paged.pages()[0].frame, margins, furn_at(maps, 0))?;
     let first_trimmed = first_footer.trim();
 
     // Try to classify the text as a page number format
@@ -771,7 +953,8 @@ pub fn detect_page_numbering(
 
     // If we have a second page, verify consecutiveness to avoid false positives
     if paged.pages().len() >= 2 {
-        let second_footer = extract_footer_text_from_page(&paged.pages()[1].frame, margins);
+        let second_footer =
+            extract_footer_text_from_page(&paged.pages()[1].frame, margins, furn_at(maps, 1));
         // Second page has no footer text — can't confirm page numbering
         let text = second_footer?;
         let second_trimmed = text.trim();
@@ -806,6 +989,7 @@ pub fn detect_page_numbering(
 pub fn detect_multi_format_page_numbering(
     paged: &PagedDocument,
     margins: MarginsPt,
+    maps: Option<&FurnitureMaps>,
 ) -> Option<PageNumberFormat> {
     let rendered = paged.pages();
     if rendered.len() < 2 {
@@ -813,7 +997,7 @@ pub fn detect_multi_format_page_numbering(
     }
     let mut last_fmt = None;
     for (index, page) in rendered.iter().enumerate() {
-        let text = extract_footer_text_from_page(&page.frame, margins)?;
+        let text = extract_footer_text_from_page(&page.frame, margins, furn_at(maps, index))?;
         let trimmed = text.trim();
         let fmt = classify_page_number(trimmed)?;
         if u64::from(page_number_value(trimmed, fmt)) != page.number {
@@ -855,6 +1039,11 @@ fn page_number_value(s: &str, fmt: PageNumberFormat) -> u32 {
     }
 }
 
+/// The page's furniture analysis from the maps, when present.
+fn furn_at(maps: Option<&FurnitureMaps>, index: usize) -> Option<&PageFurniture> {
+    maps.and_then(|m| m.per_page.get(index))
+}
+
 /// Extract margin-zone text from a single page frame (text in the top or
 /// bottom margin zone), in frame order. Returns `None` when the zone is
 /// empty.
@@ -862,12 +1051,16 @@ fn extract_zone_text_from_page(
     frame: &Frame,
     zone: MarginZone,
     margins: MarginsPt,
+    furn: Option<&PageFurniture>,
 ) -> Option<String> {
     let page_width = frame.width().to_pt();
     let page_height = frame.height().to_pt();
 
     let mut fragments = Vec::new();
-    collect_text_fragments(frame, &mut fragments);
+    match furn {
+        Some(furn) => collect_fragments_skip_furniture(frame, furn, &mut fragments),
+        None => collect_text_fragments(frame, &mut fragments),
+    }
 
     let (body_top, body_bottom) = find_body_zone(
         page_width,
@@ -898,8 +1091,12 @@ fn extract_zone_text_from_page(
 }
 
 /// Extract footer text from a single page frame (text in the bottom margin zone).
-fn extract_footer_text_from_page(frame: &Frame, margins: MarginsPt) -> Option<String> {
-    extract_zone_text_from_page(frame, MarginZone::Bottom, margins)
+fn extract_footer_text_from_page(
+    frame: &Frame,
+    margins: MarginsPt,
+    furn: Option<&PageFurniture>,
+) -> Option<String> {
+    extract_zone_text_from_page(frame, MarginZone::Bottom, margins, furn)
 }
 
 /// Normalize a margin-zone text for variant comparison: every run of ASCII
@@ -942,10 +1139,10 @@ pub fn header_footer_variant(paged: &PagedDocument, margins: MarginsPt) -> Optio
             MarginZone::Top => "header",
             MarginZone::Bottom => "footer",
         };
-        let first = extract_zone_text_from_page(&doc_pages[0].frame, zone, margins)
+        let first = extract_zone_text_from_page(&doc_pages[0].frame, zone, margins, None)
             .map(|text| normalize_zone_text_for_comparison(&text));
         for (index, page) in doc_pages.iter().enumerate().skip(1) {
-            let text = extract_zone_text_from_page(&page.frame, zone, margins)
+            let text = extract_zone_text_from_page(&page.frame, zone, margins, None)
                 .map(|text| normalize_zone_text_for_comparison(&text));
             if text != first {
                 return Some(Degradation::new(

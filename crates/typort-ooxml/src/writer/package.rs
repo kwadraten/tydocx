@@ -391,3 +391,52 @@ pub(super) fn generate_core_properties(
         })?;
     Ok(())
 }
+
+/// Write a part-local `word/_rels/<part>.xml.rels` holding only image
+/// relationships: ids restart at `rId1` (each part has its own rId
+/// namespace); the media target keeps the document-wide image number
+/// (`image_base + k + 1`) so it matches the file written to `word/media/`.
+/// Used for `footnotes.xml.rels` and `headerN.xml.rels`/`footerN.xml.rels`.
+pub(super) fn generate_part_image_rels(
+    writer: &mut Writer<&mut Vec<u8>>,
+    images: &[&ImageData],
+    image_base: usize,
+) -> io::Result<()> {
+    writer
+        .create_element("Relationships")
+        .with_attribute((
+            "xmlns",
+            "http://schemas.openxmlformats.org/package/2006/relationships",
+        ))
+        .write_inner_content(|w| {
+            let mut rel = 0_usize;
+            for (k, img) in images.iter().enumerate() {
+                let n = image_base + k + 1;
+                let ext = img.format.extension();
+                let target = format!("media/image{n}.{ext}");
+                rel += 1;
+                w.create_element("Relationship")
+                    .with_attribute(("Id", format!("rId{rel}").as_str()))
+                    .with_attribute((
+                        "Type",
+                        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                    ))
+                    .with_attribute(("Target", target.as_str()))
+                    .write_empty()?;
+                if img.svg.is_some() {
+                    rel += 1;
+                    let svg_target = format!("media/image{n}.svg");
+                    w.create_element("Relationship")
+                        .with_attribute(("Id", format!("rId{rel}").as_str()))
+                        .with_attribute((
+                            "Type",
+                            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                        ))
+                        .with_attribute(("Target", svg_target.as_str()))
+                        .write_empty()?;
+                }
+            }
+            Ok(())
+        })?;
+    Ok(())
+}

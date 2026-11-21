@@ -30,6 +30,11 @@ pub struct SourceStyleOverrides {
     pub numbering_changed: bool,
     pub margins_mirrored: bool,
     pub page_furniture: bool,
+    // Which furniture slot was declared — lets the paged-frame walk know a
+    // trailing `place` tag at the page origin can only be `page(foreground:)`
+    // content, not an in-body placement at a zero margin.
+    pub page_foreground: bool,
+    pub page_background: bool,
     // A `#show heading:` / `#show heading.where(...):` rule can consume the
     // HeadingElem and replace it with arbitrary content — losing the Heading
     // style and the outline entry.
@@ -122,6 +127,8 @@ impl SourceStyleOverrides {
         self.numbering_changed |= other.numbering_changed;
         self.margins_mirrored |= other.margins_mirrored;
         self.page_furniture |= other.page_furniture;
+        self.page_foreground |= other.page_foreground;
+        self.page_background |= other.page_background;
         self.show_heading_rule |= other.show_heading_rule;
         self.show_outline_entry_rule |= other.show_outline_entry_rule;
         self.move_call |= other.move_call;
@@ -969,6 +976,11 @@ fn parse_page_args(args: typst_syntax::ast::Args<'_>, ovr: &mut SourceStyleOverr
                 if !matches!(named.expr(), typst_syntax::ast::Expr::None(_)) =>
             {
                 ovr.page_furniture = true;
+                if named.name().get().as_str() == "foreground" {
+                    ovr.page_foreground = true;
+                } else {
+                    ovr.page_background = true;
+                }
             }
             "header-ascent" => {
                 if let typst_syntax::ast::Expr::Numeric(n) = named.expr() {

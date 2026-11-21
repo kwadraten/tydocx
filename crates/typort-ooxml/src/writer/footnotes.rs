@@ -9,7 +9,7 @@ use super::package::write_value_element;
 use super::run::{write_inline, write_text_run};
 use crate::document::{
     AnchoredContent, BlockElement, CellContent, Document, Footnote, FootnoteEntryStyle,
-    FootnoteFormat, ImageData, InlineElement, Paragraph, Table,
+    FootnoteFormat, InlineElement, Paragraph, Table,
 };
 
 /// Write `w:footnotePr` element with optional circled-number format and
@@ -77,7 +77,7 @@ pub(super) fn write_footnote_ref<W: Write>(writer: &mut Writer<W>, id: u32) -> i
 /// `footnote_image_base` is the number of body images: footnote images are
 /// numbered after them in the document-wide media numbering, while their
 /// relationships live in `word/_rels/footnotes.xml.rels` (written by
-/// [`generate_footnote_rels`]) with ids restarting at `rId1`.
+/// [`generate_part_image_rels`]) with ids restarting at `rId1`.
 pub(super) fn generate_footnotes_xml(
     writer: &mut Writer<&mut Vec<u8>>,
     doc: &Document,
@@ -128,7 +128,7 @@ pub(super) fn generate_footnotes_xml(
         )?;
 
         // Actual footnotes. The image ordinal counts across all footnotes:
-        // `generate_footnote_rels` enumerates footnote images globally
+        // `generate_part_image_rels` enumerates footnote images globally
         // (rId{k+1}), so the ordinal must not reset per footnote or a later
         // footnote's drawing would embed the first image again.
         let mut image_ordinal = 0_usize;
@@ -272,53 +272,6 @@ fn block_has_math(block: &BlockElement) -> bool {
     }
 }
 
-/// Write `word/_rels/footnotes.xml.rels`: the relationships for footnote
-/// images. Relationship ids restart at `rId1` (this part has its own
-/// namespace); the media target keeps the document-wide image number so it
-/// matches the file written to `word/media/`.
-pub(super) fn generate_footnote_rels(
-    writer: &mut Writer<&mut Vec<u8>>,
-    footnote_images: &[&ImageData],
-    footnote_image_base: usize,
-) -> io::Result<()> {
-    writer
-        .create_element("Relationships")
-        .with_attribute((
-            "xmlns",
-            "http://schemas.openxmlformats.org/package/2006/relationships",
-        ))
-        .write_inner_content(|w| {
-            let mut rel = 0_usize;
-            for (k, img) in footnote_images.iter().enumerate() {
-                let n = footnote_image_base + k + 1;
-                let ext = img.format.extension();
-                let target = format!("media/image{n}.{ext}");
-                rel += 1;
-                w.create_element("Relationship")
-                    .with_attribute(("Id", format!("rId{rel}").as_str()))
-                    .with_attribute((
-                        "Type",
-                        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
-                    ))
-                    .with_attribute(("Target", target.as_str()))
-                    .write_empty()?;
-                if img.svg.is_some() {
-                    rel += 1;
-                    let svg_target = format!("media/image{n}.svg");
-                    w.create_element("Relationship")
-                        .with_attribute(("Id", format!("rId{rel}").as_str()))
-                        .with_attribute((
-                            "Type",
-                            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
-                        ))
-                        .with_attribute(("Target", svg_target.as_str()))
-                        .write_empty()?;
-                }
-            }
-            Ok(())
-        })?;
-    Ok(())
-}
 fn write_separator_footnote<W: Write>(
     writer: &mut Writer<W>,
     id: &str,
