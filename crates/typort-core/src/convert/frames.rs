@@ -37,6 +37,62 @@ fn visit_frame_items_at<'a>(
     }
 }
 
+/// Union bounding box of frame items, in page points.
+///
+/// Shared by `#place` measurement and page-furniture extraction: both walk
+/// frame items between tag brackets and need the painted extent of whatever
+/// content rendered there.
+#[derive(Default)]
+pub(super) struct ItemBounds {
+    min: Option<Point>,
+    max: Option<Point>,
+}
+
+impl ItemBounds {
+    pub(super) fn add(&mut self, position: Point, item: &FrameItem) {
+        match item {
+            FrameItem::Group(group) => {
+                self.extend(position);
+                self.extend(position + Point::new(group.frame.size().x, group.frame.size().y));
+            }
+            FrameItem::Text(text) => {
+                // `bbox` is frame-oriented (baseline origin, y-down after the
+                // item's own coordinate flip), so `position + min` is the
+                // ink's top-left.
+                let rect = text.bbox();
+                self.extend(position + rect.min);
+                self.extend(position + rect.max);
+            }
+            FrameItem::Shape(shape, _) => {
+                let rect = shape.bbox(true);
+                self.extend(position + rect.min);
+                self.extend(position + rect.max);
+            }
+            FrameItem::Image(_, size, _) => {
+                self.extend(position);
+                self.extend(position + Point::new(size.x, size.y));
+            }
+            FrameItem::Link(..) | FrameItem::Tag(_) => {}
+        }
+    }
+
+    fn extend(&mut self, point: Point) {
+        self.min = Some(self.min.map_or(point, |min| min.min(point)));
+        self.max = Some(self.max.map_or(point, |max| max.max(point)));
+    }
+
+    /// `(top_left, size)` in pt, when the union has positive area.
+    pub(super) fn rect(&self) -> Option<(f64, f64, f64, f64)> {
+        let (min, max) = (self.min?, self.max?);
+        let width = max.x - min.x;
+        let height = max.y - min.y;
+        if width <= typst::layout::Abs::zero() || height <= typst::layout::Abs::zero() {
+            return None;
+        }
+        Some((min.x.to_pt(), min.y.to_pt(), width.to_pt(), height.to_pt()))
+    }
+}
+
 /// Whether a frame group is a footnote entry: it has a parent (the
 /// marker location) and directly contains a `Tag::Start("entry")`.
 /// (Outline entries carry an `"entry"` tag too, but their groups have

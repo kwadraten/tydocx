@@ -102,11 +102,13 @@ pub fn chain_overrides(pairs: &[Pair<'_>]) -> SourceStyleOverrides {
         {
             numberings.push(numbering);
         }
-        if !ovr.page_furniture
-            && (styles.get_cloned(PageElem::foreground).is_some()
-                || styles.get_cloned(PageElem::background).is_some())
-        {
+        if styles.get_cloned(PageElem::foreground).is_some() {
             ovr.page_furniture = true;
+            ovr.page_foreground = true;
+        }
+        if styles.get_cloned(PageElem::background).is_some() {
+            ovr.page_furniture = true;
+            ovr.page_background = true;
         }
         text_props(styles, ovr, defaults);
         par_props(styles, ovr, defaults);

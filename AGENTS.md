@@ -84,7 +84,7 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   responsibility under `convert/` (`block`, `inline_walk`, `headings`, `tables`,
   `lists`, `source`, `smallcaps`, `postprocess`, and `dom`); paged-style
   extraction is split under `convert/page/` (`units`, `style`, `source_ast`,
-  `hanging_indent`, `reachable`, `margin`, `run_style`, and `language`);
+  `hanging_indent`, `reachable`, `margin`, `furniture`, `run_style`, and `language`);
   `convert/text_norm.rs` holds the shared CJK-space normalisation; and the
   OOXML writer is split by emitted part under `typort-ooxml/src/writer/`. Each
   `mod.rs` is a re-exporting facade. Put a new converter, paged-style

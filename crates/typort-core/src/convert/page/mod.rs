@@ -5,6 +5,9 @@
 //! those values onto the document model.
 
 mod body_size;
+/// Page furniture (`background:`/`foreground:`/`header:`/`footer:` `#place`
+/// units, `page(fill:)`) → anchored drawings in header/footer parts.
+pub mod furniture;
 mod hanging_indent;
 mod language;
 mod margin;

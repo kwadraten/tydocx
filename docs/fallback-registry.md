@@ -216,14 +216,26 @@ bodies — now comes from `StyleChain`s or element identity.
   emitted (each `IrSection` would carry its zone parts).
 
 ### Page `foreground:`/`background:` and `page(fill:)`
-- **Current:** `page_furniture` is detected from the chain/AST; margin-zone
-  content reaches the header part but is not anchored; positioned
-  foreground outside the margin zone and `page(fill:)` are dropped. C1
-  literalizes the furniture text and reports `page-foreground`; C2/C3 drop
-  it silently.
-- **C2 target:** `wp:anchor` (not `wp:inline`) inside the header part,
-  `positionH`/`positionV` relative to page, `txbxContent` carrying the
-  text.
+- **Current:** at C2/C3 the page-frame furniture zones (background before
+  the header bracket, header/footer `ArtifactElem` brackets, foreground at
+  the page origin after the body frame) are measured per page into
+  `wp:anchor` drawings inside the header part — `positionH`/`positionV`
+  `relativeFrom="page"`, `wps:txbx`/`txbxContent` keeping the text
+  editable, `pic:pic` for images, `a:solidFill` shapes for solid rects and
+  a solid `page(fill:)` (full-page extent, `behindDoc="1"`). A `#place`
+  painted inside the header/footer zones anchors into that zone's own
+  part instead of the body's overlay pass. The layer's page-variation
+  shape picks the OOXML slot: uniform → default, first-vs-rest → `first` +
+  `w:titlePg`, odd/even → `even` + `w:evenAndOddHeaders`; per-physical-page
+  variation Word's three slots cannot express keeps page 1's layer on
+  `first` and reports `page-foreground` (approximated). Non-solid fills,
+  transformed/clipped groups (the content survives, the transform does
+  not), and item kinds with no anchored representation report
+  `page-foreground` remainders. C1 literalizes the furniture text as
+  before.
+- **Remaining gap:** mid-document per-physical-page furniture variation
+  has no OOXML slot; a true fix would need per-section furniture parts
+  plus `w:headerReference` sets per section.
 
 ### Absolute (non-float) `#place`
 - **Current:** a measured non-float place lowers to a `wp:anchor` with
@@ -354,9 +366,8 @@ bodies — now comes from `StyleChain`s or element identity.
   them: `enum(reversed:)` (forward-numbered), `outline(target:)` /
   `outline(indent:)` (title-only / default indent), custom
   `footnote(numbering:)` (falls back to the active `numFmt`), two-sided
-  margins, page foreground/background/fill, bare shapes, `figure`
-  explicit placement, `image(fit:/alt:)`. See `docs/spec-ecma376.md` for
-  the per-feature rows.
+  margins, bare shapes, `figure` explicit placement, `image(fit:/alt:)`.
+  See `docs/spec-ecma376.md` for the per-feature rows.
 
 ### Dual `CompatMode` / `Degradation` definitions
 - **What:** `typort-core` (`compat.rs`) and `typort-ir` (`mode.rs`,

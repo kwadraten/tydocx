@@ -21,6 +21,7 @@ mod lists;
 mod math;
 mod misc;
 mod numbering;
+mod page_furniture;
 mod placement;
 mod recovery;
 mod sections;

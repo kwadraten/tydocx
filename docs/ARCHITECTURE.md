@@ -74,9 +74,10 @@ semantic HTML representation:
   derived from the main one, and the fragment's tags carry the synthesized
   element.
 - **Page-level facts don't exist before pagination.** Page size, margins, columns,
-  headers/footers (which live in the page-margin zones), page breaks, and page
-  numbering only come into being once the document is laid out — i.e. only from
-  Paged. The realize path still takes these from the companion `PagedDocument`
+  headers/footers (which live in the page-margin zones), foreground/background
+  layers and page fill (which only exist in the final page frame's paint
+  order), page breaks, and page numbering only come into being once the
+  document is laid out — i.e. only from Paged. The realize path still takes these from the companion `PagedDocument`
   (route (b)), as an explicit patch step (`convert/realize/patch.rs`).
 - **Math is MathML, not OMML.** The HTML target (typst 0.15) renders equations to
   **MathML** `<math>` elements — semantic, but not what Word edits. Both paths
@@ -207,7 +208,7 @@ they exercise that public API as integration tests.
 | `writer/paragraph.rs`, `writer/run.rs`, `writer/table.rs` | WordprocessingML paragraphs, inline runs, and tables. |
 | `writer/numbering.rs`, `writer/footnotes.rs`, `writer/fields.rs` | Numbering definitions, footnote parts/references, and Word fields/bookmarks. |
 | `writer/math.rs`, `writer/image.rs`, `writer/citation.rs` | OMML passthrough, DrawingML images/media inventory, and citation/bibliography XML. |
-| `writer/header_footer.rs` | Header and footer parts, including automatic page numbering. |
+| `writer/header_footer.rs` | Header and footer parts, including automatic page numbering and anchored furniture drawings (`wp:anchor` text boxes, pictures, solid-fill shapes) with part-local image relationships. |
 
 ### typort-core internals
 
@@ -233,7 +234,8 @@ they exercise that public API as integration tests.
 | `convert/page/mod.rs` | Paged-style facade: declares responsibility modules and re-exports their caller-facing API. |
 | `convert/page/units.rs`, `convert/page/style.rs` | Word-unit conversion and document-style detection from rendered frames. |
 | `convert/page/source_ast.rs`, `convert/page/hanging_indent.rs`, `convert/page/reachable.rs` | Authoritative source-AST `set`-rule parsing (including scoped hanging indents) and reachable local-source collection. |
-| `convert/page/margin.rs` | Page settings, body/margin zones, headers, footers, and page numbering from Paged geometry. |
+| `convert/page/margin.rs` | Page settings, body/margin zones, headers, footers, and page numbering from Paged geometry. Furniture-aware: artifact/`#place` bracket content is excluded from the zone's literal text so it can anchor instead of duplicating. |
+| `convert/page/furniture.rs` | Page `foreground:`/`background:`/`page(fill:)` and header/footer-zone `#place` → `wp:anchor` drawings inside header/footer parts at C2/C3. Zones are classified off the page frame's paint order and `ArtifactElem`/`Tag` brackets; each furniture unit is measured into an `AnchoredFloat` (`relativeFrom="page"`, `wps:txbx` text, `pic:pic` images, `a:solidFill` rects and full-page solid fills). The layer's page-variation signature picks the OOXML slot — uniform → default, first-vs-rest → `first` + `w:titlePg`, odd/even → `even` + `w:evenAndOddHeaders`; per-physical-page variation and unsupported unit content (non-solid fills, transforms/clips) report `page-foreground`. C1 keeps the literalized-text contract. |
 | `convert/page/run_style.rs`, `convert/page/language.rs` | Per-run rendered-style overrides, measured per-level heading sizes, redundant heading-property suppression, BCP-47 helpers, and localized CJK font names. |
 | `convert/text_norm.rs` | CJK-space normalisation shared by the HTML walk (the recovery-side normalisers went with `convert/recovery/`). |
 | `convert/coalesce.rs` | Final pass: merges same-line paragraphs, coalesces adjacent runs with identical effective `rPr`, and folds whitespace-only runs. |

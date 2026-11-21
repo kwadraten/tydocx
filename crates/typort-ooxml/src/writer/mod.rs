@@ -25,13 +25,18 @@ use citation::{
     generate_custom_xml_item_props, generate_custom_xml_rels, generate_custom_xml_sources,
 };
 use document::generate_document_xml;
-use footnotes::{footnotes_have_math, generate_footnote_rels, generate_footnotes_xml};
-use header_footer::{generate_footer_xml, generate_header_xml, generate_page_number_footer_xml};
-use image::{body_has_drawing, collect_footnote_images, collect_images, footnotes_have_drawing};
+use footnotes::{footnotes_have_math, generate_footnotes_xml};
+use header_footer::{
+    PartCtx, generate_footer_xml, generate_header_xml, generate_page_number_footer_xml,
+};
+use image::{
+    body_has_drawing, collect_footnote_images, collect_header_footer_images, collect_images,
+    footnotes_have_drawing,
+};
 use numbering::generate_numbering_xml;
 use package::{
-    generate_content_types, generate_core_properties, generate_document_rels, generate_rels,
-    generate_settings, xml_part,
+    generate_content_types, generate_core_properties, generate_document_rels,
+    generate_part_image_rels, generate_rels, generate_settings, xml_part,
 };
 
 /// Tracks which optional document parts are present, used for rId assignment
@@ -74,6 +79,14 @@ impl DocParts {
         Self { relationships }
     }
 
+    /// An empty parts table for a header/footer-part-local `WriteCtx` — its
+    /// image relationships restart at `rId1` against the part's own `.rels`.
+    fn empty() -> Self {
+        Self {
+            relationships: Vec::new(),
+        }
+    }
+
     fn has(&self, kind: RelKind) -> bool {
         self.relationships.contains(&kind)
     }
@@ -112,9 +125,12 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     let parts = DocParts::new(doc);
     let images = collect_images(doc);
     let footnote_images = collect_footnote_images(doc);
+    let hf_images = collect_header_footer_images(doc);
+    let hf_image_count: usize = hf_images.iter().map(Vec::len).sum();
     // Footnote images are numbered after the body images in the
-    // document-wide media numbering.
-    let footnote_image_base = images.len() - footnote_images.len();
+    // document-wide media numbering; header/footer-part images come last.
+    let footnote_image_base = images.len() - footnote_images.len() - hf_image_count;
+    let hf_image_base = images.len() - hf_image_count;
 
     // Running image/citation ids are shared across document.xml and
     // footnotes.xml, so they never restart per part.
@@ -179,7 +195,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
         if !footnote_images.is_empty() {
             zip.start_file("word/_rels/footnotes.xml.rels", options)?;
             zip.write_all(&xml_part(|w| {
-                generate_footnote_rels(w, &footnote_images, footnote_image_base)
+                generate_part_image_rels(w, &footnote_images, footnote_image_base)
             })?)?;
         }
     }
@@ -189,7 +205,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
         zip.write_all(&xml_part(|w| generate_numbering_xml(w, doc))?)?;
     }
 
-    write_header_footer_parts(&mut zip, doc, options)?;
+    write_header_footer_parts(&mut zip, doc, options, &ctx, &hf_images, hf_image_base)?;
 
     // Write image files to word/media/
     for (idx, img) in images.iter().enumerate() {
@@ -231,35 +247,70 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
 
 /// Write `word/headerN.xml`/`word/footerN.xml` — slot 1 = `w:type="default"`,
 /// 2 = `w:type="even"`, 3 = `w:type="first"`. A generated PAGE-field footer
-/// wins over authored content in its slot.
+/// wins over authored content in its slot. `hf_images` holds each part's
+/// images in the same order; a part with images also gets its own
+/// `word/_rels/<part>.xml.rels` mapping its local `rId`s onto the
+/// document-wide media numbering (`hf_image_base`).
 fn write_header_footer_parts<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     doc: &Document,
     options: SimpleFileOptions,
+    ctx: &WriteCtx,
+    hf_images: &[Vec<&ImageData>],
+    hf_image_base: usize,
 ) -> Result<(), Box<dyn Error>> {
-    for (slot, content) in [
+    let mut media_offset = hf_image_base;
+    for (i, (slot, content)) in [
         (1_u8, &doc.header),
         (2, &doc.header_even),
         (3, &doc.header_first),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let part_images = hf_images.get(i).map_or(&[][..], Vec::as_slice);
         if let Some(header) = content {
+            let part = PartCtx::new(part_images.to_vec());
             zip.start_file(format!("word/header{slot}.xml"), options)?;
-            zip.write_all(&xml_part(|w| generate_header_xml(w, header, &doc.style))?)?;
+            zip.write_all(&xml_part(|w| {
+                generate_header_xml(w, header, &doc.style, &part.ctx(ctx))
+            })?)?;
+            if !part_images.is_empty() {
+                zip.start_file(format!("word/_rels/header{slot}.xml.rels"), options)?;
+                zip.write_all(&xml_part(|w| {
+                    generate_part_image_rels(w, part_images, media_offset)
+                })?)?;
+            }
         }
+        media_offset += part_images.len();
     }
 
-    for (slot, content, generated) in [
+    for (i, (slot, content, generated)) in [
         (1_u8, &doc.footer, doc.page_number_footers.default),
         (2, &doc.footer_even, doc.page_number_footers.even),
         (3, &doc.footer_first, doc.page_number_footers.first),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let part_images = hf_images.get(i + 3).map_or(&[][..], Vec::as_slice);
         if generated {
             zip.start_file(format!("word/footer{slot}.xml"), options)?;
             zip.write_all(&xml_part(generate_page_number_footer_xml)?)?;
         } else if let Some(footer) = content {
+            let part = PartCtx::new(part_images.to_vec());
             zip.start_file(format!("word/footer{slot}.xml"), options)?;
-            zip.write_all(&xml_part(|w| generate_footer_xml(w, footer, &doc.style))?)?;
+            zip.write_all(&xml_part(|w| {
+                generate_footer_xml(w, footer, &doc.style, &part.ctx(ctx))
+            })?)?;
+            if !part_images.is_empty() {
+                zip.start_file(format!("word/_rels/footer{slot}.xml.rels"), options)?;
+                zip.write_all(&xml_part(|w| {
+                    generate_part_image_rels(w, part_images, media_offset)
+                })?)?;
+            }
         }
+        media_offset += part_images.len();
     }
     Ok(())
 }
