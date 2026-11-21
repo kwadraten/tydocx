@@ -13,8 +13,8 @@ version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Universal Typst to Word (.docx) converter"
-repository = "https://github.com/kwadraten/typort"
-homepage = "https://github.com/kwadraten/typort"
+repository = "https://github.com/kwadraten/tydocx"
+homepage = "https://github.com/kwadraten/tydocx"
 
 [workspace.dependencies]
 # Typst ecosystem

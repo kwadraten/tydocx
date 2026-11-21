@@ -4,13 +4,13 @@ Guidance for working in this repository. This is the authoritative rule source �
 when README, code comments, or memory disagree with this file, this file wins, and
 the disagreement should be fixed.
 
-typort is a **universal Typst → Word (`.docx`) converter**. Any valid `.typ`
+tydocx is a **universal Typst → Word (`.docx`) converter**. Any valid `.typ`
 should convert to an editable `.docx`. For how it works, read
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) first.
 
 ## Philosophy (the rules that decide design)
 
-1. **Universal, not genre-specific.** typort converts *any* `.typ`, in *any*
+1. **Universal, not genre-specific.** tydocx converts *any* `.typ`, in *any*
    language. Never hardcode assumptions about a document's genre or language —
    no "this is a Chinese social-science paper" logic, no matching natural-language
    keywords (`参考文献`, `表`, `图`, `References`, `Abstract`, …) to drive behavior.
@@ -43,7 +43,7 @@ should convert to an editable `.docx`. For how it works, read
 
 ## Architecture in one paragraph
 
-typort compiles the same source to **realize pairs** (`typst-realize`,
+tydocx compiles the same source to **realize pairs** (`typst-realize`,
 `Target::Paged`: element identity + document order + the `StyleChain` that
 applies to each element) *and* a companion **`PagedDocument`** (footnote entry
 bodies, image display sizes, page-level facts the pairs cannot carry). The
@@ -171,7 +171,7 @@ the *approach* is reused, not re-introduced:
 1. Bibliography hanging indent no longer string-matches `参考文献` / `References`
    in `apply_paragraph_formatting`; it is driven by the semantic
    `doc-bibliography` role during the HTML walk (a hand-written `= 参考文献`
-   heading is just text to Typst, so typort treats it as text).
+   heading is just text to Typst, so tydocx treats it as text).
 2. Caption skipping no longer matches `表 ` / `图 ` / `Table ` / `Figure ` — the
    old recovery dedup compared semantic emitted text, and with `convert/recovery/`
    deleted (step 4) each caption is simply emitted once by the element's own walk.
@@ -185,7 +185,7 @@ a regression of this rule — fix it the same way.
 
 ### Issue tracker
 
-Issues live in GitHub Issues for `kwadraten/typort` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues for `kwadraten/tydocx` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

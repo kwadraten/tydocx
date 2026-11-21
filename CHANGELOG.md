@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to typort are documented here. The format follows
+All notable changes to tydocx are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
@@ -14,7 +14,7 @@ All notable changes to typort are documented here. The format follows
 
 Baseline moved from typst 0.14.2 to **typst 0.15.1**. HTML export in 0.15 emits
 MathML equations, groups paragraphs differently, and embeds every image as a
-data URL, so the semantic skeleton typort reads is materially better than
+data URL, so the semantic skeleton tydocx reads is materially better than
 before. The 0.14 line is no longer supported.
 
 ### Fixed
@@ -74,7 +74,7 @@ before. The 0.14 line is no longer supported.
 
 ### Changed
 
-- Journal presets are no longer distributed with typort. `--preset <name>` still
+- Journal presets are no longer distributed with tydocx. `--preset <name>` still
   loads a user-supplied `presets/<name>.toml` from next to the executable or the
   working directory.
 - Requires typst 0.15.1 crates. Documents that depend on 0.14-only behaviour may
@@ -99,7 +99,7 @@ before. The 0.14 line is no longer supported.
   breaks, headers & footers, page numbering, columns, TOC, figure captions, CJK
   typography, document metadata, `@preview` packages.
 
-[Unreleased]: https://github.com/kwadraten/typort/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kwadraten/tydocx/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/dianzuan/typort/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/dianzuan/typort/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/dianzuan/typort/releases/tag/v0.1.0

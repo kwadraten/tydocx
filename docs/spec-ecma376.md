@@ -1,6 +1,6 @@
 # ECMA-376 feature map
 
-How typort expresses each Typst construct in Office Open XML (ECMA-376), per
+How tydocx expresses each Typst construct in Office Open XML (ECMA-376), per
 compatibility level. Every claim here is verified against the implementation
 (`typort-core/src/convert/realize/`, `typort-ir/src/lower.rs`,
 `typort-ooxml/src/writer/`) and the test suite; where behavior differs from the

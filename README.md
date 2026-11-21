@@ -1,4 +1,4 @@
-# typort
+# tydocx
 
 [中文](README.zh-CN.md)
 
@@ -23,7 +23,7 @@ are no sidecar presets.
 
 ## What it does
 
-typort compiles your Typst document and generates a Word file directly — no intermediate PDF, no Pandoc, no template required.
+tydocx compiles your Typst document and generates a Word file directly — no intermediate PDF, no Pandoc, no template required.
 
 ```mermaid
 flowchart TD
@@ -67,7 +67,7 @@ flowchart TD
 
 ## How it works
 
-typort is a real DOCX compiler backend, not a format converter. Compilation realizes the document into `typst-realize` `(Content, StyleChain)` pairs: every element with the style chain that applies to it (plus a companion Paged compile for geometry the pairs cannot carry). Styles are computed from the `StyleChain`, never inferred back from rendered glyphs. Layout content (`#align`, `#place`, `#grid`, …) is positioned naturally while walking the Content tree — no geometric recovery afterwards.
+tydocx is a real DOCX compiler backend, not a format converter. Compilation realizes the document into `typst-realize` `(Content, StyleChain)` pairs: every element with the style chain that applies to it (plus a companion Paged compile for geometry the pairs cannot carry). Styles are computed from the `StyleChain`, never inferred back from rendered glyphs. Layout content (`#align`, `#place`, `#grid`, …) is positioned naturally while walking the Content tree — no geometric recovery afterwards.
 
 The pairs lower into an owned **Styled Semantic IR** (plain data, no lifetimes), and a pure lowering turns the IR into WordprocessingML, OMML for math, and DrawingML for vector graphics, packaged as a `.docx`. Nothing is hardcoded for any particular document. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design, [`docs/spec-ecma376.md`](docs/spec-ecma376.md) for how each Typst feature maps to ECMA-376 at the three compatibility levels, and [`docs/fallback-registry.md`](docs/fallback-registry.md) for the live gaps (the legacy tag-walker path is kept as an explicit fallback and equivalence baseline).
 

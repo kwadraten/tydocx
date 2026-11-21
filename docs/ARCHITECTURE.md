@@ -1,6 +1,6 @@
-# typort Architecture
+# tydocx Architecture
 
-This document explains how typort turns a Typst document into an editable Word
+This document explains how tydocx turns a Typst document into an editable Word
 file. It is written for newcomers to the codebase. For build and contribution
 rules, see [`AGENTS.md`](../AGENTS.md) in the repository root.
 
@@ -20,13 +20,13 @@ document *is***.
 
 A naive converter renders Typst to pages (or PDF) and reconstructs Word from the
 geometry. That path is lossy — headings become bold text, footnotes become
-page-bottom paragraphs, cross-references break. typort exists to avoid exactly
+page-bottom paragraphs, cross-references break. tydocx exists to avoid exactly
 that. (See the competitor analysis in the project notes: PDF-intermediate tools
 are fundamentally lossy.)
 
 ## The core idea: read the document from two representations, plus narrow source-AST exceptions
 
-typort compiles the **same source** more than once, because no single
+tydocx compiles the **same source** more than once, because no single
 representation carries everything Word needs. The primary sources, in order
 of authority:
 
@@ -104,7 +104,7 @@ semantic HTML representation:
 The rendered document has lost the semantics. A heading is just large bold
 glyphs; a footnote is just text near the bottom of a page; a table is just lines
 and text boxes. Building Word from geometry alone is the lossy PDF→Word path we
-are explicitly avoiding. The realize pairs are what let typort emit **native** Word headings,
+are explicitly avoiding. The realize pairs are what let tydocx emit **native** Word headings,
 footnotes, and cross-references.
 
 ### Why the source AST still exists (narrowly)
@@ -453,14 +453,14 @@ rather than individual features:
   `libreoffice-math` component, so it imports OMML as nothing — `m:*`
   classes are unobservable on reopen and exempted as an oracle
   limitation.
-- **Preservation:** `preserve_inert_constructs` pins that constructs typort
+- **Preservation:** `preserve_inert_constructs` pins that constructs tydocx
   emits but does not further model (HYPERLINK `w:fldSimple`, heading
   bookmarks + REF fields, footnote references) survive a save + reopen.
 
 ## The retired seam: `convert/recovery/` (deleted)
 
 The legacy path had a recovery layer that did, in miniature, the very
-PDF→Word inference typort set out to avoid — because some content
+PDF→Word inference tydocx set out to avoid — because some content
 (`#align(center)`, `#place`, grids) reached the HTML-based model *only* as
 geometry. `recovery/mod.rs::recover_missing_content` orchestrated it:
 `lines.rs` extracted every rendered text line with its position,
@@ -491,7 +491,7 @@ fixture-based regression test for the specific case.**
 
 ## Language neutrality (how it stays universal)
 
-typort's stated goal is a **universal** Typst→Word converter — it must not bake
+tydocx's stated goal is a **universal** Typst→Word converter — it must not bake
 in assumptions about a document's language or genre. Earlier versions did, in
 three places; all now derive from semantics instead, and they stand as the
 pattern to follow:
