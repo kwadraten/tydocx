@@ -780,6 +780,7 @@ fn image_data(image: &Image, size: Size) -> Option<ImageData> {
         width_emu: w_emu,
         height_emu: h_emu,
         src_rect: None,
+        alt: image.alt().map(str::to_string),
     };
     match image.kind() {
         ImageKind::Raster(raster) => {

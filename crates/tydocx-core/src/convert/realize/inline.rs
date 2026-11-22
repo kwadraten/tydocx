@@ -12,7 +12,7 @@ use tydocx_ir::{
 use tydocx_ooxml::document::Alignment;
 use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
-use typst_library::foundations::{Content, ContextElem, Packed, Smart, StyleChain};
+use typst_library::foundations::{Content, ContextElem, Packed, SequenceElem, Smart, StyleChain};
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::{
     Abs, AlignElem, BlockElem, BoxElem, HAlignment, HElem, HideElem, PadElem, Spacing,
@@ -20,7 +20,7 @@ use typst_library::layout::{
 use typst_library::math::EquationElem;
 use typst_library::model::{
     CiteElem, CiteGroup, Destination, FootnoteBody, FootnoteElem, LinkElem, LinkTarget, Numbering,
-    ParElem, RefElem, RefForm,
+    ParElem, ParbreakElem, RefElem, RefForm,
 };
 use typst_library::routines::Pair;
 use typst_library::text::{
@@ -52,6 +52,9 @@ pub struct InlineCtx<'a> {
     pub prev_char: Option<char>,
     pub label_map: &'a HashMap<Location, String>,
     pub bib_map: &'a HashMap<Location, String>,
+    /// Cite-group source span → entry bookmark, resolved via `Works` (the
+    /// rendered citation's entry link is layout-time content the pairs lack).
+    pub cite_span_map: &'a HashMap<Span, String>,
     pub footnote_markers: &'a mut Vec<FootnoteMarker>,
     pub degradations: &'a mut Vec<Degradation>,
     pub source: Option<&'a Source>,
@@ -143,7 +146,7 @@ fn collect_fragment_inlines(
         }
         if let Some(equation) = content.to_packed::<EquationElem>() {
             if !equation.block.get(styles) {
-                let omml = tydocx_math::equation_to_omml(content);
+                let omml = super::equation_omml_ir(content, ctx.degradations);
                 out.push(IrInline::Math { omml });
                 ctx.prev_char = Some('\u{FFFC}');
             }
@@ -714,6 +717,7 @@ fn handle_tag_start(
             prev_char: None,
             label_map: ctx.label_map,
             bib_map: ctx.bib_map,
+            cite_span_map: ctx.cite_span_map,
             footnote_markers: &mut *ctx.footnote_markers,
             degradations: &mut *ctx.degradations,
             source: ctx.source,
@@ -723,17 +727,37 @@ fn handle_tag_start(
             layouter_index: ctx.layouter_index,
             scoped_par: None,
         };
-        if let FootnoteBody::Content(body) = &fn_elem.body
-            && let Ok(inlines) = collect_inlines(body, styles, engine, locator, &mut body_ctx)
-            && !inlines.is_empty()
-        {
-            ctx.footnote_bodies.insert(
-                location,
-                vec![IrParagraph {
+        if let FootnoteBody::Content(body) = &fn_elem.body {
+            // Split on parbreak children so a multi-paragraph footnote body
+            // keeps its paragraphs (each maps to its own `w:p` downstream).
+            let mut paragraphs: Vec<IrParagraph> = Vec::new();
+            let mut inlines = Vec::new();
+            for child in body
+                .to_packed::<SequenceElem>()
+                .map_or_else(|| vec![body.clone()], |seq| seq.children.clone())
+            {
+                if child.is::<ParbreakElem>() {
+                    if !inlines.is_empty() {
+                        paragraphs.push(IrParagraph {
+                            inlines: std::mem::take(&mut inlines),
+                            ..IrParagraph::default()
+                        });
+                    }
+                } else if let Ok(mut child_inlines) =
+                    collect_inlines(&child, styles, engine, locator, &mut body_ctx)
+                {
+                    inlines.append(&mut child_inlines);
+                }
+            }
+            if !inlines.is_empty() {
+                paragraphs.push(IrParagraph {
                     inlines,
                     ..IrParagraph::default()
-                }],
-            );
+                });
+            }
+            if !paragraphs.is_empty() {
+                ctx.footnote_bodies.insert(location, paragraphs);
+            }
         }
         out.push(IrInline::FootnoteMarker {
             ordinal: u32::try_from(ctx.footnote_markers.len()).unwrap_or(u32::MAX),
@@ -747,11 +771,14 @@ fn handle_tag_start(
         if !ctx.label_map.values().any(|label| label == &target_label) {
             let end = find_end(pairs, i + 1, location);
             let rendered = marker_text_in(&pairs[i + 1..end]);
+            let target = ctx.cite_span_map.get(&inner.span()).cloned().or_else(|| {
+                bib_link_in(&pairs[i + 1..end]).and_then(|loc| ctx.bib_map.get(&loc).cloned())
+            });
             ctx.prev_char = rendered.chars().next_back().or(ctx.prev_char);
             out.push(IrInline::Cite {
                 keys: vec![target_label],
                 rendered,
-                target: None,
+                target,
             });
             return end + 1;
         }
@@ -772,8 +799,10 @@ fn handle_tag_start(
             .map(|cite| cite.key.resolve().to_string())
             .collect();
         let rendered = next_marker_text(pairs, i + 1).unwrap_or_default();
-        let target =
-            link_location_after(pairs, i + 1).and_then(|loc| ctx.bib_map.get(&loc).cloned());
+        let end = find_end(pairs, i + 1, location);
+        let target = ctx.cite_span_map.get(&inner.span()).cloned().or_else(|| {
+            bib_link_in(&pairs[i + 1..end]).and_then(|loc| ctx.bib_map.get(&loc).cloned())
+        });
         ctx.prev_char = rendered.chars().next_back().or(ctx.prev_char);
         out.push(IrInline::Cite {
             keys,
@@ -784,7 +813,7 @@ fn handle_tag_start(
     }
     if let Some(equation) = inner.to_packed::<EquationElem>() {
         if !equation.block.get(styles) || ctx.block_math_as_inline {
-            let omml = tydocx_math::equation_to_omml(inner);
+            let omml = super::equation_omml_ir(inner, ctx.degradations);
             out.push(IrInline::Math { omml });
             ctx.prev_char = Some('\u{FFFC}');
         }
@@ -876,19 +905,26 @@ fn last_inline_char(inlines: &[IrInline]) -> Option<char> {
     None
 }
 
+/// Every `TextElem` up to the tag's `End`, concatenated — a rendered marker
+/// may be several runs (a custom `@ref[supplement]` prefix plus the target
+/// text); taking only the first silently drops the rest.
 fn next_marker_text(pairs: &[Pair<'_>], start: usize) -> Option<String> {
+    let mut out = String::new();
     for (content, _) in &pairs[start..] {
         if let Some(tagged) = content.to_packed::<TagElem>() {
             if matches!(tagged.tag, Tag::End(_, _, _)) {
-                return None;
+                break;
             }
             continue;
         }
         if let Some(text) = content.to_packed::<TextElem>() {
-            return Some(tydocx_ooxml::document::strip_break_hints(&text.text));
+            out.push_str(&text.text);
         }
     }
-    None
+    if out.is_empty() {
+        return None;
+    }
+    Some(tydocx_ooxml::document::strip_break_hints(&out))
 }
 
 fn marker_text_in(pairs: &[Pair<'_>]) -> String {
@@ -901,20 +937,19 @@ fn marker_text_in(pairs: &[Pair<'_>]) -> String {
     tydocx_ooxml::document::strip_break_hints(&out)
 }
 
-fn link_location_after(pairs: &[Pair<'_>], start: usize) -> Option<Location> {
-    for (content, _) in &pairs[start..] {
+/// First location-destination `LinkElem` inside a tag group — a rendered
+/// citation wraps its marker in a link to the bibliography entry's backlink
+/// location.
+fn bib_link_in(pairs: &[Pair<'_>]) -> Option<Location> {
+    for (content, _) in pairs {
         let Some(tagged) = content.to_packed::<TagElem>() else {
             continue;
         };
-        match &tagged.tag {
-            Tag::End(_, _, _) => return None,
-            Tag::Start(inner, _) => {
-                if let Some(link) = inner.to_packed::<LinkElem>()
-                    && let LinkTarget::Dest(Destination::Location(loc)) = &link.dest
-                {
-                    return Some(*loc);
-                }
-            }
+        if let Tag::Start(inner, _) = &tagged.tag
+            && let Some(link) = inner.to_packed::<LinkElem>()
+            && let LinkTarget::Dest(Destination::Location(loc)) = &link.dest
+        {
+            return Some(*loc);
         }
     }
     None

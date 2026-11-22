@@ -350,9 +350,12 @@ mod tests {
     #[test]
     fn footnote_ref_decimal_emits_footnote_reference() {
         let mut doc = Document::new();
-        let fn_id = doc.add_footnote(vec![document::InlineElement::Text(document::Run::new(
-            "note text",
-        ))]);
+        let fn_id = doc.add_footnote(vec![document::Paragraph {
+            inlines: vec![document::InlineElement::Text(document::Run::new(
+                "note text",
+            ))],
+            ..document::Paragraph::default()
+        }]);
         let mut para = document::Paragraph::new();
         para.add_run("See");
         para.add_footnote_ref(fn_id);
@@ -380,9 +383,12 @@ mod tests {
         // starts with a `w:footnoteRef` mark run — no literal mark anywhere.
         let mut doc = Document::new();
         doc.style.footnote_format = FootnoteFormat::CircledNumber;
-        let fn_id = doc.add_footnote(vec![document::InlineElement::Text(document::Run::new(
-            "circled note",
-        ))]);
+        let fn_id = doc.add_footnote(vec![document::Paragraph {
+            inlines: vec![document::InlineElement::Text(document::Run::new(
+                "circled note",
+            ))],
+            ..document::Paragraph::default()
+        }]);
         let mut para = document::Paragraph::new();
         para.add_footnote_ref(fn_id);
         doc.add_paragraph(para);
@@ -416,9 +422,12 @@ mod tests {
     #[test]
     fn footnotes_xml_contains_footnote_text_and_ref() {
         let mut doc = Document::new();
-        doc.add_footnote(vec![document::InlineElement::Text(document::Run::new(
-            "This is a footnote.",
-        ))]);
+        doc.add_footnote(vec![document::Paragraph {
+            inlines: vec![document::InlineElement::Text(document::Run::new(
+                "This is a footnote.",
+            ))],
+            ..document::Paragraph::default()
+        }]);
         // Need at least one paragraph referencing it so the doc is valid,
         // but footnotes.xml is generated from doc.footnotes regardless.
         let mut para = document::Paragraph::new();
@@ -560,9 +569,10 @@ mod tests {
     #[test]
     fn styles_xml_has_footnote_styles_when_footnotes_present() {
         let mut doc = Document::new();
-        doc.add_footnote(vec![document::InlineElement::Text(document::Run::new(
-            "fn",
-        ))]);
+        doc.add_footnote(vec![document::Paragraph {
+            inlines: vec![document::InlineElement::Text(document::Run::new("fn"))],
+            ..document::Paragraph::default()
+        }]);
         let mut para = document::Paragraph::new();
         para.add_footnote_ref(2);
         doc.add_paragraph(para);
@@ -795,6 +805,7 @@ mod tests {
             width_emu: 914_400,  // 1 inch
             height_emu: 457_200, // 0.5 inch
             src_rect: None,
+            alt: None,
         });
         doc.add_paragraph(para);
 
@@ -825,6 +836,7 @@ mod tests {
             width_emu: 914_400,
             height_emu: 914_400,
             src_rect: None,
+            alt: None,
         });
         doc.add_paragraph(para);
 
@@ -853,6 +865,7 @@ mod tests {
             width_emu: 100,
             height_emu: 100,
             src_rect: None,
+            alt: None,
         });
         doc.add_paragraph(para);
 
@@ -875,6 +888,7 @@ mod tests {
             width_emu: 100,
             height_emu: 100,
             src_rect: None,
+            alt: None,
         });
         doc.add_paragraph(para);
 
@@ -901,6 +915,7 @@ mod tests {
             width_emu: 100,
             height_emu: 100,
             src_rect: None,
+            alt: None,
         });
         doc.add_paragraph(para);
 
@@ -927,6 +942,7 @@ mod tests {
             width_emu: 100,
             height_emu: 100,
             src_rect: None,
+            alt: None,
         });
         doc.add_paragraph(para);
 
@@ -1058,10 +1074,13 @@ mod tests {
     #[test]
     fn footnote_anchored_line_declares_drawing_namespaces() {
         let mut doc = Document::new();
-        doc.add_footnote(vec![
-            document::InlineElement::Text(document::Run::new("note ")),
-            document::InlineElement::AnchoredLine(anchored_line()),
-        ]);
+        doc.add_footnote(vec![document::Paragraph {
+            inlines: vec![
+                document::InlineElement::Text(document::Run::new("note ")),
+                document::InlineElement::AnchoredLine(anchored_line()),
+            ],
+            ..document::Paragraph::default()
+        }]);
         let mut para = document::Paragraph::new();
         para.add_footnote_ref(2);
         doc.add_paragraph(para);

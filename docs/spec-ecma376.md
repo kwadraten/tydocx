@@ -139,7 +139,7 @@ flowchart LR
 | `image(fit: "cover")` | `a:srcRect` l/t/r/b derived from the measured clip window; the declared box stays the `wp:extent` and the full bytes stay embedded | same | same |
 | `image(fit: "contain"/"stretch")` | fit aspect dropped; display size still comes from the measured frame | + `"image-fit"` | silently dropped |
 | `block(clip: true)`/`box(clip:)` + negative `inset:` | `a:srcRect` l/t/r/b from the clip window vs the image bounds (composes with a cover fit) | same | same |
-| `image(alt:)` | no `wp:docPr descr` emitted | + `"image-alt"` | silently dropped |
+| `image(alt:)` | `wp:docPr descr` from the alt text | + `"image-alt"` (dropped) | same |
 | PDF image source | skipped + `"pdf-image"` (all levels — the IR path has no rasterizer; the legacy path rasterizes PDF pages) | same | same |
 
 ## Footnotes

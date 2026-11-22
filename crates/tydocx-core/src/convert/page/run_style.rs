@@ -350,9 +350,11 @@ pub fn apply_styles_from_paged(paged: &PagedDocument, doc: &mut tydocx_ooxml::do
 
     // Apply run-level overrides to footnotes
     for footnote in &mut doc.footnotes {
-        for inline in &mut footnote.content {
-            if let InlineElement::Text(run) = inline {
-                apply_override_to_run(run, &override_maps, None);
+        for para in &mut footnote.paragraphs {
+            for inline in &mut para.inlines {
+                if let InlineElement::Text(run) = inline {
+                    apply_override_to_run(run, &override_maps, None);
+                }
             }
         }
     }
@@ -699,6 +701,27 @@ fn apply_override_to_run(
     }
 }
 
+/// Apply run overrides inside a hyperlink body: text children take the same
+/// override path as top-level runs (the ambiguous second pass stays
+/// paragraph-level, matching the previous behaviour).
+fn apply_override_to_link_body(
+    body: &mut [tydocx_ooxml::document::InlineElement],
+    override_maps: &StyleOverrideMaps,
+) {
+    for inline in body {
+        match inline {
+            tydocx_ooxml::document::InlineElement::Text(run) => {
+                apply_override_to_run(run, override_maps, None);
+            }
+            tydocx_ooxml::document::InlineElement::Hyperlink { body, .. }
+            | tydocx_ooxml::document::InlineElement::InternalLink { body, .. } => {
+                apply_override_to_link_body(body, override_maps);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn apply_overrides_to_elements(
     elements: &mut [tydocx_ooxml::document::BlockElement],
     override_maps: &StyleOverrideMaps,
@@ -728,10 +751,9 @@ fn apply_overrides_to_paragraph(para: &mut Paragraph, override_maps: &StyleOverr
                     apply_override_to_run(run, override_maps, None);
                 }
             }
-            tydocx_ooxml::document::InlineElement::Hyperlink { runs, .. } => {
-                for run in runs {
-                    apply_override_to_run(run, override_maps, None);
-                }
+            tydocx_ooxml::document::InlineElement::Hyperlink { body, .. }
+            | tydocx_ooxml::document::InlineElement::InternalLink { body, .. } => {
+                apply_override_to_link_body(body, override_maps);
             }
             _ => {}
         }

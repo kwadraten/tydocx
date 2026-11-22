@@ -150,7 +150,14 @@ fn conformance_paragraph_census() {
             all_part_paras.join("\n")
         ));
         let out_paras = &body_paras;
-        let ir_joined = normalize(&texts.paragraphs.join("\n"));
+        // Bibliography entry bodies are IR content too: they used to render
+        // only out-of-band (Word's bibliography field), but the visible
+        // entry cache now also emits them as document paragraphs.
+        let ir_joined = normalize(&format!(
+            "{}\n{}",
+            texts.paragraphs.join("\n"),
+            texts.out_of_band.join("\n")
+        ));
 
         // IR -> output: every non-empty IR paragraph reaches the package.
         for para in &texts.paragraphs {
@@ -173,7 +180,9 @@ fn conformance_paragraph_census() {
         // degradation of this backend, not a drop.
 
         // output -> IR: every non-empty output paragraph traces to IR text,
-        // possibly after stripping one generated prefix.
+        // possibly after stripping generated fragments: a TOC entry is its
+        // heading title (IR text) plus a generated page number, so one
+        // generated prefix and/or suffix may be stripped.
         for out in out_paras {
             let text = normalize(out);
             if text.is_empty() || ir_joined.contains(&text) {
@@ -181,17 +190,33 @@ fn conformance_paragraph_census() {
             }
             let mut candidates = vec![text.as_str()];
             for generated in &texts.generated {
-                let prefix = normalize(generated);
-                if !prefix.is_empty()
-                    && let Some(rest) = text.strip_prefix(prefix.as_str())
-                {
+                let frag = normalize(generated);
+                if frag.is_empty() {
+                    continue;
+                }
+                if let Some(rest) = text.strip_prefix(frag.as_str()) {
+                    candidates.push(rest);
+                }
+                if let Some(rest) = text.strip_suffix(frag.as_str()) {
                     candidates.push(rest);
                 }
             }
-            if candidates
-                .iter()
-                .any(|c| c.is_empty() || ir_joined.contains(c))
-            {
+            let mut paired = candidates.clone();
+            for base in candidates {
+                for generated in &texts.generated {
+                    let frag = normalize(generated);
+                    if frag.is_empty() {
+                        continue;
+                    }
+                    if let Some(rest) = base.strip_prefix(frag.as_str()) {
+                        paired.push(rest);
+                    }
+                    if let Some(rest) = base.strip_suffix(frag.as_str()) {
+                        paired.push(rest);
+                    }
+                }
+            }
+            if paired.iter().any(|c| c.is_empty() || ir_joined.contains(c)) {
                 continue;
             }
             failures.push(format!("{fixture}: untraceable output paragraph: {text:?}"));

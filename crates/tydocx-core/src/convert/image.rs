@@ -176,6 +176,7 @@ pub(super) fn image_data_from_src(
                 width_emu: w,
                 height_emu: h,
                 src_rect,
+                alt: None,
             })
         }
         "image/gif" | "image/webp" => {
@@ -196,6 +197,7 @@ pub(super) fn image_data_from_src(
                 width_emu: w,
                 height_emu: h,
                 src_rect,
+                alt: None,
             })
         }
         // Intentional f32→u32: SVG canvas dimensions are small positive values.
@@ -221,6 +223,7 @@ pub(super) fn image_data_from_src(
                 width_emu: w,
                 height_emu: h,
                 src_rect,
+                alt: None,
             })
         }
         _ => None,
@@ -392,6 +395,7 @@ fn rasterize_frame(frame: &Frame) -> Option<ImageData> {
         bytes,
         format: ImageFormat::Png,
         svg,
+        alt: None,
         width_emu: (width_pt * 12700.0) as u64,
         height_emu: (height_pt * 12700.0) as u64,
         src_rect: None,

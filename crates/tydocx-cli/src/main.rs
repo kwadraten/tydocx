@@ -28,6 +28,12 @@ struct Cli {
     #[arg(long, value_parser = parse_compat, default_value = "c2")]
     compat: CompatMode,
 
+    /// Word bibliography style file (.xsl). Sets Sources.xml's
+    /// SelectedStyle/StyleName so Word re-renders citations and the
+    /// bibliography with that style on field update
+    #[arg(long, value_name = "STYLE.xsl")]
+    bibliography_style: Option<PathBuf>,
+
     /// Write the full deduplicated degradation list as JSON to this path
     /// (no 50-line cap — the cap is a display concern, the report is the
     /// complete record)
@@ -53,7 +59,10 @@ fn main() {
         process::exit(1);
     });
 
-    let options = tydocx_core::ConvertOptions::new(cli.compat);
+    let mut options = tydocx_core::ConvertOptions::new(cli.compat);
+    options.bibliography_style = cli
+        .bibliography_style
+        .map(|p| p.to_string_lossy().into_owned());
     let outcome = tydocx_core::convert(&world, &options).unwrap_or_else(|errors| {
         eprintln!("error: Typst compilation failed:");
         for diagnostic in &errors {

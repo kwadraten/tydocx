@@ -21,6 +21,15 @@ cargo install --path crates/tydocx-cli  # from a checkout
 tydocx input.typ -o output.docx
 ```
 
+`--compat c1|c2|c3` selects the compatibility mode (default `c2`),
+`--degradation-report path.json` writes the full degradation list, and
+`--bibliography-style STYLE.xsl` selects a Word bibliography style: it is
+written into `Sources.xml` (`SelectedStyle`/`StyleName`) so Word re-renders
+citations and bibliography entries with that style on field update. The
+cached field result keeps the document's own CSL render — the XSL is a
+Word-side transform — so the conversion reports a `bibliography-style`
+degradation naming what a field update will change.
+
 Layout (page margins, footnote style, …) is controlled entirely by the
 Typst source (`#set page(margin: …)`, `#set footnote(numbering: …)`); there
 are no sidecar presets.

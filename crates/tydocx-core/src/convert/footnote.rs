@@ -23,7 +23,10 @@ pub(super) fn extract_add_and_size_footnotes(
 ) {
     let contents = extract_footnote_contents(body_children, image_sizes);
     for content in &contents {
-        doc.add_footnote(content.clone());
+        doc.add_footnote(vec![tydocx_ooxml::document::Paragraph {
+            inlines: content.clone(),
+            ..tydocx_ooxml::document::Paragraph::default()
+        }]);
     }
     super::page::apply_footnote_text_size(doc, paged, &contents);
 }

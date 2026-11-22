@@ -363,7 +363,8 @@ bodies — now comes from `StyleChain`s or element identity.
   uncropped) share the first placement found on the page.
 - **Remaining:** `fit: "contain"` letterboxes — it needs extent math, not
   `srcRect`, and is still dropped silently at C2/C3 (`+ "image-fit"` at C1);
-  `alt:` → `wp:docPr descr` is still unwritten (`+ "image-alt"` at C1).
+  `alt:` → `wp:docPr descr` is written at C2/C3, still dropped at C1
+  (`+ "image-alt"`).
 
 ### Grid lowering limits
 - **What:** a grid wider than 63 lanes is split at lane boundaries into

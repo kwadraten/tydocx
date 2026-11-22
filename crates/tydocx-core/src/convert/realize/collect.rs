@@ -5,9 +5,10 @@ use tydocx_ir::{
     Degradation, DegradationAction, DocumentStyle, IrBibEntry, IrBlock, IrBorder, IrCaptionSeq,
     IrCellBorderFlags, IrCellBorders, IrDocument, IrDocumentInfo, IrEnum, IrEnumItem, IrEquation,
     IrEquationNumber, IrFigureKind, IrGrid, IrGridLine, IrHeadingNumbering, IrInline, IrList,
-    IrListItem, IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrParStyle, IrParagraph,
-    IrPlaceWrap, IrRaw, IrSection, IrSectionBreakType, IrSeqSplit, IrShapeKind, IrTable,
-    IrTableCell, IrTableRow, IrTrackSize, IrVMerge, PageSettings, TableBorders, TableCellMargins,
+    IrListItem, IrNumberingPattern, IrNumberingPiece, IrNumeralSystem, IrOutlineEntry, IrParStyle,
+    IrParagraph, IrPlaceWrap, IrRaw, IrSection, IrSectionBreakType, IrSeqSplit, IrShapeKind,
+    IrTable, IrTableCell, IrTableRow, IrTrackSize, IrVMerge, PageSettings, TableBorders,
+    TableCellMargins,
 };
 use tydocx_ooxml::document::{Alignment, Run, VerticalAlign};
 use typst_library::World;
@@ -29,11 +30,11 @@ use typst_library::layout::{
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
-    BibliographyElem, DirectLinkElem, EnumElem, EnumItem, FigureCaption, FigureElem, FigureKind,
-    HeadingElem, ListElem, ListItem, ListMarker, Numbering, OutlineElem, ParElem, ParbreakElem,
-    QuoteElem, TableCell, TableElem, TermItem, TermsElem,
+    BibliographyElem, CiteGroup, Destination, DirectLinkElem, EnumElem, EnumItem, FigureCaption,
+    FigureElem, FigureKind, HeadingElem, LinkElem, LinkTarget, ListElem, ListItem, ListMarker,
+    Numbering, OutlineElem, ParElem, ParbreakElem, QuoteElem, TableCell, TableElem, TermItem,
+    TermsElem, Works,
 };
-use typst_library::pdf::PdfMarkerTagKind;
 use typst_library::routines::Pair;
 use typst_library::text::{RawElem, RawLine, SmartQuoter, SpaceElem, TextElem};
 use typst_library::visualize::{
@@ -67,7 +68,16 @@ pub struct Collector<'a> {
     defaults: StyleDefaults,
     label_map: HashMap<Location, String>,
     bib_map: HashMap<Location, String>,
+    cite_span_map: HashMap<Span, String>,
+    /// Heading `Location` → synthesized TOC bookmark (`outline-target-N`),
+    /// registered for unlabelled headings an `#outline` targets.
+    heading_bookmarks: HashMap<Span, String>,
+    /// `OutlineElem` span → resolved TOC entries, precomputed in `pass_one`
+    /// (entry collection registers heading bookmarks, which headings consume
+    /// later in document order — the outline itself precedes them).
+    outline_entries: HashMap<Span, Vec<IrOutlineEntry>>,
     bib_entries: Option<Vec<IrBibEntry>>,
+    works: Option<std::sync::Arc<Works>>,
     footnote_markers: Vec<FootnoteMarker>,
     footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
     footnote_circled: bool,
@@ -157,7 +167,11 @@ pub fn collect_document(
         defaults,
         label_map: HashMap::new(),
         bib_map: HashMap::new(),
+        cite_span_map: HashMap::new(),
+        heading_bookmarks: HashMap::new(),
+        outline_entries: HashMap::new(),
         bib_entries: None,
+        works: None,
         footnote_markers: Vec::new(),
         footnote_bodies: HashMap::new(),
         footnote_circled: false,
@@ -308,8 +322,11 @@ impl Collector<'_> {
             }
             i += 1;
         }
-        if let Some((group, styles)) = find_tag_group(pairs, BibliographyElem::ELEM) {
-            let entries = self.collect_bibliography_entries(&group, styles, engine, locator)?;
+        if let Some((group, styles, tag_content)) =
+            find_tag_group_elem(pairs, BibliographyElem::ELEM)
+        {
+            let entries =
+                self.collect_bibliography_entries(tag_content, &group, styles, engine, locator)?;
             if entries.is_empty()
                 && !self
                     .degradations
@@ -326,7 +343,38 @@ impl Collector<'_> {
             }
             self.bib_entries = Some(entries);
         }
+        self.resolve_cite_targets(engine);
         Ok(())
+    }
+
+    /// A rendered citation's link to its bibliography entry lives in the
+    /// `Works` render, not the realize pairs. `CiteGroup`s are locatable and
+    /// introspectable; `Works::citation` replays the render to expose the
+    /// entry backlink. Keyed by the group's span — the realized `RefElem`
+    /// tag inside the group's fragment carries the same source span.
+    fn resolve_cite_targets(&mut self, engine: &mut Engine) {
+        let Some(works) = &self.works else { return };
+        let groups: Vec<Content> = engine
+            .introspect(typst_library::introspection::QueryIntrospection(
+                CiteGroup::ELEM.select(),
+                Span::detached(),
+            ))
+            .into_iter()
+            .collect();
+        for group in &groups {
+            let Some(loc) = group.location() else {
+                continue;
+            };
+            let Ok(rendered) = works.citation(loc, group.span()) else {
+                continue;
+            };
+            let Some(backlink) = dest_location_in(&rendered) else {
+                continue;
+            };
+            if let Some(bookmark) = self.bib_map.get(&backlink).cloned() {
+                self.cite_span_map.insert(group.span(), bookmark);
+            }
+        }
     }
 
     fn em_pt(&self) -> f64 {
@@ -340,6 +388,7 @@ impl Collector<'_> {
             prev_char: None,
             label_map: &self.label_map,
             bib_map: &self.bib_map,
+            cite_span_map: &self.cite_span_map,
             footnote_markers: &mut self.footnote_markers,
             degradations: &mut self.degradations,
             source: self.source.as_ref(),
@@ -501,9 +550,13 @@ impl Collector<'_> {
             return self.collect_quote(quote, styles, engine, locator);
         }
         if let Some(outline) = inner.to_packed::<OutlineElem>() {
-            return Ok(vec![
-                self.collect_outline(outline, styles, engine, locator)?,
-            ]);
+            return Ok(vec![self.collect_outline(
+                outline,
+                inner.span(),
+                styles,
+                engine,
+                locator,
+            )?]);
         }
         if let Some(place) = inner.to_packed::<PlaceElem>() {
             return Ok(vec![
@@ -512,6 +565,9 @@ impl Collector<'_> {
         }
         if let Some(image) = inner.to_packed::<ImageElem>() {
             return Ok(self.image_paragraph(image, styles, engine));
+        }
+        if let Some(link) = inner.to_packed::<LinkElem>() {
+            return self.collect_link_group(link, group, styles, engine, locator);
         }
         if let Some(par) = inner.to_packed::<ParElem>() {
             let mut ctx = self.inline_ctx();
@@ -581,6 +637,62 @@ impl Collector<'_> {
             })],
             None => Vec::new(),
         }
+    }
+
+    /// A `#link` whose body realizes as block-level content (a lone image
+    /// lifts out of its paragraph, for example). The blocks are collected
+    /// normally, then every paragraph's inline list is wrapped in
+    /// `IrInline::Link` so the hyperlink — not just the content — survives.
+    fn collect_link_group(
+        &mut self,
+        link: &Packed<LinkElem>,
+        group: &[Pair<'_>],
+        _styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrBlock>> {
+        let mut blocks = self.collect_blocks(group, engine, locator, false)?;
+        let (url, anchor) = match &link.dest {
+            LinkTarget::Dest(Destination::Url(url)) => (Some(url.to_string()), None),
+            LinkTarget::Dest(Destination::Location(loc)) => {
+                (None, self.label_map.get(loc).cloned())
+            }
+            LinkTarget::Dest(Destination::Position(_)) => (None, None),
+            LinkTarget::Label(label) => (None, Some(label.resolve().to_string())),
+        };
+        if url.is_none() && anchor.is_none() {
+            self.degradations.push(Degradation {
+                span: None,
+                construct: "unresolved-link",
+                action: DegradationAction::Literalized,
+                message: "an internal link has no labelled target; kept without the hyperlink"
+                    .to_string(),
+            });
+            return Ok(blocks);
+        }
+        let mut unlinked = false;
+        for block in &mut blocks {
+            match block {
+                IrBlock::Paragraph(para) => {
+                    para.inlines = vec![IrInline::Link {
+                        url: url.clone(),
+                        anchor: anchor.clone(),
+                        body: std::mem::take(&mut para.inlines),
+                    }];
+                }
+                _ => unlinked = true,
+            }
+        }
+        if unlinked {
+            self.degradations.push(Degradation {
+                span: Some(link.span()),
+                construct: "block-link-target",
+                action: DegradationAction::Literalized,
+                message: "a link wraps non-paragraph content; the content is kept but it is not clickable"
+                    .to_string(),
+            });
+        }
+        Ok(blocks)
     }
 
     fn collect_standalone(
@@ -1135,14 +1247,19 @@ impl Collector<'_> {
     fn collect_outline_elem(
         &mut self,
         outline: &OutlineElem,
+        span: Span,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
         let title = self.outline_title(outline, styles, engine, locator)?;
+        let mut entries = self.outline_entries.get(&span).cloned().unwrap_or_default();
+        if entries.is_empty() {
+            entries = self.build_outline_entries(outline, styles, engine, locator)?;
+        }
         Ok(IrBlock::Outline {
             title,
-            entries: Vec::new(),
+            entries,
             depth: outline_depth(outline),
             custom_target: outline_custom_target(outline, styles),
             custom_indent: outline_custom_indent(outline),
@@ -1195,9 +1312,13 @@ impl Collector<'_> {
             return self.collect_quote(quote, styles, engine, locator);
         }
         if let Some(outline) = child.to_packed::<OutlineElem>() {
-            return Ok(vec![
-                self.collect_outline_elem(outline, styles, engine, locator)?,
-            ]);
+            return Ok(vec![self.collect_outline_elem(
+                outline,
+                child.span(),
+                styles,
+                engine,
+                locator,
+            )?]);
         }
         if let Some(place) = child.to_packed::<PlaceElem>() {
             return Ok(vec![
@@ -1305,7 +1426,10 @@ impl Collector<'_> {
             numbering: heading_numbering(styles),
             numbering_text,
             body,
-            label: child.label().map(|l| l.resolve().to_string()),
+            label: child
+                .label()
+                .map(|l| l.resolve().to_string())
+                .or_else(|| self.heading_bookmarks.get(&child.span()).cloned()),
             alignment: alignment_from_styles(styles),
             par: scoped_par.unwrap_or_else(|| par_style_from_styles(styles)),
             span: child.span().id().map(|_| child.span()),
@@ -1323,7 +1447,7 @@ impl Collector<'_> {
     ) -> SourceResult<Vec<IrBlock>> {
         if equation.block.get(styles) {
             self.eq_count += 1;
-            let omml = tydocx_math::equation_to_omml(child);
+            let omml = super::equation_omml_ir(child, &mut self.degradations);
             let number = self.equation_number(equation, styles);
             return Ok(vec![IrBlock::Equation(IrEquation {
                 omml,
@@ -1405,7 +1529,10 @@ impl Collector<'_> {
             numbering: heading_numbering(styles),
             numbering_text,
             body,
-            label: inner.label().map(|l| l.resolve().to_string()),
+            label: inner
+                .label()
+                .map(|l| l.resolve().to_string())
+                .or_else(|| self.heading_bookmarks.get(&inner.span()).cloned()),
             alignment,
             par,
             span: inner.span().id().map(|_| inner.span()),
@@ -1424,7 +1551,10 @@ impl Collector<'_> {
     ) -> SourceResult<IrBlock> {
         let meta = FigureMeta {
             kind: figure_kind(figure, styles),
-            label: inner.label().map(|l| l.resolve().to_string()),
+            label: inner
+                .label()
+                .map(|l| l.resolve().to_string())
+                .or_else(|| self.heading_bookmarks.get(&inner.span()).cloned()),
             custom_placement: figure_custom_placement(figure),
             gap_twips: figure_gap_twips(figure, styles, self.em_pt()),
             location_hash: inner.location().map(location_hash64),
@@ -1468,7 +1598,10 @@ impl Collector<'_> {
     ) -> SourceResult<IrBlock> {
         let meta = FigureMeta {
             kind: figure_kind(figure, styles),
-            label: inner.label().map(|l| l.resolve().to_string()),
+            label: inner
+                .label()
+                .map(|l| l.resolve().to_string())
+                .or_else(|| self.heading_bookmarks.get(&inner.span()).cloned()),
             custom_placement: figure_custom_placement(figure),
             gap_twips: figure_gap_twips(figure, styles, self.em_pt()),
             location_hash: inner.location().map(location_hash64),
@@ -1992,7 +2125,8 @@ impl Collector<'_> {
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrTable> {
-        let (rows, col_count) = self.cell_grid_rows(grid, false, styles, engine, locator)?;
+        let (mut rows, col_count) = self.cell_grid_rows(grid, false, styles, engine, locator)?;
+        fold_partial_lines_into_cells(&mut rows, grid);
         let column_widths_pct = self.table_column_widths(table, col_count, styles);
         Ok(IrTable {
             rows,
@@ -2079,10 +2213,30 @@ impl Collector<'_> {
                     Some(Entry::Merged { parent }) => {
                         let parent_row = parent.checked_div(col_count).unwrap_or(rows.len());
                         if parent_row < rows.len() {
+                            // A vertical-merge continuation must cover the same
+                            // grid columns as its spanning parent: group the
+                            // parent's consecutive merged columns into ONE cell
+                            // carrying that colspan (gridSpan + vMerge continue),
+                            // not one `colspan=1` continuation per column.
+                            let mut span = 1usize;
+                            let mut nx = x + 1;
+                            while nx < grid.cols.len() {
+                                if grid.has_gutter && nx % 2 == 1 {
+                                    nx += 1;
+                                    continue;
+                                }
+                                match grid.entry(nx, y) {
+                                    Some(Entry::Merged { parent: other }) if *other == *parent => {
+                                        span += 1;
+                                        nx += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
                             cells.push(IrTableCell {
                                 body: Vec::new(),
                                 x: cell_x,
-                                colspan: 1,
+                                colspan: u32::try_from(span).unwrap_or(u32::MAX),
                                 rowspan: 1,
                                 vmerge: IrVMerge::Continue,
                                 fill_hex: None,
@@ -2091,6 +2245,8 @@ impl Collector<'_> {
                                 borders: tydocx_ir::IrCellBorders::default(),
                                 borders_declared: tydocx_ir::IrCellBorderFlags::default(),
                             });
+                            x = nx;
+                            continue;
                         }
                     }
                     None => {}
@@ -2309,7 +2465,7 @@ impl Collector<'_> {
             return Vec::new();
         }
         self.eq_count += 1;
-        let omml = tydocx_math::equation_to_omml(inner);
+        let omml = super::equation_omml_ir(inner, &mut self.degradations);
         let number = self.equation_number(equation, styles);
         vec![IrBlock::Equation(IrEquation {
             omml,
@@ -2433,18 +2589,110 @@ impl Collector<'_> {
     fn collect_outline(
         &mut self,
         outline: &OutlineElem,
+        span: Span,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
         let title = self.outline_title(outline, styles, engine, locator)?;
+        let mut entries = self.outline_entries.get(&span).cloned().unwrap_or_default();
+        if entries.is_empty() {
+            entries = self.build_outline_entries(outline, styles, engine, locator)?;
+        }
         Ok(IrBlock::Outline {
             title,
-            entries: Vec::new(),
+            entries,
             depth: outline_depth(outline),
             custom_target: outline_custom_target(outline, styles),
             custom_indent: outline_custom_indent(outline),
         })
+    }
+
+    /// Resolve the outline's entries from `outline.target`: the realize pairs
+    /// only carry the outline's title — the `OutlineEntry` list is assembled
+    /// by a layout-time show rule. Heading targets yield hyperlinked TOC
+    /// entries (`target` + `page_loc` for the paged page-number patch);
+    /// non-heading kinds report a named degradation. `pass_one` runs this
+    /// ahead of document collection so the synthesized heading bookmarks are
+    /// registered before the headings themselves are collected.
+    fn build_outline_entries(
+        &mut self,
+        outline: &OutlineElem,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrOutlineEntry>> {
+        let depth = outline_depth(outline);
+        let span = Span::detached();
+        let mut entries = Vec::new();
+        let mut non_heading_kinds: Vec<String> = Vec::new();
+        let queried: Vec<Content> = engine
+            .introspect(typst_library::introspection::QueryIntrospection(
+                outline.target.get_ref(styles).0.clone(),
+                span,
+            ))
+            .into_iter()
+            .collect();
+        for content in &queried {
+            let Some(heading) = content.to_packed::<HeadingElem>() else {
+                let name = content.func().name();
+                if !non_heading_kinds.iter().any(|k| k == name) {
+                    non_heading_kinds.push(name.to_string());
+                }
+                continue;
+            };
+            if !heading.outlined.get(styles) {
+                continue;
+            }
+            let level = heading.resolve_level(styles).get().min(255);
+            let Ok(level) = u8::try_from(level) else {
+                continue;
+            };
+            if level > depth {
+                continue;
+            }
+            let mut entry_title = Vec::new();
+            if let Some(numbers) = heading_numbers(heading) {
+                let mut run = tydocx_ooxml::document::Run::new(format!("{numbers} "));
+                run.bold = true;
+                entry_title.push(IrInline::Text(run));
+            }
+            let mut ctx = self.inline_ctx();
+            entry_title.extend(collect_inlines(
+                &heading.body,
+                styles,
+                engine,
+                locator,
+                &mut ctx,
+            )?);
+            let target = content
+                .label()
+                .map(|label| label.resolve().to_string())
+                .or_else(|| {
+                    let name = format!("outline-target-{}", entries.len());
+                    self.heading_bookmarks.insert(content.span(), name.clone());
+                    Some(name)
+                });
+            entries.push(IrOutlineEntry {
+                level,
+                title: entry_title,
+                target,
+                page_number: None,
+                page_loc: content.location().map(typst::introspection::Location::hash),
+            });
+        }
+        for kind in non_heading_kinds {
+            self.degradations.push(Degradation {
+                span: None,
+                construct: "outline-target-kind",
+                action: DegradationAction::Skipped,
+                message: format!(
+                    "outline target matched `{kind}` elements; only heading entries can be \
+                     listed in the TOC field cache, so those entries are dropped"
+                ),
+            });
+        }
+        Ok(entries)
     }
 
     fn outline_title(
@@ -2486,91 +2734,66 @@ impl Collector<'_> {
         }
     }
 
+    /// Rendered bibliography entries come from [`Works`], typst's memoized
+    /// hayagriva render. The realize pairs only carry the bibliography's
+    /// title — the grid of rendered entries is assembled by a layout-time
+    /// show rule (`typst-layout`'s `BIBLIOGRAPHY_RULE`), so fragment probing
+    /// sees nothing. `Works::generate` runs the same CSL render over the
+    /// same library, yielding each entry's marker and formatted body.
     fn collect_bibliography_entries(
         &mut self,
-        group: &[Pair<'_>],
-        _styles: StyleChain<'_>,
-        engine: &mut Engine,
-        locator: &mut SplitLocator,
-    ) -> SourceResult<Vec<IrBibEntry>> {
-        let mut entries = Vec::new();
-        for (content, pair_styles) in group {
-            let Some(block) = content.to_packed::<BlockElem>() else {
-                continue;
-            };
-            let Some(body_content) = block_body_content(block, *pair_styles) else {
-                continue;
-            };
-            with_fragment(
-                engine,
-                locator,
-                body_content,
-                *pair_styles,
-                |engine, locator, pairs| {
-                    for (frag_content, frag_styles) in pairs {
-                        if let Some(grid) = frag_content.to_packed::<GridElem>() {
-                            entries =
-                                self.bib_entries_from_grid(grid, *frag_styles, engine, locator)?;
-                            break;
-                        }
-                        if let Some(block) = frag_content.to_packed::<BlockElem>()
-                            && let Some(body_c) = block_body_content(block, *frag_styles)
-                            && let Some(grid) = find_grid_in_content(body_c)
-                        {
-                            entries =
-                                self.bib_entries_from_grid(grid, *frag_styles, engine, locator)?;
-                            break;
-                        }
-                    }
-                    Ok(())
-                },
-            )?;
-            break;
-        }
-        Ok(entries)
-    }
-
-    fn bib_entries_from_grid(
-        &mut self,
-        grid: &GridElem,
+        tag_content: &Content,
+        _group: &[Pair<'_>],
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<Vec<IrBibEntry>> {
-        let Some(cell_grid) = grid.grid.as_ref() else {
+        let span = tag_content.span();
+        let Some(loc) = tag_content.location() else {
             return Ok(Vec::new());
         };
-        let mut entries = Vec::new();
-        for py in 0..cell_grid.rows.len() {
-            let mut marker: Option<String> = None;
-            let mut marker_loc: Option<Location> = None;
-            let mut body: Vec<IrInline> = Vec::new();
-            let mut any = false;
-            for px in 0..cell_grid.cols.len() {
-                let Some(Entry::Cell(cell)) = cell_grid.entry(px, py) else {
-                    continue;
-                };
-                any = true;
-                let Some(table_cell) = cell.body.to_packed::<TableCell>() else {
-                    continue;
-                };
-                if let Some(direct) = find_direct_link(&table_cell.body) {
-                    marker = Some(plain_text(&direct.body));
-                    marker_loc = Some(direct.loc);
-                } else if let Some(tagged) =
-                    find_pdf_marker(&table_cell.body, &PdfMarkerTagKind::BibEntry)
-                {
-                    let mut ctx = self.inline_ctx();
-                    body = collect_inlines(&tagged.body, styles, engine, locator, &mut ctx)?;
-                }
+        let works = match Works::generate(engine, span) {
+            Ok(works) => {
+                self.works = Some(std::sync::Arc::clone(&works));
+                works
             }
-            if !any {
-                continue;
+            Err(errs) => {
+                self.degradations.push(Degradation {
+                    span: Some(span),
+                    construct: "bibliography-entries",
+                    action: DegradationAction::Skipped,
+                    message: format!(
+                        "hayagriva could not render the bibliography ({}); \
+                         entries render as an empty field cache",
+                        diag_text(&errs)
+                    ),
+                });
+                return Ok(Vec::new());
             }
+        };
+        let rendered = match works.bibliography(loc, span) {
+            Ok(rendered) => rendered,
+            Err(errs) => {
+                self.degradations.push(Degradation {
+                    span: Some(span),
+                    construct: "bibliography-entries",
+                    action: DegradationAction::Skipped,
+                    message: format!(
+                        "rendered bibliography content could not be located ({}); \
+                         entries render as an empty field cache",
+                        diag_text(&errs)
+                    ),
+                });
+                return Ok(Vec::new());
+            }
+        };
+        let mut entries = Vec::with_capacity(rendered.entries.len());
+        for entry in &rendered.entries {
+            let marker = entry.prefix.as_ref().map(plain_text);
+            let mut ctx = self.inline_ctx();
+            let body = collect_inlines(&entry.body, styles, engine, locator, &mut ctx)?;
             let bookmark = format!("bib-{}", entries.len());
-            if let Some(loc) = marker_loc {
-                self.bib_map.insert(loc, bookmark.clone());
-            }
+            self.bib_map.insert(entry.backlink, bookmark.clone());
             entries.push(IrBibEntry {
                 bookmark,
                 marker,
@@ -2825,7 +3048,7 @@ fn flatten_sequences(children: Vec<&Content>) -> Vec<&Content> {
     out
 }
 
-fn content_children(content: &Content) -> Vec<&Content> {
+pub(super) fn content_children(content: &Content) -> Vec<&Content> {
     if let Some(sequence) = content.to_packed::<SequenceElem>() {
         return sequence.children.iter().collect();
     }
@@ -3035,10 +3258,6 @@ pub(super) fn block_body_content<'a>(
     }
 }
 
-fn find_grid_in_content(content: &Content) -> Option<&GridElem> {
-    content.to_packed::<GridElem>().map(|packed| &**packed)
-}
-
 /// An unlocated `Start` yields an empty group: swallowing the rest of
 /// the document for one unlocated tag would be worse than dropping it.
 fn find_end(pairs: &[Pair<'_>], start: usize, location: Option<Location>) -> usize {
@@ -3058,17 +3277,20 @@ fn find_end(pairs: &[Pair<'_>], start: usize, location: Option<Location>) -> usi
     pairs.len()
 }
 
-fn find_tag_group<'a>(
+/// Like `find_tag_group`, additionally returning the tagged element's own
+/// `Content` so callers can read its `Location`/`Span` (the tag is dropped
+/// from the group itself).
+fn find_tag_group_elem<'a>(
     pairs: &[Pair<'a>],
     func: Element,
-) -> Option<(Vec<Pair<'a>>, StyleChain<'a>)> {
+) -> Option<(Vec<Pair<'a>>, StyleChain<'a>, &'a Content)> {
     for (i, (content, styles)) in pairs.iter().enumerate() {
         if let Some(tagged) = content.to_packed::<TagElem>()
             && let Tag::Start(inner, _) = &tagged.tag
             && inner.func() == func
         {
             let end = find_end(pairs, i + 1, inner.location());
-            return Some((pairs[i + 1..end].to_vec(), *styles));
+            return Some((pairs[i + 1..end].to_vec(), *styles, inner));
         }
     }
     None
@@ -3467,6 +3689,89 @@ fn line_spans_full(line: &Line, tracks: usize) -> bool {
     line.start == 0 && line.end.is_none_or(|end| end.get() >= tracks)
 }
 
+/// Fold `hline`/`vline` segments that do NOT span the full table into the
+/// cells they bound (full-span lines already reach `tblBorders` via
+/// [`borders_from_lines`]). A partial line's stroke lands on the touched edge
+/// of every covered cell — matching what Typst draws — and marks the edge as
+/// declared so lowering emits `w:tcBorders` for it. A cell's own declared
+/// stroke keeps precedence over the line, and vertical-merge continuation
+/// cells (whose touched edges sit inside a merge) are skipped.
+fn fold_partial_lines_into_cells(rows: &mut [IrTableRow], grid: &CellGrid) {
+    let n_cols = grid.non_gutter_column_count();
+    let n_rows = grid.non_gutter_row_count();
+    for group in &grid.hlines {
+        for line in group {
+            if line_spans_full(line, n_cols) {
+                continue;
+            }
+            let Some(border) = line.stroke.as_ref().and_then(|s| ir_border(s)) else {
+                continue;
+            };
+            let end = line.end.map_or(n_cols, std::num::NonZero::get);
+            for (ri, row) in rows.iter_mut().enumerate() {
+                for cell in &mut row.cells {
+                    if cell.vmerge == IrVMerge::Continue {
+                        continue;
+                    }
+                    let covered = cell.x < end
+                        && cell
+                            .x
+                            .saturating_add(usize::try_from(cell.colspan).unwrap_or(usize::MAX))
+                            > line.start;
+                    if !covered {
+                        continue;
+                    }
+                    if line.index == ri && !cell.borders_declared.top {
+                        cell.borders.top = Some(border.clone());
+                        cell.borders_declared.top = true;
+                    }
+                    if line.index
+                        == ri.saturating_add(usize::try_from(cell.rowspan).unwrap_or(usize::MAX))
+                        && !cell.borders_declared.bottom
+                    {
+                        cell.borders.bottom = Some(border.clone());
+                        cell.borders_declared.bottom = true;
+                    }
+                }
+            }
+        }
+    }
+    for group in &grid.vlines {
+        for line in group {
+            if line_spans_full(line, n_rows) {
+                continue;
+            }
+            let Some(border) = line.stroke.as_ref().and_then(|s| ir_border(s)) else {
+                continue;
+            };
+            let end = line.end.map_or(n_rows, std::num::NonZero::get);
+            for (ri, row) in rows.iter_mut().enumerate() {
+                for cell in &mut row.cells {
+                    if cell.vmerge == IrVMerge::Continue {
+                        continue;
+                    }
+                    let covered = ri < end
+                        && ri.saturating_add(usize::try_from(cell.rowspan).unwrap_or(usize::MAX))
+                            > line.start;
+                    if !covered {
+                        continue;
+                    }
+                    let colspan = usize::try_from(cell.colspan).unwrap_or(usize::MAX);
+                    if line.index == cell.x && !cell.borders_declared.left {
+                        cell.borders.left = Some(border.clone());
+                        cell.borders_declared.left = true;
+                    }
+                    if line.index == cell.x.saturating_add(colspan) && !cell.borders_declared.right
+                    {
+                        cell.borders.right = Some(border.clone());
+                        cell.borders_declared.right = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn line_thickness(line: &Line) -> Option<u32> {
     let stroke = line.stroke.as_ref()?;
     let pt = match stroke.thickness {
@@ -3784,34 +4089,21 @@ fn strip_leading_text(inlines: &mut Vec<IrInline>, prefix: &str) {
     }
 }
 
-fn find_direct_link(content: &Content) -> Option<&DirectLinkElem> {
-    if let Some(link) = content.to_packed::<DirectLinkElem>() {
-        return Some(link);
+/// Deepest-first search for a `LinkElem` whose destination is a `Location`.
+fn dest_location_in(content: &Content) -> Option<Location> {
+    if let Some(direct) = content.to_packed::<DirectLinkElem>() {
+        return Some(direct.loc);
     }
-    for child in content_children(content) {
-        if !std::ptr::eq(child, content)
-            && let Some(link) = find_direct_link(child)
-        {
-            return Some(link);
-        }
-    }
-    None
-}
-
-fn find_pdf_marker<'a>(
-    content: &'a Content,
-    kind: &PdfMarkerTagKind,
-) -> Option<&'a typst_library::pdf::PdfMarkerTag> {
-    if let Some(tag) = content.to_packed::<typst_library::pdf::PdfMarkerTag>()
-        && tag.kind == *kind
+    if let Some(link) = content.to_packed::<LinkElem>()
+        && let LinkTarget::Dest(Destination::Location(loc)) = &link.dest
     {
-        return Some(tag);
+        return Some(*loc);
     }
     for child in content_children(content) {
         if !std::ptr::eq(child, content)
-            && let Some(tag) = find_pdf_marker(child, kind)
+            && let Some(loc) = dest_location_in(child)
         {
-            return Some(tag);
+            return Some(loc);
         }
     }
     None
@@ -4192,4 +4484,12 @@ fn page_content_height_pt(styles: StyleChain<'_>) -> f64 {
         snapshot.height_pt
     };
     (height_pt - snapshot.top_pt - snapshot.bottom_pt).max(0.0)
+}
+
+/// Join source diagnostics for a degradation message.
+fn diag_text(errs: &[typst::diag::SourceDiagnostic]) -> String {
+    errs.iter()
+        .map(|d| d.message.as_str())
+        .collect::<Vec<_>>()
+        .join("; ")
 }

@@ -166,61 +166,67 @@ fn write_footnote_entry(
     w.create_element("w:footnote")
         .with_attribute(("w:id", id_str.as_str()))
         .write_inner_content(|fn_w| {
-            fn_w.create_element("w:p").write_inner_content(|p_w| {
-                // Paragraph properties with footnote text style
-                let entry = &ctx.doc_style.footnote_entry;
-                p_w.create_element("w:pPr").write_inner_content(|ppr| {
-                    ppr.create_element("w:pStyle")
-                        .with_attribute(("w:val", "FootnoteText"))
-                        .write_empty()?;
-                    if let Some(gap) = entry.gap_twips {
-                        let gap = gap.to_string();
-                        ppr.create_element("w:spacing")
-                            .with_attribute(("w:after", gap.as_str()))
+            let mut first_para = true;
+            for para in &footnote.paragraphs {
+                fn_w.create_element("w:p").write_inner_content(|p_w| {
+                    // Paragraph properties with footnote text style
+                    let entry = &ctx.doc_style.footnote_entry;
+                    p_w.create_element("w:pPr").write_inner_content(|ppr| {
+                        ppr.create_element("w:pStyle")
+                            .with_attribute(("w:val", "FootnoteText"))
                             .write_empty()?;
+                        if let Some(gap) = entry.gap_twips {
+                            let gap = gap.to_string();
+                            ppr.create_element("w:spacing")
+                                .with_attribute(("w:after", gap.as_str()))
+                                .write_empty()?;
+                        }
+                        if let Some(indent) = entry.indent_twips {
+                            let indent = indent.to_string();
+                            ppr.create_element("w:ind")
+                                .with_attribute(("w:firstLine", indent.as_str()))
+                                .write_empty()?;
+                        }
+                        if let Some(justify) = entry.justify {
+                            ppr.create_element("w:jc")
+                                .with_attribute(("w:val", if justify { "both" } else { "left" }))
+                                .write_empty()?;
+                        }
+                        Ok(())
+                    })?;
+                    // Word generates the marker from the footnote format;
+                    // never emit a literal marker character here. A
+                    // bookmark around the mark is the NOTEREF target.
+                    if first_para {
+                        if let Some(bookmark) = &footnote.bookmark {
+                            write_bookmark_start(p_w, bookmark.id, &bookmark.name)?;
+                        }
+                        write_footnote_mark_run(p_w)?;
+                        if let Some(bookmark) = &footnote.bookmark {
+                            write_bookmark_end(p_w, bookmark.id)?;
+                        }
+                        // Space after reference mark
+                        write_text_run(p_w, " ", true)?;
+                        first_para = false;
                     }
-                    if let Some(indent) = entry.indent_twips {
-                        let indent = indent.to_string();
-                        ppr.create_element("w:ind")
-                            .with_attribute(("w:firstLine", indent.as_str()))
-                            .write_empty()?;
-                    }
-                    if let Some(justify) = entry.justify {
-                        ppr.create_element("w:jc")
-                            .with_attribute(("w:val", if justify { "both" } else { "left" }))
-                            .write_empty()?;
+                    for inline in &para.inlines {
+                        if let InlineElement::Image(img) = inline {
+                            *image_ordinal += 1;
+                            *rel_ordinal += 1;
+                            let n = footnote_image_base + *image_ordinal;
+                            let rid = format!("rId{rel_ordinal}");
+                            let svg_rid = img.svg.as_ref().map(|_| {
+                                *rel_ordinal += 1;
+                                format!("rId{rel_ordinal}")
+                            });
+                            write_image_inline(p_w, img, n, &rid, svg_rid.as_deref())?;
+                        } else {
+                            write_inline(p_w, inline, ctx)?;
+                        }
                     }
                     Ok(())
                 })?;
-                // Word generates the marker from the footnote format;
-                // never emit a literal marker character here. A
-                // bookmark around the mark is the NOTEREF target.
-                if let Some(bookmark) = &footnote.bookmark {
-                    write_bookmark_start(p_w, bookmark.id, &bookmark.name)?;
-                }
-                write_footnote_mark_run(p_w)?;
-                if let Some(bookmark) = &footnote.bookmark {
-                    write_bookmark_end(p_w, bookmark.id)?;
-                }
-                // Space after reference mark
-                write_text_run(p_w, " ", true)?;
-                for inline in &footnote.content {
-                    if let InlineElement::Image(img) = inline {
-                        *image_ordinal += 1;
-                        *rel_ordinal += 1;
-                        let n = footnote_image_base + *image_ordinal;
-                        let rid = format!("rId{rel_ordinal}");
-                        let svg_rid = img.svg.as_ref().map(|_| {
-                            *rel_ordinal += 1;
-                            format!("rId{rel_ordinal}")
-                        });
-                        write_image_inline(p_w, img, n, &rid, svg_rid.as_deref())?;
-                    } else {
-                        write_inline(p_w, inline, ctx)?;
-                    }
-                }
-                Ok(())
-            })?;
+            }
             Ok(())
         })?;
     Ok(())
@@ -229,9 +235,11 @@ fn write_footnote_entry(
 /// Whether any footnote holds OMML math; gates the `xmlns:m` declaration on
 /// `w:footnotes` — an undeclared `m:` prefix makes the part malformed XML.
 pub(super) fn footnotes_have_math(doc: &Document) -> bool {
-    doc.footnotes
-        .iter()
-        .any(|f| f.content.iter().any(inline_has_math))
+    doc.footnotes.iter().any(|f| {
+        f.paragraphs
+            .iter()
+            .any(|p| p.inlines.iter().any(inline_has_math))
+    })
 }
 
 fn inline_has_math(inline: &InlineElement) -> bool {
@@ -241,6 +249,9 @@ fn inline_has_math(inline: &InlineElement) -> bool {
             AnchoredContent::Text { blocks, .. } => blocks.iter().any(block_has_math),
             AnchoredContent::Image(_) => false,
         },
+        InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
+            body.iter().any(inline_has_math)
+        }
         _ => false,
     }
 }
@@ -268,7 +279,8 @@ fn block_has_math(block: &BlockElement) -> bool {
     match block {
         BlockElement::Paragraph(p) => para_has_math(p),
         BlockElement::Table(t) => table_has_math(t),
-        BlockElement::BibliographyBlock { paragraphs } => paragraphs.iter().any(para_has_math),
+        BlockElement::BibliographyBlock { paragraphs }
+        | BlockElement::TocBlock { paragraphs, .. } => paragraphs.iter().any(para_has_math),
     }
 }
 

@@ -27,23 +27,16 @@ fn toc_produces_field_code() {
 
 #[test]
 fn toc_document_model_has_toc_inline() {
-    use tydocx_ooxml::document::{BlockElement, InlineElement};
+    use tydocx_ooxml::document::BlockElement;
 
     let doc = fixture_document("toc_test");
 
-    let has_toc = doc.body.elements.iter().any(|e| {
-        if let BlockElement::Paragraph(p) = e {
-            p.inlines
-                .iter()
-                .any(|i| matches!(i, InlineElement::FieldToc { .. }))
-        } else {
-            false
-        }
-    });
-    assert!(
-        has_toc,
-        "document model should contain a FieldToc inline element"
-    );
+    let has_toc = doc
+        .body
+        .elements
+        .iter()
+        .any(|e| matches!(e, BlockElement::TocBlock { .. }));
+    assert!(has_toc, "document model should contain a TocBlock element");
 }
 
 #[test]
@@ -1085,4 +1078,20 @@ fn issue_odd_pagebreak_then_set_page_keeps_parity_and_margins() {
         "the following 2cm margins belong to the new section's own sectPr:\n{doc_xml}"
     );
     assert!(doc_xml.contains("Second page."));
+}
+
+#[test]
+fn toc_field_cache_lists_heading_entries_with_page_refs() {
+    let xml = fixture_doc_xml("toc_test");
+    assert!(
+        xml.contains("PAGEREF"),
+        "TOC entries should carry a PAGEREF field"
+    );
+    // Each title appears twice: once in its heading, once in the TOC cache.
+    for title in ["Introduction", "Methods", "Conclusion"] {
+        assert!(
+            xml.matches(title).count() >= 2,
+            "TOC cache should list {title} alongside its heading"
+        );
+    }
 }

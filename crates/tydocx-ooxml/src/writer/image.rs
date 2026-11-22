@@ -4,6 +4,7 @@ use quick_xml::Writer;
 use quick_xml::events::BytesText;
 
 use super::citation::write_bibliography_sdt;
+use super::fields::write_toc_block;
 use super::paragraph::write_paragraph;
 use super::table::write_table;
 use super::{DocParts, WriteCtx};
@@ -58,7 +59,8 @@ fn collect_images_from_blocks<'a>(blocks: &'a [BlockElement], images: &mut Vec<&
         match el {
             BlockElement::Paragraph(p) => collect_images_from_para(p, images),
             BlockElement::Table(t) => collect_images_from_table(t, images),
-            BlockElement::BibliographyBlock { paragraphs } => {
+            BlockElement::BibliographyBlock { paragraphs }
+            | BlockElement::TocBlock { paragraphs, .. } => {
                 for p in paragraphs {
                     collect_images_from_para(p, images);
                 }
@@ -74,17 +76,21 @@ fn collect_images_from_blocks<'a>(blocks: &'a [BlockElement], images: &mut Vec<&
 pub(super) fn collect_footnote_images(doc: &Document) -> Vec<&ImageData> {
     let mut images = Vec::new();
     for footnote in &doc.footnotes {
-        for inline in &footnote.content {
-            if let InlineElement::Image(img) = inline {
-                images.push(img);
-            }
+        for para in &footnote.paragraphs {
+            collect_images_from_inlines(&para.inlines, &mut images);
         }
     }
     images
 }
 
 fn collect_images_from_para<'a>(para: &'a Paragraph, images: &mut Vec<&'a ImageData>) {
-    for inline in &para.inlines {
+    collect_images_from_inlines(&para.inlines, images);
+}
+
+/// Images in a run-level inline list — including inside hyperlink bodies,
+/// whose media numbering and relationships must resolve like top-level ones.
+fn collect_images_from_inlines<'a>(inlines: &'a [InlineElement], images: &mut Vec<&'a ImageData>) {
+    for inline in inlines {
         match inline {
             InlineElement::Image(img) => images.push(img),
             InlineElement::AnchoredFloat(float) => match &float.content {
@@ -93,6 +99,9 @@ fn collect_images_from_para<'a>(para: &'a Paragraph, images: &mut Vec<&'a ImageD
                     collect_images_from_blocks(blocks, images);
                 }
             },
+            InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
+                collect_images_from_inlines(body, images);
+            }
             _ => {}
         }
     }
@@ -146,10 +155,15 @@ pub(super) fn svg_rel_id(image_index: usize, images: &[&ImageData], parts: &DocP
 }
 
 fn inline_is_drawing(inline: &InlineElement) -> bool {
-    matches!(
-        inline,
-        InlineElement::Image(_) | InlineElement::AnchoredLine(_) | InlineElement::AnchoredFloat(_)
-    )
+    match inline {
+        InlineElement::Image(_)
+        | InlineElement::AnchoredLine(_)
+        | InlineElement::AnchoredFloat(_) => true,
+        InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
+            body.iter().any(inline_is_drawing)
+        }
+        _ => false,
+    }
 }
 
 fn para_has_drawing(para: &Paragraph) -> bool {
@@ -177,16 +191,19 @@ pub(super) fn body_has_drawing(doc: &Document) -> bool {
     doc.body.elements.iter().any(|el| match el {
         BlockElement::Paragraph(p) => para_has_drawing(p),
         BlockElement::Table(t) => table_has_drawing(t),
-        BlockElement::BibliographyBlock { paragraphs } => paragraphs.iter().any(para_has_drawing),
+        BlockElement::BibliographyBlock { paragraphs }
+        | BlockElement::TocBlock { paragraphs, .. } => paragraphs.iter().any(para_has_drawing),
     })
 }
 
 /// Whether any footnote holds a drawing; gates the same namespaces on
 /// `w:footnotes`.
 pub(super) fn footnotes_have_drawing(doc: &Document) -> bool {
-    doc.footnotes
-        .iter()
-        .any(|f| f.content.iter().any(inline_is_drawing))
+    doc.footnotes.iter().any(|f| {
+        f.paragraphs
+            .iter()
+            .any(|p| p.inlines.iter().any(inline_is_drawing))
+    })
 }
 
 /// Write a floating horizontal line as a `wp:anchor` + `wps:wsp` shape: an
@@ -611,6 +628,12 @@ fn write_float_textbox<W: Write>(
                                 BlockElement::BibliographyBlock { paragraphs } => {
                                     write_bibliography_sdt(c, paragraphs, ctx)?;
                                 }
+                                BlockElement::TocBlock {
+                                    max_depth,
+                                    paragraphs,
+                                } => {
+                                    write_toc_block(c, *max_depth, paragraphs, ctx)?;
+                                }
                             }
                         }
                         Ok(())
@@ -715,6 +738,7 @@ fn write_drawing_run<W: Write>(
                     inl.create_element("wp:docPr")
                         .with_attribute(("id", id_str.as_str()))
                         .with_attribute(("name", name.as_str()))
+                        .with_attribute(("descr", img.alt.as_deref().unwrap_or("")))
                         .write_empty()?;
                     inl.create_element("a:graphic")
                         .with_attribute(("xmlns:a", "http://schemas.openxmlformats.org/drawingml/2006/main"))

@@ -1084,3 +1084,65 @@ fn issue_table_after_set_in_block_keeps_table() {
     assert!(doc_xml.contains("481,513"), "data cell should be present");
     assert!(doc_xml.contains("Row label"), "row label should be present");
 }
+
+#[test]
+fn table_cell_stroke_emits_tc_borders() {
+    // `table.cell(stroke: 1pt)` inside a stroke-less table must reach
+    // `w:tcBorders` on that cell — `lower_cell` used to drop the IR stroke.
+    let xml = fixture_doc_xml("table_cell_stroke");
+    let tc_borders = xml.matches("<w:tcBorders>").count();
+    assert_eq!(
+        tc_borders, 1,
+        "exactly the stroked cell should carry w:tcBorders, got {tc_borders}:\n{xml}"
+    );
+    assert!(
+        xml.contains("<w:bottom w:val=\"single\" w:sz=\"8\""),
+        "1pt cell stroke should emit sz=8 edges:\n{xml}"
+    );
+}
+
+#[test]
+fn table_partial_hline_strokes_only_covered_cells() {
+    // `table.hline(start: 0, end: 2)` under a 3-column row must paint the
+    // touched edges of the two covered cells and leave the third alone —
+    // line induction used to drop non-full-span lines entirely.
+    let xml = fixture_doc_xml("table_partial_hline");
+    let bordered = xml.matches("<w:tcBorders>").count();
+    assert_eq!(
+        bordered, 4,
+        "two cells above and two below the partial line get tcBorders, got {bordered}:\n{xml}"
+    );
+    // Row 2 cell "f" (column 3) is past the line's end and must have none.
+    let f_pos = xml.find(">f<").expect("cell f should exist");
+    let tc_start = xml[..f_pos].rfind("<w:tc>").expect("f's cell");
+    let tc_end = xml[f_pos..]
+        .find("</w:tc>")
+        .map(|e| f_pos + e)
+        .expect("cell end");
+    let f_cell = &xml[tc_start..tc_end];
+    assert!(
+        !f_cell.contains("<w:tcBorders>"),
+        "the uncovered cell must not gain a border:\n{f_cell}"
+    );
+}
+
+#[test]
+fn table_2x2_span_writes_one_vmerge_continuation() {
+    // A colspan=2 × rowspan=2 cell must lower row 2 to ONE continuation
+    // cell (gridSpan=2 + vMerge) — not one continuation per column.
+    let xml = fixture_doc_xml("table_span_2x2");
+    let row2 = xml
+        .split("<w:tr>")
+        .nth(2)
+        .expect("second table row should exist");
+    let row2 = row2.split("</w:tr>").next().unwrap_or(row2);
+    let continuations = row2.matches("<w:vMerge/>").count();
+    assert_eq!(
+        continuations, 1,
+        "row 2 must have exactly one vMerge continuation, got {continuations}:\n{row2}"
+    );
+    assert!(
+        row2.contains("<w:gridSpan w:val=\"2\"/>"),
+        "the continuation must span the same grid columns:\n{row2}"
+    );
+}

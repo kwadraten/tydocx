@@ -330,11 +330,11 @@ fn ir_path_documented_diffs() {
         let (new_xml, legacy_xml) = convert_both(fixture);
         assert!(
             new_xml.contains("<w:bibliography/>"),
-            "entries missing (known gap)"
+            "bibliography field present"
         );
         assert!(legacy_xml.contains(&format!("w:anchor=\"{anchor}\"")));
-        assert!(!new_xml.contains("w:hyperlink"), "no citation links yet");
-        assert!(!new_xml.contains(author), "no entry text in the new path");
+        assert!(new_xml.contains("w:hyperlink"), "citation links present");
+        assert!(new_xml.contains(author), "entry text in the new path");
         assert!(legacy_xml.contains(author), "legacy renders entries");
     }
 

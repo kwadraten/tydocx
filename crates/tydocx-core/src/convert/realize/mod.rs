@@ -43,6 +43,33 @@ use super::source::apply_source_overrides;
 use collect::{collect_document, document_info};
 use patch::patch_document;
 
+/// Convert an equation to OMML, forwarding the math converter's
+/// dropped/approximated-construct notes as degradations (deduplicated by
+/// construct + message — a document may repeat the same wrapper many times).
+pub(crate) fn equation_omml_ir(content: &Content, degradations: &mut Vec<IrDegradation>) -> String {
+    let (omml, notes) = tydocx_math::equation_to_omml_report(content);
+    let span = content.span();
+    let span = span.id().map(|_| span);
+    for note in notes {
+        if !degradations
+            .iter()
+            .any(|d| d.construct == note.construct && d.message == note.message)
+        {
+            degradations.push(IrDegradation {
+                span,
+                construct: note.construct,
+                action: if note.dropped {
+                    IrAction::Skipped
+                } else {
+                    IrAction::Approximated
+                },
+                message: note.message,
+            });
+        }
+    }
+    omml
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct DocxPosition {
     pub pair: usize,
@@ -504,6 +531,7 @@ pub fn export_ir_with_ir(
     };
 
     if let Some(paged) = paged_doc {
+        patch_outline_page_numbers(&mut ir, paged);
         let style = ir.style.clone();
         let patch_degradations = patch_document(
             &mut ir,
@@ -521,6 +549,8 @@ pub fn export_ir_with_ir(
 
     let (mut doc, lower_degradations) = lower(&ir, &geometry, ir_compat(options.compat));
     degradations.extend(lower_degradations.iter().map(core_degradation));
+
+    apply_bibliography_style_option(&mut doc, options, &mut degradations);
 
     apply_paragraph_formatting(&mut doc);
     canonicalize_font_names(world, &mut doc);
@@ -618,4 +648,94 @@ fn ir_plain_text(inlines: &[IrInline]) -> String {
         }
     }
     text
+}
+
+/// Fill `IrOutlineEntry.page_number` from the companion `PagedDocument` — the
+/// only representation that knows rendered page positions. Locations are
+/// content hashes stable across the two compiles.
+fn patch_outline_page_numbers(ir: &mut IrDocument, paged: &PagedDocument) {
+    fn patch(blocks: &mut [IrBlock], paged: &PagedDocument) {
+        for block in blocks {
+            if let IrBlock::Outline { entries, .. } = block {
+                for entry in entries.iter_mut() {
+                    if entry.page_number.is_none()
+                        && let Some(hash) = entry.page_loc
+                        && let Some(page) = paged
+                            .introspector()
+                            .page(typst_library::introspection::Location::new(hash))
+                    {
+                        entry.page_number = Some(page.get().to_string());
+                    }
+                }
+            }
+        }
+    }
+    patch(&mut ir.body, paged);
+}
+
+/// Extract the Word style name from a bibliography XSL: Office styles declare
+/// `<b:StyleNameLocalized ...>NAME</b:StyleNameLocalized>` (or `b:StyleName`) in
+/// the header comment. Falls back to the file stem by the caller.
+fn xsl_style_name(xsl: &str) -> Option<String> {
+    for tag in ["StyleNameLocalized", "StyleName"] {
+        let mut rest = xsl;
+        while let Some(open) = rest.find(&format!("<b:{tag}")) {
+            let after = &rest[open..];
+            let Some(gt) = after.find('>') else { break };
+            let body = &after[gt + 1..];
+            if let Some(close) = body.find("</b:") {
+                let name = body[..close].trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+            rest = body;
+        }
+    }
+    None
+}
+
+/// Resolve `--bibliography-style <file.xsl>` into Sources.xml's
+/// `SelectedStyle`/`StyleName`, degrading (never silently) when the file is
+/// unreadable. The cached field result keeps the document's CSL render — the
+/// XSL is a Word-side transform applied on field update — so a successful
+/// selection is reported as an approximation.
+fn apply_bibliography_style_option(
+    doc: &mut tydocx_ooxml::document::Document,
+    options: &ConvertOptions,
+    degradations: &mut Vec<Degradation>,
+) {
+    let Some(style_path) = &options.bibliography_style else {
+        return;
+    };
+    let file_name = std::path::Path::new(style_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
+    let Some((name, xsl)) =
+        file_name.and_then(|name| std::fs::read_to_string(style_path).ok().map(|x| (name, x)))
+    else {
+        degradations.push(Degradation::new(
+            None,
+            "bibliography-style",
+            DegradationAction::Skipped,
+            format!(
+                "bibliography style file {style_path:?} could not be read;                  Sources.xml keeps the default APA selection",
+            ),
+        ));
+        return;
+    };
+    let style_name = xsl_style_name(&xsl).unwrap_or_else(|| {
+        name.trim_end_matches(".xsl")
+            .trim_end_matches(".XSL")
+            .to_string()
+    });
+    doc.bibliography_style = Some((format!("\\{name}"), style_name.clone()));
+    degradations.push(Degradation::new(
+        None,
+        "bibliography-style",
+        DegradationAction::Approximated,
+        format!(
+            "Sources.xml selects bibliography style '{style_name}' ({name});              the cached field result keeps the document's CSL render and              a field update re-renders entries with the selected style",
+        ),
+    ));
 }
