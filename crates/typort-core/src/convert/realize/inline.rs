@@ -59,6 +59,10 @@ pub struct InlineCtx<'a> {
     pub footnote_bodies: &'a mut HashMap<Location, Vec<IrParagraph>>,
     pub footnote_circled: &'a mut bool,
     pub layouter_index: &'a HashMap<Span, Content>,
+    /// The `par` style resolved on the fragment's first realized element —
+    /// the chain a set rule scoped inside a show-rule body lands on, whether
+    /// or not a `ParElem` pair materializes. `None` for an empty fragment.
+    pub scoped_par: Option<IrParStyle>,
 }
 
 pub fn smart_quotes_for(styles: StyleChain<'_>) -> (Lang, Option<Region>) {
@@ -77,7 +81,15 @@ pub fn collect_inlines(
         locator,
         content,
         styles,
-        |engine, locator, pairs| Ok(collect_fragment_inlines(pairs, engine, locator, ctx)),
+        |engine, locator, pairs| {
+            ctx.scoped_par = ctx.scoped_par.or_else(|| {
+                pairs
+                    .iter()
+                    .find(|(pair, _)| pair.to_packed::<TagElem>().is_none())
+                    .map(|(_, chain)| par_style_from_styles(*chain))
+            });
+            Ok(collect_fragment_inlines(pairs, engine, locator, ctx))
+        },
     )
 }
 
@@ -121,8 +133,10 @@ fn collect_fragment_inlines(
             i += 1;
             continue;
         }
-        if content.to_packed::<LinebreakElem>().is_some() {
-            out.push(IrInline::LineBreak);
+        if let Some(linebreak) = content.to_packed::<LinebreakElem>() {
+            out.push(IrInline::LineBreak {
+                justify: linebreak.justify.get(styles),
+            });
             ctx.prev_char = Some('\n');
             i += 1;
             continue;
@@ -156,36 +170,51 @@ fn collect_fragment_inlines(
             i += 1;
             continue;
         }
-        if let Some(block) = content.to_packed::<BlockElem>()
-            && block_body_content(block, styles).is_none()
-        {
-            collect_layouter_shape(content, styles, engine, locator, ctx, &mut out);
-            i += 1;
-            continue;
-        }
-        if let Some((kind, body)) = shape_parts(content) {
-            push_shape_inline(
-                kind,
-                body,
-                shape_fill_hex(content, styles),
-                content.span(),
-                styles,
-                engine,
-                locator,
-                ctx,
-                &mut out,
-            );
-            i += 1;
-            continue;
-        }
-        if let Some(inlines) = collect_transparent_inlines(content, styles, engine, locator, ctx) {
-            out.extend(inlines);
+        if collect_shape_or_transparent(content, styles, engine, locator, ctx, &mut out) {
             i += 1;
             continue;
         }
         i += 1;
     }
     out
+}
+
+/// Layouter shapes, rect/curve/etc. bodies, and transparent layout wrappers
+/// all contribute inlines without their chrome; returns whether the pair
+/// matched one of them.
+fn collect_shape_or_transparent(
+    content: &Content,
+    styles: StyleChain<'_>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    ctx: &mut InlineCtx<'_>,
+    out: &mut Vec<IrInline>,
+) -> bool {
+    if let Some(block) = content.to_packed::<BlockElem>()
+        && block_body_content(block, styles).is_none()
+    {
+        collect_layouter_shape(content, styles, engine, locator, ctx, out);
+        return true;
+    }
+    if let Some((kind, body)) = shape_parts(content) {
+        push_shape_inline(
+            kind,
+            body,
+            shape_fill_hex(content, styles),
+            content.span(),
+            styles,
+            engine,
+            locator,
+            ctx,
+            out,
+        );
+        return true;
+    }
+    if let Some(inlines) = collect_transparent_inlines(content, styles, engine, locator, ctx) {
+        out.extend(inlines);
+        return true;
+    }
+    false
 }
 
 /// `move`/`rotate`/`scale`/`skew`/`columns` inside a fragment: chrome is
@@ -692,6 +721,7 @@ fn handle_tag_start(
             footnote_bodies: &mut *ctx.footnote_bodies,
             footnote_circled: &mut *ctx.footnote_circled,
             layouter_index: ctx.layouter_index,
+            scoped_par: None,
         };
         if let FootnoteBody::Content(body) = &fn_elem.body
             && let Ok(inlines) = collect_inlines(body, styles, engine, locator, &mut body_ctx)
@@ -855,7 +885,7 @@ fn next_marker_text(pairs: &[Pair<'_>], start: usize) -> Option<String> {
             continue;
         }
         if let Some(text) = content.to_packed::<TextElem>() {
-            return Some(text.text.to_string());
+            return Some(typort_ooxml::document::strip_break_hints(&text.text));
         }
     }
     None
@@ -868,7 +898,7 @@ fn marker_text_in(pairs: &[Pair<'_>]) -> String {
             out.push_str(&text.text);
         }
     }
-    out
+    typort_ooxml::document::strip_break_hints(&out)
 }
 
 fn link_location_after(pairs: &[Pair<'_>], start: usize) -> Option<Location> {

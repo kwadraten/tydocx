@@ -11,7 +11,6 @@ const IDENTICAL: &[&str] = &[
     "style_default",
     "style_custom_page",
     "style_custom_spacing",
-    "style_indent",
     "style_justify",
     "style_heading_custom",
     "issue_deep_headings",
@@ -61,6 +60,7 @@ const DOCUMENTED: &[&str] = &[
     "issue_page_numbering_change",
     "issue_table_first_section",
     "issue_table_cascade_sections",
+    "style_indent",
 ];
 
 fn convert_both(fixture: &str) -> (String, String) {
@@ -504,6 +504,24 @@ fn ir_path_documented_diffs() {
             "legacy drops colors"
         );
         assert!(legacy_xml.contains("Courier New"));
+    }
+    {
+        // The realize path carries the resolved `par` onto `IrBlock::Heading`
+        // (manuscript-defects round 2): `#set par(first-line-indent: 2em)`
+        // applies to headings in Typst, and the `Heading1` style pins
+        // `firstLine="0"`, so the heading emits an explicit `w:ind` (chars
+        // keep it relative to the heading size). Legacy drops the setting.
+        let (new_xml, legacy_xml) = convert_both("style_indent");
+        assert!(new_xml.contains("w:ind w:firstLineChars=\"200\" w:firstLine=\"616\""));
+        assert!(!legacy_xml.contains("w:ind w:firstLineChars=\"200\""));
+        assert_eq!(
+            without_lines(
+                &new_xml,
+                &["w:ind w:firstLineChars=\"200\" w:firstLine=\"616\""]
+            ),
+            legacy_xml.lines().collect::<Vec<_>>(),
+            "style_indent: nothing else should differ"
+        );
     }
 }
 

@@ -347,6 +347,7 @@ impl Collector<'_> {
             footnote_bodies: &mut self.footnote_bodies,
             footnote_circled: &mut self.footnote_circled,
             layouter_index: &self.layouter_index,
+            scoped_par: None,
         }
     }
 
@@ -1284,6 +1285,7 @@ impl Collector<'_> {
         let level = u8::try_from(level.min(255)).unwrap_or(u8::MAX);
         let mut ctx = self.inline_ctx();
         let mut body = collect_inlines(&heading.body, styles, engine, locator, &mut ctx)?;
+        let scoped_par = ctx.scoped_par;
         if let Some(number) = &numbering_text {
             strip_leading_text(&mut body, number);
             strip_leading_text(&mut body, " ");
@@ -1305,7 +1307,7 @@ impl Collector<'_> {
             body,
             label: child.label().map(|l| l.resolve().to_string()),
             alignment: alignment_from_styles(styles),
-            par: par_style_from_styles(styles),
+            par: scoped_par.unwrap_or_else(|| par_style_from_styles(styles)),
             span: child.span().id().map(|_| child.span()),
             outlined,
         }))
@@ -1352,6 +1354,7 @@ impl Collector<'_> {
         let numbering_text = heading_numbers(heading);
         let mut body: Vec<IrInline> = Vec::new();
         let mut alignment = alignment_from_styles(styles);
+        let mut par = par_style_from_styles(styles);
         for (content, pair_styles) in group {
             if let Some(block) = content.to_packed::<BlockElem>()
                 && let Some(body_content) = block_body_content(block, *pair_styles)
@@ -1359,16 +1362,21 @@ impl Collector<'_> {
                 alignment = alignment_from_styles(*pair_styles);
                 let mut ctx = self.inline_ctx();
                 body = collect_inlines(body_content, *pair_styles, engine, locator, &mut ctx)?;
+                par = ctx
+                    .scoped_par
+                    .unwrap_or_else(|| par_style_from_styles(*pair_styles));
                 if let Some(number) = &numbering_text {
                     strip_leading_text(&mut body, number);
                     strip_leading_text(&mut body, " ");
                 }
                 break;
             }
-            if let Some(par) = content.to_packed::<ParElem>() {
+            if let Some(inner_par) = content.to_packed::<ParElem>() {
                 alignment = alignment_from_styles(*pair_styles);
                 let mut ctx = self.inline_ctx();
-                let para = collect_paragraph(&par.body, *pair_styles, engine, locator, &mut ctx)?;
+                let para =
+                    collect_paragraph(&inner_par.body, *pair_styles, engine, locator, &mut ctx)?;
+                par = para.par;
                 body = para.inlines;
                 if let Some(number) = &numbering_text {
                     strip_leading_text(&mut body, number);
@@ -1399,7 +1407,7 @@ impl Collector<'_> {
             body,
             label: inner.label().map(|l| l.resolve().to_string()),
             alignment,
-            par: par_style_from_styles(styles),
+            par,
             span: inner.span().id().map(|_| inner.span()),
             outlined,
         }))
@@ -2365,7 +2373,7 @@ impl Collector<'_> {
                             line.push(run);
                         }
                     }
-                    IrInline::LineBreak => split.push(Vec::new()),
+                    IrInline::LineBreak { .. } => split.push(Vec::new()),
                     _ => {}
                 }
             }
@@ -3327,6 +3335,7 @@ fn heading_block(spec: HeadingSpec) -> IrBlock {
         numbering: spec.numbering,
         body: spec.body,
         label: spec.label,
+        par: spec.par,
         alignment: spec.alignment,
         span: spec.span,
     }

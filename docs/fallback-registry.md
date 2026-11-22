@@ -242,7 +242,12 @@ bodies — now comes from `StyleChain`s or element identity.
   `wp:wrapNone` (it displaces nothing) and `behindDoc` derived from paint
   order — behind when the page still has content after it. Text bodies
   become editable `wps:txbx` content with a pinned `w:jc`; images become
-  `pic:pic`; a filled `rect` becomes `a:solidFill` on the shape. A body
+  `pic:pic`; a filled `rect` becomes `a:solidFill` on the shape, and an
+  unfilled box takes the fill of what paints under it — the latest
+  covering placed `rect`, else a declared solid `page(fill:)`, else paper
+  white — so it covers its underlay as Typst's overlay implies (an image
+  underlay keeps the box unfilled; so does earlier non-place content
+  overlapping the box, which Word could not show through a fill). A body
   that is a lone table lowers to `w:tblpPr` at the measured position
   instead (a table cannot live inside `txbxContent`). A placed box that
   sits entirely inside a side margin anchors `relativeFrom="margin"` so a
@@ -251,7 +256,12 @@ bodies — now comes from `StyleChain`s or element identity.
 - **Measurement:** `realize/place.rs` reads the place's
   `Tag::Start`/`Tag::End` bracket in the page frame — the items between
   the tags are laid out at their absolute positions, so their union
-  bounds are the anchor's page-absolute extent.
+  bounds are the anchor's page-absolute extent, and the anchor keeps that
+  true measured extent (`bodyPr wrap="none"` + `a:noAutofit` keep Word
+  from re-wrapping inside it). An earlier round expanded text boxes to
+  the page edge because LibreOffice ignores `wrap="none"`; in Word the
+  expansion produces a page-sized invisible box, so the true extent is
+  emitted and LibreOffice may show the box's text overflowing it.
 
 ### Float `scope: "parent"` and unmeasured floats
 - **What:** floating `#place` anchors wherever it rendered — column
@@ -359,7 +369,9 @@ bodies — now comes from `StyleChain`s or element identity.
 - **What:** a grid wider than 63 lanes is split at lane boundaries into
   consecutive tables + `grid-column-split`; `fr`/`auto` row heights are
   measured from one laid-out frame — the renderer's heights, not Word's
-  line layout. C1 flattens grids to paragraphs + `grid-layout`.
+  line layout — and only rows the planner rewrites carry `trHeight` (a
+  grid it leaves unchanged reflows in Word like an ordinary table). C1
+  flattens grids to paragraphs + `grid-layout`.
 
 ### Silent-at-C2 degradations
 - **What:** several aspects report only at C1 even though C2/C3 also drop

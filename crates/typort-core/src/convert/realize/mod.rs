@@ -1,9 +1,9 @@
 mod chain;
-mod collect;
+pub(crate) mod collect;
 mod inline;
 mod overline;
 mod patch;
-mod place;
+pub(crate) mod place;
 mod style;
 
 use std::collections::HashMap;
@@ -456,6 +456,7 @@ pub fn export_ir_with_ir(
         &mut tmp,
         options.compat,
         &mut degradations,
+        &place::place_location_hashes(&ir.body),
     );
     let section_break = !ir.sections.is_empty();
     if options.compat == CompatMode::C1 {
