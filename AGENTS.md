@@ -86,11 +86,11 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   extraction is split under `convert/page/` (`units`, `style`, `source_ast`,
   `hanging_indent`, `reachable`, `margin`, `furniture`, `run_style`, and `language`);
   `convert/text_norm.rs` holds the shared CJK-space normalisation; and the
-  OOXML writer is split by emitted part under `typort-ooxml/src/writer/`. Each
+  OOXML writer is split by emitted part under `tydocx-ooxml/src/writer/`. Each
   `mod.rs` is a re-exporting facade. Put a new converter, paged-style
   responsibility, or writer part in its matching module rather than growing an
   entry module. Tests are already split this way:
-  `crates/typort-cli/tests/integration/` is one file per test area (see the Testing
+  `crates/tydocx-cli/tests/integration/` is one file per test area (see the Testing
   section below) — add a new area module rather than growing an existing one.
 
 ## Testing
@@ -104,13 +104,13 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   ship with a fixture-based regression test** for the specific case — that code is
   the most fragile part of the system (geometry → semantics inference with magic
   thresholds; see ARCHITECTURE.md "retired seam").
-- **Golden snapshots** (`crates/typort-cli/tests/integration/golden.rs`) pin the
+- **Golden snapshots** (`crates/tydocx-cli/tests/integration/golden.rs`) pin the
   exact `word/document.xml` for a curated set of fixtures under `tests/snapshots/`,
   so output-formatting drift surfaces as a reviewable diff — the suite's only
   oracle for output *quality*, not just presence. After an intentional output
   change, regenerate and **review the diff before committing**:
   ```bash
-  UPDATE_SNAPSHOTS=1 cargo test -p typort --test integration golden
+  UPDATE_SNAPSHOTS=1 cargo test -p tydocx --test integration golden
   git diff tests/snapshots
   ```
   The set is curated for CI-safety: only fixtures whose fonts are **embedded**
@@ -125,7 +125,7 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   LibreOffice/pdftoppm/ImageMagick and RMSE-compare against Typst's own PDF. They
   are `#[ignore]`d (those tools aren't in CI) but **panic loudly on a missing
   tool** when opted into — they never silently pass. Run them with
-  `cargo test -p typort -- --ignored`.
+  `cargo test -p tydocx -- --ignored`.
 
 ## What must pass before committing
 

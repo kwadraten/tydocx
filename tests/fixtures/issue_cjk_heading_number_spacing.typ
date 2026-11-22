@@ -1,7 +1,7 @@
 // Issue: typst#5778 — CJK heading numbering has too wide spacing
 // When Chinese punctuation like 、is used in heading numbering,
 // the 0.3em automatic space after numbering creates excessive gaps.
-// typort should faithfully reproduce the spacing from the rendered result.
+// tydocx should faithfully reproduce the spacing from the rendered result.
 
 #set heading(numbering: "一、")
 #set text(font: "Noto Serif CJK SC", lang: "zh")

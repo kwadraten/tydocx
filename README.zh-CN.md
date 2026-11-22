@@ -4,17 +4,21 @@
 
 通用的 Typst 到 Word（.docx）转换器。任何合法的 `.typ` 文件都应能转换为可编辑的 `.docx`。
 
+## 项目演进与计划
+
+tydocx 由 [dianzuan/typort](https://github.com/dianzuan/typort) 演进而来，是采用编译后端（compile-backend）技术路线的分支。后续计划独立发布 Rust crate，并使用 pyo3 建立 Python 绑定、做 .NET 绑定，向三个语言各自发布库。
+
 ## 安装
 
 ```bash
-cargo install typort                    # 从 crates.io 安装
-cargo install --path crates/typort-cli  # 从 checkout 安装
+cargo install tydocx                    # 从 crates.io 安装
+cargo install --path crates/tydocx-cli  # 从 checkout 安装
 ```
 
 ## 用法
 
 ```bash
-typort input.typ -o output.docx
+tydocx input.typ -o output.docx
 ```
 
 版式（页边距、脚注样式等）完全由 Typst 源码控制（`#set page(margin: …)`、`#set footnote(numbering: …)`），没有外部预设。
@@ -75,11 +79,11 @@ OOXML XML 直接用 `quick-xml` 生成。不用 docx-rs，无中间格式。
 
 ```mermaid
 flowchart TD
-    CRATES["crates/"] --> CLI["typort-cli/ — CLI 二进制（clap）"]
-    CRATES --> CORE["typort-core/ — Typst 编译 + 转换引擎"]
-    CRATES --> IR["typort-ir/ — 自有 realize IR + 纯 lowering"]
-    CRATES --> OOXML["typort-ooxml/ — OOXML 文档模型 + XML 写入器 + ZIP 打包"]
-    CRATES --> MATH["typort-math/ — Typst 数学 → OMML 转换"]
+    CRATES["crates/"] --> CLI["tydocx-cli/ — CLI 二进制（clap）"]
+    CRATES --> CORE["tydocx-core/ — Typst 编译 + 转换引擎"]
+    CRATES --> IR["tydocx-ir/ — 自有 realize IR + 纯 lowering"]
+    CRATES --> OOXML["tydocx-ooxml/ — OOXML 文档模型 + XML 写入器 + ZIP 打包"]
+    CRATES --> MATH["tydocx-math/ — Typst 数学 → OMML 转换"]
 ```
 
 ## 前置依赖

@@ -2629,20 +2629,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "typed-arena"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
-
-[[package]]
-name = "typort"
+name = "tydocx"
 version = "0.2.0"
 dependencies = [
  "clap",
  "time",
- "typort-core",
- "typort-ir",
- "typort-ooxml",
+ "tydocx-core",
+ "tydocx-ir",
+ "tydocx-ooxml",
  "typst",
  "typst-layout",
  "typst-pdf",
@@ -2650,7 +2644,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "typort-core"
+name = "tydocx-core"
 version = "0.2.0"
 dependencies = [
  "base64",
@@ -2661,9 +2655,9 @@ dependencies = [
  "time",
  "tiny-skia",
  "ttf-parser",
- "typort-ir",
- "typort-math",
- "typort-ooxml",
+ "tydocx-ir",
+ "tydocx-math",
+ "tydocx-ooxml",
  "typst",
  "typst-html",
  "typst-kit",
@@ -2677,15 +2671,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "typort-ir"
+name = "tydocx-ir"
 version = "0.2.0"
 dependencies = [
- "typort-ooxml",
+ "tydocx-ooxml",
  "typst-syntax",
 ]
 
 [[package]]
-name = "typort-math"
+name = "tydocx-math"
 version = "0.2.0"
 dependencies = [
  "codex",
@@ -2696,13 +2690,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "typort-ooxml"
+name = "tydocx-ooxml"
 version = "0.2.0"
 dependencies = [
  "quick-xml 0.37.5",
  "typst-syntax",
  "zip",
 ]
+
+[[package]]
+name = "typed-arena"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
 name = "typst"

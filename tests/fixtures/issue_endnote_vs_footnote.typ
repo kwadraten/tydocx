@@ -1,6 +1,6 @@
 // Issue: pandoc#4041, pandoc#1425 — Footnotes vs endnotes differentiation
 // Pandoc converts all endnotes to footnotes; Word supports both types.
-// typort should preserve footnotes correctly (endnotes are a future extension).
+// tydocx should preserve footnotes correctly (endnotes are a future extension).
 
 = Document with Notes
 

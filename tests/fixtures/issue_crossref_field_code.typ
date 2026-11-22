@@ -1,6 +1,6 @@
 // Issue: pandoc#6078 — Cross-references should use Word REF field codes
 // instead of plain hyperlinks, so Word can update numbering dynamically.
-// typort already uses REF field codes for @label; this fixture tests
+// tydocx already uses REF field codes for @label; this fixture tests
 // that figure/table/equation references all produce proper field codes.
 
 #set heading(numbering: "1.")

@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    "crates/typort-cli",
-    "crates/typort-core",
-    "crates/typort-ir",
-    "crates/typort-ooxml",
-    "crates/typort-math",
+    "crates/tydocx-cli",
+    "crates/tydocx-core",
+    "crates/tydocx-ir",
+    "crates/tydocx-ooxml",
+    "crates/tydocx-math",
 ]
 resolver = "2"
 
@@ -75,11 +75,11 @@ clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 
 # Internal crates
-typort-core = { version = "0.2.0", path = "crates/typort-core" }
-typort-ir = { version = "0.2.0", path = "crates/typort-ir" }
-typort-ooxml = { version = "0.2.0", path = "crates/typort-ooxml" }
-typort-math = { version = "0.2.0", path = "crates/typort-math" }
+tydocx-core = { version = "0.2.0", path = "crates/tydocx-core" }
+tydocx-ir = { version = "0.2.0", path = "crates/tydocx-ir" }
+tydocx-ooxml = { version = "0.2.0", path = "crates/tydocx-ooxml" }
+tydocx-math = { version = "0.2.0", path = "crates/tydocx-math" }
 
 # Bibliography — the same version typst-library 0.15 uses, so only one copy
-# resolves (typort re-parses .bib/.yaml itself; see convert/bibliography.rs).
+# resolves (tydocx re-parses .bib/.yaml itself; see convert/bibliography.rs).
 hayagriva = "0.10.1"

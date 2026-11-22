@@ -1,4 +1,4 @@
-// Preservation fixture: constructs typort emits but does not further model
+// Preservation fixture: constructs tydocx emits but does not further model
 // must survive a convert + save + reopen cycle unchanged. Each line carries
 // one construct class — hyperlink, cross-reference bookmark + REF field,
 // and a footnote reference.

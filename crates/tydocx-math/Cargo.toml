@@ -1,0 +1,14 @@
+[package]
+version.workspace = true
+description.workspace = true
+repository.workspace = true
+name = "tydocx-math"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+codex.workspace = true
+quick-xml.workspace = true
+typst.workspace = true
+typst-library.workspace = true
+unicode-math-class.workspace = true
