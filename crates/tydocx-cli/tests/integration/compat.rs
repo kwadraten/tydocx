@@ -441,5 +441,14 @@ fn c1_misc_gates() {
         1,
         "only the target: figure outline should report outline-target: {constructs:?}"
     );
-    assert_clean("issue_c1_misc");
+    // The figure-targeted outline's entries cannot be cached (headings only),
+    // so C2/C3 honestly report that one remainder instead of silently dropping
+    // it — the old C2-clean premise died with the silent drop.
+    for mode in [CompatMode::C2, CompatMode::C3] {
+        assert_eq!(
+            constructs_for("issue_c1_misc", mode),
+            vec!["outline-target-kind".to_string()],
+            "C2/C3 should report only the figure-outline remainder"
+        );
+    }
 }

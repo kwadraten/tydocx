@@ -62,17 +62,24 @@ impl CompatMode {
 
 /// Options for one conversion run. New options go here instead of growing
 /// the `convert` / `export` signatures.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ConvertOptions {
     /// Which compat mode to convert in. Default is C2.
     pub compat: CompatMode,
+    /// Word bibliography style selection (`--bibliography-style <file.xsl>`):
+    /// the raw XSL file name, e.g. `IEEE.xsl`. Written into Sources.xml's
+    /// `SelectedStyle`/`StyleName` so a Word field update renders with it.
+    pub bibliography_style: Option<String>,
 }
 
 impl ConvertOptions {
     /// Options selecting `compat`.
     #[must_use]
     pub fn new(compat: CompatMode) -> Self {
-        Self { compat }
+        Self {
+            compat,
+            bibliography_style: None,
+        }
     }
 }
 

@@ -478,7 +478,7 @@ pub(super) fn handle_par_with_inline_equations(
             let loc = eq_tag.location();
             if let Some(c) = content_at_location(html, loc) {
                 para.push_run(Run::new(" "));
-                let omml = tydocx_math::equation_to_omml(&c);
+                let omml = super::equation_omml(&c, ctx.degradations);
                 para.add_math(omml);
             }
             cursor = find_tag_end(children, cursor, loc) + 1;
@@ -557,7 +557,7 @@ pub(super) fn handle_equation(tag: &Tag, ctx: &mut WalkCtx) {
     } else {
         // Inline equation at block level: wrap in a paragraph
         let mut para = Paragraph::new();
-        let omml = tydocx_math::equation_to_omml(&content);
+        let omml = super::equation_omml(&content, ctx.degradations);
         para.add_math(omml);
         ctx.doc.add_paragraph(para);
     }
@@ -570,7 +570,7 @@ pub(super) fn emit_block_equation(content: &Content, ctx: &mut WalkCtx) {
         ctx.add_bookmark(&mut para, label.resolve().to_string());
     }
     let number = compute_equation_number(content.to_packed::<EquationElem>(), ctx.eq_state);
-    let omml = tydocx_math::equation_to_omml(content);
+    let omml = super::equation_omml(content, ctx.degradations);
     if let Some(number) = number {
         para.add_numbered_math(omml, number);
     } else {

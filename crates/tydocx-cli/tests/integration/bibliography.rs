@@ -294,3 +294,43 @@ fn citations_link_to_their_bibliography_entry() {
         );
     }
 }
+
+#[test]
+fn bibliography_field_cache_contains_formatted_entries() {
+    // The BIBLIOGRAPHY field's cached result must carry the formatted entries,
+    // not an empty field — the realize pairs never see them (they are
+    // layout-time `Works` content), so a regression here silently empties the
+    // rendered bibliography.
+    let xml = fixture_doc_xml("bibliography_basic");
+    let sdt_start = xml.find("<w:bibliography/>").expect("bibliography SDT");
+    let sdt_end = xml.find("</w:sdt>").expect("SDT close");
+    let sdt = &xml[sdt_start..sdt_end];
+    for needle in ["An Example Article", "The Art of Computer Programming"] {
+        assert!(
+            sdt.contains(needle),
+            "formatted entry missing from BIBLIOGRAPHY field cache: {needle}"
+        );
+    }
+}
+
+#[test]
+fn citations_link_to_bibliography_entry_bookmarks() {
+    let xml = fixture_doc_xml("bibliography_basic");
+    let vals = |pre: &str| -> Vec<String> {
+        xml.match_indices(pre)
+            .filter_map(|(i, _)| xml[i + pre.len()..].split('"').next().map(str::to_string))
+            .collect()
+    };
+    let anchors = vals(r#"<w:hyperlink w:anchor=""#);
+    let bookmarks: std::collections::HashSet<String> = vals(r#"w:name=""#).into_iter().collect();
+    assert!(
+        !anchors.is_empty(),
+        "citations must become internal hyperlinks:\n{xml}"
+    );
+    for a in &anchors {
+        assert!(
+            bookmarks.contains(a),
+            "citation anchor {a:?} has no matching entry bookmark"
+        );
+    }
+}

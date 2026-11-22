@@ -628,6 +628,33 @@ fn report_zone_unrepresentable(
     }
 }
 
+/// Convert an equation to OMML, forwarding the math converter's
+/// dropped/approximated-construct notes as degradations (deduplicated by
+/// construct + message — a document may repeat the same wrapper many times).
+pub(crate) fn equation_omml(content: &Content, degradations: &mut Vec<Degradation>) -> String {
+    let (omml, notes) = tydocx_math::equation_to_omml_report(content);
+    let span = content.span();
+    let span = span.id().map(|_| span);
+    for note in notes {
+        if !degradations
+            .iter()
+            .any(|d| d.construct == note.construct && d.message == note.message)
+        {
+            degradations.push(Degradation::new(
+                span,
+                note.construct,
+                if note.dropped {
+                    DegradationAction::Skipped
+                } else {
+                    DegradationAction::Approximated
+                },
+                note.message,
+            ));
+        }
+    }
+    omml
+}
+
 fn append_transform_bodies(world: &TydocxWorld, doc: &mut Document) {
     let texts = page::transform_bodies_text(world.main_source().text());
     if texts.is_empty() {

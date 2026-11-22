@@ -128,9 +128,10 @@ fn bold_link_document_model_has_bold_runs() {
     let has_bold_link = doc.body.elements.iter().any(|e| {
         if let BlockElement::Paragraph(p) = e {
             p.inlines.iter().any(|i| {
-                if let InlineElement::Hyperlink { runs, .. } = i {
-                    runs.iter()
-                        .any(|r| r.bold && r.text.contains("Bold link text"))
+                if let InlineElement::Hyperlink { body, .. } = i {
+                    body.iter().any(|inner| {
+                        matches!(inner, InlineElement::Text(r) if r.bold && r.text.contains("Bold link text"))
+                    })
                 } else {
                     false
                 }

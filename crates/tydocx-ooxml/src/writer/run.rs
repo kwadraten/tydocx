@@ -65,14 +65,14 @@ pub(super) fn write_inline<W: Write>(
             bold,
             size_half_pt,
         } => write_field_page(writer, display_text, *bold, *size_half_pt),
-        InlineElement::Hyperlink { url, runs } => write_hyperlink(writer, url, runs, ctx.doc_style),
-        InlineElement::InternalLink { anchor, runs } => {
+        InlineElement::Hyperlink { url, body } => write_hyperlink(writer, url, body, ctx),
+        InlineElement::InternalLink { anchor, body } => {
             writer
                 .create_element("w:hyperlink")
                 .with_attribute(("w:anchor", anchor.as_str()))
                 .write_inner_content(|hw| {
-                    for run in runs {
-                        write_run(hw, run, ctx.doc_style)?;
+                    for inline in body {
+                        write_inline(hw, inline, ctx)?;
                     }
                     Ok(())
                 })?;

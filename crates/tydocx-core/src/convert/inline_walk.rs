@@ -423,7 +423,7 @@ pub(super) fn handle_inline_equation_tag(
             }
             emit_block_equation(&content, ctx);
         } else {
-            para.add_math(tydocx_math::equation_to_omml(&content));
+            para.add_math(super::equation_omml(&content, ctx.degradations));
         }
     }
     find_tag_end(children, i, tag.location())

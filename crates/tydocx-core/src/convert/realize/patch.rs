@@ -133,10 +133,12 @@ fn collect_entries_from_frame(frame: &Frame, style: &DocumentStyle, entries: &mu
                     style,
                     tag_stack: Vec::new(),
                     paragraph: IrParagraph::default(),
+                    paragraphs: Vec::new(),
                     skipped: Vec::new(),
                 };
                 walk_entry_frame(&group.frame, &mut walk);
-                let mut body = vec![walk.paragraph];
+                let mut body = std::mem::take(&mut walk.paragraphs);
+                body.push(walk.paragraph);
                 body.retain(|para| !para.inlines.is_empty());
                 let entry = EntryBody {
                     paragraphs: body,
@@ -162,6 +164,7 @@ struct EntryWalk<'a> {
     style: &'a DocumentStyle,
     tag_stack: Vec<(&'static str, Location)>,
     paragraph: IrParagraph,
+    paragraphs: Vec<IrParagraph>,
     skipped: Vec<Degradation>,
 }
 
@@ -170,6 +173,16 @@ fn walk_entry_frame(frame: &Frame, walk: &mut EntryWalk<'_>) {
         match item {
             FrameItem::Tag(tag) => match tag {
                 Tag::Start(elem, _) => {
+                    // Each `par` tag in the entry frame delimits one footnote
+                    // paragraph — flush the run buffer so multi-paragraph
+                    // footnote bodies stay multi-paragraph. `par` tags carry
+                    // no location, so this runs before the location check.
+                    if elem.elem().name() == "par"
+                        && in_entry(walk)
+                        && !walk.paragraph.inlines.is_empty()
+                    {
+                        walk.paragraphs.push(std::mem::take(&mut walk.paragraph));
+                    }
                     if let Some(location) = elem.location() {
                         walk.tag_stack.push((elem.elem().name(), location));
                     }

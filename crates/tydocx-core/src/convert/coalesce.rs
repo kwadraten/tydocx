@@ -31,7 +31,9 @@ pub fn coalesce_runs(doc: &mut Document) {
     }
 
     for footnote in &mut doc.footnotes {
-        coalesce_inlines(&mut footnote.content);
+        for para in &mut footnote.paragraphs {
+            coalesce_inlines(&mut para.inlines);
+        }
     }
 
     if let Some(header) = doc.header.as_mut() {
@@ -79,32 +81,54 @@ fn coalesce_inlines(inlines: &mut Vec<InlineElement>) {
         *inlines = merged;
     }
 
-    // Hyperlink display text is its own run vector; coalesce it in place. The
+    // Hyperlink display text is its own inline list; coalesce it in place. The
     // hyperlink is a single opaque inline above, so a run is never merged across
     // the hyperlink boundary.
     for inline in inlines.iter_mut() {
-        if let InlineElement::Hyperlink { runs, .. } = inline {
-            coalesce_run_vec(runs);
+        if let InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } =
+            inline
+        {
+            coalesce_inline_texts(body);
         }
     }
 }
 
-/// Coalesce a bare `Vec<Run>` (e.g. a hyperlink's display runs).
-fn coalesce_run_vec(runs: &mut Vec<Run>) {
-    if runs.len() < 2 {
-        return;
-    }
-    let mut merged: Vec<Run> = Vec::with_capacity(runs.len());
-    for run in runs.drain(..) {
-        if let Some(prev) = merged.last_mut()
-            && same_run_formatting(prev, &run)
-        {
-            prev.text.push_str(&run.text);
-            continue;
+/// Merge adjacent `Text` inlines with identical formatting — the inline-list
+/// counterpart of [`coalesce_run_vec`], for hyperlink bodies.
+fn coalesce_inline_texts(body: &mut Vec<InlineElement>) {
+    let mut merged: Vec<InlineElement> = Vec::with_capacity(body.len());
+    for inline in body.drain(..) {
+        match inline {
+            InlineElement::Text(run) => {
+                if let Some(InlineElement::Text(prev)) = merged.last_mut()
+                    && same_run_formatting(prev, &run)
+                {
+                    prev.text.push_str(&run.text);
+                    continue;
+                }
+                merged.push(InlineElement::Text(run));
+            }
+            InlineElement::Hyperlink {
+                url,
+                body: mut inner,
+            } => {
+                coalesce_inline_texts(&mut inner);
+                merged.push(InlineElement::Hyperlink { url, body: inner });
+            }
+            InlineElement::InternalLink {
+                anchor,
+                body: mut inner,
+            } => {
+                coalesce_inline_texts(&mut inner);
+                merged.push(InlineElement::InternalLink {
+                    anchor,
+                    body: inner,
+                });
+            }
+            other => merged.push(other),
         }
-        merged.push(run);
     }
-    *runs = merged;
+    *body = merged;
 }
 
 /// Two runs have identical effective formatting iff every field the writer

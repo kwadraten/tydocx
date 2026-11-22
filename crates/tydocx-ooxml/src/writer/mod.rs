@@ -229,7 +229,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     if parts.has(RelKind::Bibliography) {
         zip.start_file("customXml/item1.xml", options)?;
         zip.write_all(&xml_part(|w| {
-            generate_custom_xml_sources(w, &doc.citation_sources)
+            generate_custom_xml_sources(w, &doc.citation_sources, doc.bibliography_style.as_ref())
         })?)?;
 
         zip.start_file("customXml/itemProps1.xml", options)?;
@@ -322,7 +322,8 @@ fn doc_has_lists(doc: &Document) -> bool {
         || doc.body.elements.iter().any(|el| match el {
             BlockElement::Paragraph(p) => p.list_info.is_some(),
             BlockElement::Table(table) => table_has_lists(table),
-            BlockElement::BibliographyBlock { paragraphs } => {
+            BlockElement::BibliographyBlock { paragraphs }
+            | BlockElement::TocBlock { paragraphs, .. } => {
                 paragraphs.iter().any(|p| p.list_info.is_some())
             }
         })

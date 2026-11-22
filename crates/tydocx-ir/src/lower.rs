@@ -14,11 +14,11 @@ use crate::geometry::GeometryInput;
 use crate::grid_plan::{MAX_COLUMNS, PlannedCell, PlannedCellKind, PlannedTable, plan_grid};
 use crate::mode::CompatMode;
 use crate::types::{
-    Alignment, HangingIndent, IrAnchor, IrBibEntry, IrBlock, IrCaptionSeq, IrCellBorders,
-    IrDocument, IrEnum, IrEquation, IrField, IrFootnote, IrGrid, IrHeadingNumbering, IrImage,
-    IrInline, IrLevelDef, IrList, IrNumberingPattern, IrParStyle, IrParagraph, IrPlaceWrap, IrRaw,
-    IrSectionBreakType, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, ParagraphStyle,
-    Run,
+    Alignment, HangingIndent, IrAnchor, IrBibEntry, IrBlock, IrCaptionSeq, IrCellBorderFlags,
+    IrCellBorders, IrDocument, IrEnum, IrEquation, IrField, IrFootnote, IrGrid, IrHeadingNumbering,
+    IrImage, IrInline, IrLevelDef, IrList, IrNumberingPattern, IrOutlineEntry, IrParStyle,
+    IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType, IrShapeKind, IrTable, IrTableCell,
+    IrTableRow, IrVMerge, ParagraphStyle, Run,
 };
 
 #[derive(Debug, Default)]
@@ -350,12 +350,12 @@ fn shade_shape_block(elements: &mut Vec<BlockElement>, fill_hex: &str) {
     }
 }
 
-fn lower_footnote_body(footnote: &IrFootnote, ctx: &mut LowerCtx) -> Vec<InlineElement> {
-    let mut content = Vec::new();
-    for para in &footnote.body {
-        content.extend(lower_inlines(&para.inlines, ctx));
-    }
-    content
+fn lower_footnote_body(footnote: &IrFootnote, ctx: &mut LowerCtx) -> Vec<Paragraph> {
+    footnote
+        .body
+        .iter()
+        .map(|para| lower_paragraph(para, ctx))
+        .collect()
 }
 
 fn lower_block(block: &IrBlock, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
@@ -427,11 +427,11 @@ fn lower_block_in(
         IrBlock::Raw(raw) => lower_raw(raw),
         IrBlock::Outline {
             title,
-            entries: _,
+            entries,
             depth,
             custom_target,
             custom_indent,
-        } => lower_outline(title, *depth, *custom_target, *custom_indent, ctx),
+        } => lower_outline(title, entries, *depth, *custom_target, *custom_indent, ctx),
         IrBlock::Bibliography { entries } => lower_bibliography(entries, ctx),
         IrBlock::Place {
             float,
@@ -491,6 +491,7 @@ fn lower_shape_block(
 
 fn lower_outline(
     title: &[IrInline],
+    entries: &[IrOutlineEntry],
     depth: u8,
     custom_target: bool,
     custom_indent: bool,
@@ -526,6 +527,32 @@ fn lower_outline(
         let mut title_para = Paragraph::new();
         title_para.inlines = lower_inlines(title, ctx);
         out.push(BlockElement::Paragraph(title_para));
+    }
+    if !entries.is_empty() {
+        let mut entry_paras = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let mut para = Paragraph::new();
+            let mut body: Vec<InlineElement> = lower_inlines(&entry.title, ctx);
+            body.push(InlineElement::Tab);
+            if let Some(target) = &entry.target {
+                body.push(InlineElement::FieldPageRef {
+                    bookmark_name: target.clone(),
+                    display_text: entry.page_number.clone().unwrap_or_default(),
+                });
+                para.inlines = vec![InlineElement::InternalLink {
+                    anchor: target.clone(),
+                    body,
+                }];
+            } else {
+                para.inlines = body;
+            }
+            entry_paras.push(para);
+        }
+        out.push(BlockElement::TocBlock {
+            max_depth: depth,
+            paragraphs: entry_paras,
+        });
+        return out;
     }
     let mut para = Paragraph::new();
     para.add_toc(depth);
@@ -587,7 +614,7 @@ fn lower_heading(
     }
     if let Some(name) = spec.label {
         let id = ctx.next_bookmark();
-        para.add_bookmark_at_start(id, name.clone());
+        para.add_bookmark_wrapping(id, name.clone());
     }
     vec![BlockElement::Paragraph(para)]
 }
@@ -717,7 +744,7 @@ fn lower_equation(eq: &IrEquation, ctx: &mut LowerCtx) -> Vec<BlockElement> {
     });
     if let Some(name) = &eq.bookmark {
         let id = ctx.next_bookmark();
-        para.add_bookmark_at_start(id, name.clone());
+        para.add_bookmark_wrapping(id, name.clone());
     }
     vec![BlockElement::Paragraph(para)]
 }
@@ -1029,7 +1056,7 @@ fn force_paragraph_alignment(element: &mut BlockElement) {
                 }
             }
         }
-        BlockElement::BibliographyBlock { .. } => {}
+        BlockElement::BibliographyBlock { .. } | BlockElement::TocBlock { .. } => {}
     }
 }
 
@@ -1140,7 +1167,7 @@ fn figure_caption_para(fig: &FigureSpec<'_>, ctx: &mut LowerCtx) -> Option<Parag
     para.inlines.extend(lower_inlines(&caption, ctx));
     if let Some(name) = fig.label {
         let id = ctx.next_bookmark();
-        para.add_bookmark_at_start(id, name.clone());
+        para.add_bookmark_wrapping(id, name.clone());
     }
     Some(para)
 }
@@ -1176,7 +1203,7 @@ fn lower_figure(fig: &FigureSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) ->
             let id = ctx.next_bookmark();
             for element in &mut out {
                 if let BlockElement::Paragraph(para) = element {
-                    para.add_bookmark_at_start(id, name.clone());
+                    para.add_bookmark_wrapping(id, name.clone());
                     break;
                 }
             }
@@ -1264,7 +1291,7 @@ fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     out.inlines = merge_runs(lower_inlines(&para.inlines, ctx));
     if let Some(name) = &para.bookmark {
         let id = ctx.next_bookmark();
-        out.add_bookmark_at_start(id, name.clone());
+        out.add_bookmark_wrapping(id, name.clone());
     }
     out
 }
@@ -1275,19 +1302,21 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
         match inline {
             IrInline::Text(run) => out.push(InlineElement::Text(lower_run(run, ctx))),
             IrInline::Link { url, anchor, body } => {
-                let runs = inline_to_runs(body, ctx);
-                if let Some(url) = url {
-                    out.push(InlineElement::Hyperlink {
-                        url: url.clone(),
-                        runs,
-                    });
-                } else if let Some(anchor) = anchor {
-                    out.push(InlineElement::InternalLink {
-                        anchor: anchor.clone(),
-                        runs,
-                    });
+                if url.is_none() && anchor.is_none() {
+                    out.extend(lower_inlines(body, ctx));
                 } else {
-                    out.extend(runs.into_iter().map(InlineElement::Text));
+                    let body = lower_link_body(body, ctx);
+                    if let Some(url) = url {
+                        out.push(InlineElement::Hyperlink {
+                            url: url.clone(),
+                            body,
+                        });
+                    } else if let Some(anchor) = anchor {
+                        out.push(InlineElement::InternalLink {
+                            anchor: anchor.clone(),
+                            body,
+                        });
+                    }
                 }
             }
             IrInline::Ref {
@@ -1356,6 +1385,33 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                 ctx,
             )),
             IrInline::Overline(line) => out.push(InlineElement::AnchoredLine(line.clone())),
+        }
+    }
+    out
+}
+
+/// Lower a `#link` body node-by-node so images, OMML math, tabs, and fields
+/// stay inside the hyperlink instead of being flattened through `Vec<Run>`
+/// (which silently dropped them). A nested link cannot exist inside
+/// `w:hyperlink`, so its lowered content is spliced into the outer link and
+/// the inner target loss is reported.
+fn lower_link_body(body: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement> {
+    let mut out = Vec::new();
+    for element in lower_inlines(body, ctx) {
+        match element {
+            InlineElement::Hyperlink { body: inner, .. }
+            | InlineElement::InternalLink { body: inner, .. } => {
+                ctx.degrade_at(
+                    None,
+                    "link-in-link",
+                    DegradationAction::Skipped,
+                    "a link inside a link is not representable in OOXML; its content \
+                     stays inside the outer link but the inner link's target is dropped"
+                        .to_string(),
+                );
+                out.extend(inner);
+            }
+            other => out.push(other),
         }
     }
     out
@@ -1431,6 +1487,11 @@ fn lower_image(image: &IrImage, ctx: &mut LowerCtx) -> InlineElement {
         width_emu: image.width_emu,
         height_emu: image.height_emu,
         src_rect: image.src_rect,
+        alt: if ctx.compat.is_c1() {
+            None
+        } else {
+            image.alt.clone()
+        },
     })
 }
 
@@ -1520,7 +1581,7 @@ fn lower_cite(
     if let Some(anchor) = target {
         return InlineElement::InternalLink {
             anchor: anchor.clone(),
-            runs: vec![Run::new(rendered)],
+            body: vec![InlineElement::Text(Run::new(rendered))],
         };
     }
     InlineElement::Text(Run::new(rendered))
@@ -1900,7 +1961,10 @@ fn lower_cell(
                     content.push(CellContent::Paragraph(para));
                 }
                 BlockElement::Table(table) => content.push(CellContent::Table(table)),
-                BlockElement::BibliographyBlock { paragraphs: bib } => {
+                BlockElement::BibliographyBlock { paragraphs: bib }
+                | BlockElement::TocBlock {
+                    paragraphs: bib, ..
+                } => {
                     for para in bib {
                         paragraphs.push(para.clone());
                         content.push(CellContent::Paragraph(para));
@@ -1931,8 +1995,26 @@ fn lower_cell(
             cell.fill_hex.clone()
         },
         width_twips: None,
-        borders: None,
+        // Per-cell `w:tcBorders` only where an edge was declared on the cell
+        // (a `table.cell(stroke:)` or a partial hline/vline folded in at
+        // collection). Cells that merely inherit the table's uniform stroke
+        // keep `None` and inherit `tblBorders` — the same output as before.
+        borders: cell_borders_emitted(&cell.borders, cell.borders_declared),
         zero_margins: false,
+    }
+}
+
+/// Emit `w:tcBorders` for a cell only when one of its edges was declared
+/// (cell stroke, or a folded partial line). Inheriting cells return `None`
+/// so the table-level `tblBorders` keep painting their edges.
+fn cell_borders_emitted(
+    borders: &IrCellBorders,
+    declared: IrCellBorderFlags,
+) -> Option<CellBorders> {
+    if declared.top || declared.right || declared.bottom || declared.left {
+        Some(ooxml_cell_borders(borders))
+    } else {
+        None
     }
 }
 
@@ -2365,12 +2447,12 @@ mod tests {
         assert!(
             matches!(&para.inlines[0], InlineElement::Bookmark { name, .. } if name == "sec-lists")
         );
+        assert!(matches!(&para.inlines[1], InlineElement::Text(run) if run.text == "1.1 "));
+        assert!(matches!(&para.inlines[2], InlineElement::Text(run) if run.text == "Lists"));
         assert!(matches!(
-            &para.inlines[1],
+            &para.inlines[3],
             InlineElement::BookmarkEnd { .. }
         ));
-        assert!(matches!(&para.inlines[2], InlineElement::Text(run) if run.text == "1.1 "));
-        assert!(matches!(&para.inlines[3], InlineElement::Text(run) if run.text == "Lists"));
     }
 
     #[test]

@@ -221,8 +221,13 @@ fn tag_to_guid(tag: &str) -> String {
 pub(super) fn generate_custom_xml_sources(
     writer: &mut Writer<&mut Vec<u8>>,
     sources: &[CitationSource],
+    style: Option<&(String, String)>,
 ) -> io::Result<()> {
     // APA is the default and most common academic citation style in Word.
+    let (selected_style, style_name) = style.map_or_else(
+        || (r"\APASixthEditionOfficeOnline.xsl", "APA"),
+        |(sel, name)| (sel.as_str(), name.as_str()),
+    );
     writer
         .create_element("b:Sources")
         .with_attribute((
@@ -233,8 +238,8 @@ pub(super) fn generate_custom_xml_sources(
             "xmlns",
             "http://schemas.openxmlformats.org/officeDocument/2006/bibliography",
         ))
-        .with_attribute(("SelectedStyle", r"\APASixthEditionOfficeOnline.xsl"))
-        .with_attribute(("StyleName", "APA"))
+        .with_attribute(("SelectedStyle", selected_style))
+        .with_attribute(("StyleName", style_name))
         .write_inner_content(|w| {
             for src in sources {
                 w.create_element("b:Source").write_inner_content(|s| {

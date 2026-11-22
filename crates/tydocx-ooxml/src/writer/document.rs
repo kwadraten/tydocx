@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use quick_xml::Writer;
 
 use super::citation::write_bibliography_sdt;
+use super::fields::write_toc_block;
 use super::footnotes::write_footnote_pr;
 use super::paragraph::write_paragraph;
 use super::table::write_table;
@@ -123,6 +124,12 @@ pub(super) fn generate_document_xml(
                     }
                     BlockElement::BibliographyBlock { paragraphs } => {
                         write_bibliography_sdt(body_w, paragraphs, ctx)?;
+                    }
+                    BlockElement::TocBlock {
+                        max_depth,
+                        paragraphs,
+                    } => {
+                        write_toc_block(body_w, *max_depth, paragraphs, ctx)?;
                     }
                 }
             }

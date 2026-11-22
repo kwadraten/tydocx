@@ -1018,3 +1018,63 @@ fn issue_math_accent_subsup_chain() {
         "should have sub/superscript elements"
     );
 }
+
+#[test]
+fn math_cancel_strikes_its_body_not_drops_it() {
+    let xml = fixture_doc_xml("math_cancel");
+    // `cancel(x)` must survive as an OMML borderBox strike, not vanish.
+    let bb = xml
+        .find("<m:borderBox>")
+        .expect("cancel() should emit m:borderBox");
+    let end = xml[bb..]
+        .find("</m:borderBox>")
+        .expect("borderBox must close")
+        + bb;
+    let inside = &xml[bb..end];
+    assert!(
+        inside.contains("m:strikeBLTR"),
+        "default cancel should strike bottom-left to top-right, got: {inside}"
+    );
+    assert!(
+        inside.contains("<m:t>x</m:t>"),
+        "the cancelled item must keep its glyph, got: {inside}"
+    );
+    // `cross: #true` strikes both diagonals.
+    assert!(
+        xml.matches("m:strikeTLBR").count() >= 1,
+        "cross cancel should also strike top-left to bottom-right"
+    );
+}
+
+#[test]
+fn math_unknown_wrapper_recurses_and_reports() {
+    let outcome = common::fixture_outcome("math_wrapper_nested");
+    let xml = common::fixture_package_from_document(&outcome.document)
+        .part_text("word/document.xml")
+        .to_owned();
+    assert!(
+        xml.contains("<m:t>y</m:t>"),
+        "nested unknown wrappers must still emit the wrapped glyph"
+    );
+    let construct = outcome
+        .degradations
+        .iter()
+        .find(|d| d.construct == "math-unknown-node")
+        .expect("an unmapped math wrapper must be reported, not silently unwrapped");
+    assert!(
+        construct.message.contains("scripts") || construct.message.contains("limits"),
+        "the degradation should name the wrapper, got: {}",
+        construct.message
+    );
+}
+
+#[test]
+fn math_augmented_matrix_keeps_separator_column() {
+    let xml = fixture_doc_xml("math_augment");
+    // `augment: #2` on a 3-column matrix emits a `│` separator cell after
+    // the second column of every row.
+    assert!(
+        xml.contains("│"),
+        "augmented matrix should contain the vertical separator, got no │"
+    );
+}

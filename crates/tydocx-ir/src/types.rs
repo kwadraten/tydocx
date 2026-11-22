@@ -720,8 +720,14 @@ pub struct IrRaw {
 pub struct IrOutlineEntry {
     pub level: u8,
     pub title: Vec<IrInline>,
+    /// Bookmark name the entry hyperlinks to (the heading's own label, or a
+    /// synthesized `outline-target-N` the collector registers on the heading).
     pub target: Option<String>,
     pub page_number: Option<String>,
+    /// `Location::hash()` of the target element — the paged patch resolves it
+    /// to the rendered page number via `Location::new(hash)` (locations are
+    /// stable content hashes across compiles).
+    pub page_loc: Option<u128>,
 }
 
 /// `bookmark` is the entry's bookmark (`"bib-n"`), not the citation key:

@@ -3,8 +3,9 @@ use std::io::{self, Write};
 use quick_xml::Writer;
 use quick_xml::events::BytesText;
 
-use super::run::{write_run, write_text_run};
-use crate::document::{DocumentStyle, Run};
+use super::WriteCtx;
+use super::run::{write_inline, write_run, write_text_run};
+use crate::document::{DocumentStyle, InlineElement, Run};
 
 use crate::document::truncate_bookmark_name;
 
@@ -178,8 +179,8 @@ pub(super) fn write_field_page<W: Write>(
 pub(super) fn write_hyperlink<W: Write>(
     writer: &mut Writer<W>,
     url: &str,
-    runs: &[Run],
-    doc_style: &DocumentStyle,
+    body: &[InlineElement],
+    ctx: &WriteCtx,
 ) -> io::Result<()> {
     // Use w:fldSimple with HYPERLINK field code to avoid relationship management
     let instr = format!("HYPERLINK &quot;{url}&quot;");
@@ -187,33 +188,33 @@ pub(super) fn write_hyperlink<W: Write>(
         .create_element("w:fldSimple")
         .with_attribute(("w:instr", instr.as_str()))
         .write_inner_content(|w| {
-            for run in runs {
-                w.create_element("w:r").write_inner_content(|rw| {
-                    // Apply hyperlink styling: colored + underlined
-                    rw.create_element("w:rPr").write_inner_content(|rpr| {
-                        rpr.create_element("w:color")
-                            .with_attribute(("w:val", doc_style.hyperlink_color.as_str()))
-                            .write_empty()?;
-                        rpr.create_element("w:u")
-                            .with_attribute(("w:val", "single"))
-                            .write_empty()?;
-                        if run.bold {
-                            rpr.create_element("w:b").write_empty()?;
-                        }
-                        if run.italic {
-                            rpr.create_element("w:i").write_empty()?;
-                        }
-                        Ok(())
-                    })?;
-                    rw.create_element("w:t")
-                        .with_attribute(("xml:space", "preserve"))
-                        .write_text_content(BytesText::new(&run.text))?;
-                    Ok(())
-                })?;
+            for inline in body {
+                if let InlineElement::Text(run) = inline {
+                    write_hyperlink_run(w, run, ctx.doc_style)?;
+                } else {
+                    // Non-text children (drawing, OMML, tab, field) are valid
+                    // run-level content inside the field result; they keep
+                    // their own appearance rather than hyperlink styling.
+                    write_inline(w, inline, ctx)?;
+                }
             }
             Ok(())
         })?;
     Ok(())
+}
+
+/// One text run inside a HYPERLINK field result: the run keeps all of its own
+/// properties (fonts, size, tracking, …) with hyperlink color + underline on
+/// top.
+fn write_hyperlink_run<W: Write>(
+    writer: &mut Writer<W>,
+    run: &Run,
+    doc_style: &DocumentStyle,
+) -> io::Result<()> {
+    let mut styled = run.clone();
+    styled.color = Some(doc_style.hyperlink_color.clone());
+    styled.underline = true;
+    write_run(writer, &styled, doc_style)
 }
 
 /// Write a generic complex field: `instruction` into `w:instrText`, `result`
@@ -242,4 +243,36 @@ pub(super) fn write_toc_field<W: Write>(writer: &mut Writer<W>, max_depth: u8) -
         "Right-click and update field to see table of contents.",
         false,
     )
+}
+
+/// A TOC field whose cached result is one paragraph per collected entry —
+/// the same multi-paragraph complex-field shape Word itself writes. `instr`
+/// spans the first entry's paragraph; the `end` char gets its own paragraph.
+pub(super) fn write_toc_block<W: Write>(
+    writer: &mut Writer<W>,
+    max_depth: u8,
+    paragraphs: &[crate::document::Paragraph],
+    ctx: &WriteCtx,
+) -> io::Result<()> {
+    let instr = format!(r#" TOC \o "1-{max_depth}" \h \z \u "#);
+    if paragraphs.is_empty() {
+        return write_toc_field(writer, max_depth);
+    }
+    writer.create_element("w:p").write_inner_content(|pw| {
+        write_fld_char(pw, "begin")?;
+        write_instruction_text_run(pw, &instr)?;
+        write_fld_char(pw, "separate")?;
+        for inline in &paragraphs[0].inlines {
+            write_inline(pw, inline, ctx)?;
+        }
+        Ok(())
+    })?;
+    for para in &paragraphs[1..] {
+        super::paragraph::write_paragraph(writer, para, ctx)?;
+    }
+    writer.create_element("w:p").write_inner_content(|pw| {
+        write_fld_char(pw, "end")?;
+        Ok(())
+    })?;
+    Ok(())
 }

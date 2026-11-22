@@ -422,3 +422,12 @@ fn issue_caption_prefix_custom_supplement() {
     assert!(xml.contains("表"), "Chinese supplement should be present");
     assert!(xml.contains("Fig."), "custom supplement should be present");
 }
+
+#[test]
+fn image_alt_text_written_to_doc_pr_descr() {
+    let xml = fixture_doc_xml("universe_image_fit_alt");
+    assert!(
+        xml.contains(r#"descr="sample photo""#),
+        "alt text should be written to wp:docPr descr"
+    );
+}

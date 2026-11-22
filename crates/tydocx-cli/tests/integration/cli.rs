@@ -35,9 +35,14 @@ fn run_tydocx_extra(input: &Path, output: Option<&Path>, extra: &[&str]) -> Outp
 
 /// The `word/document.xml` part of a written .docx file.
 fn document_xml(docx: &Path) -> String {
+    part_xml(docx, "word/document.xml")
+}
+
+/// Any part of a written .docx file, by part name.
+fn part_xml(docx: &Path, name: &str) -> String {
     let file = fs::File::open(docx).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
-    let mut part = archive.by_name("word/document.xml").unwrap();
+    let mut part = archive.by_name(name).unwrap();
     let mut xml = String::new();
     std::io::Read::read_to_string(&mut part, &mut xml).unwrap();
     xml
@@ -205,7 +210,8 @@ fn cli_degradation_report_sidecar() {
             "report should list {construct}, got: {json}"
         );
     }
-    // A C2 run reports nothing: the sidecar is an empty list.
+    // A C2 run reports only the figure-outline remainder: the figure-targeted
+    // outline's entries cannot be cached (headings only).
     let report_c2 = dir.join("report-c2.json");
     let result = run_tydocx_extra(
         &fixture_path("issue_c1_misc"),
@@ -222,10 +228,15 @@ fn cli_degradation_report_sidecar() {
         "c2 conversion should succeed: {}",
         String::from_utf8_lossy(&result.stderr)
     );
+    let sidecar_c2 = fs::read_to_string(&report_c2).unwrap();
+    assert!(
+        sidecar_c2.contains("\"construct\": \"outline-target-kind\""),
+        "c2 sidecar should report the figure-outline remainder, got: {sidecar_c2}"
+    );
     assert_eq!(
-        fs::read_to_string(&report_c2).unwrap(),
-        "{\"degradations\": []}",
-        "c2 sidecar should be empty"
+        sidecar_c2.matches("\"construct\"").count(),
+        1,
+        "c2 sidecar should list only that remainder, got: {sidecar_c2}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -246,5 +257,37 @@ fn cli_compat_rejects_unknown_mode() {
     assert!(!output.exists(), "failed conversion must not leave output");
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("invalid value"), "stderr was: {stderr}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cli_bibliography_style_flag_selects_sources_style() {
+    let dir = temp_dir("bibliography-style");
+    let xsl = dir.join("IEEE.xsl");
+    fs::write(
+        &xsl,
+        "<!-- <b:StyleNameLocalized Lcid=\"1033\">IEEE</b:StyleNameLocalized> -->",
+    )
+    .unwrap();
+    let output = dir.join("out.docx");
+    let result = run_tydocx_extra(
+        &fixture_path("bibliography_basic"),
+        Some(&output),
+        &["--bibliography-style", xsl.to_str().unwrap()],
+    );
+    assert!(
+        result.status.success(),
+        "conversion with --bibliography-style should succeed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let sources = part_xml(&output, "customXml/item1.xml");
+    assert!(
+        sources.contains("SelectedStyle=\"\\IEEE.xsl\""),
+        "Sources.xml should select the passed style file, got: {sources}"
+    );
+    assert!(
+        sources.contains("StyleName=\"IEEE\""),
+        "Sources.xml should name the XSL style, got: {sources}"
+    );
     let _ = fs::remove_dir_all(&dir);
 }

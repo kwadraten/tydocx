@@ -92,7 +92,7 @@ fn formatted_footnote_preserves_bold_and_italic() {
         !doc.footnotes.is_empty(),
         "should have at least one footnote"
     );
-    let fn_content = &doc.footnotes[0].content;
+    let fn_content = &doc.footnotes[0].paragraphs[0].inlines;
     let has_bold = fn_content
         .iter()
         .any(|i| matches!(i, tydocx_ooxml::document::InlineElement::Text(r) if r.bold));
@@ -494,5 +494,38 @@ fn footnote_entry_par_show_rule_pins_indent_and_justify() {
     assert!(
         entry.contains(r#"<w:jc w:val="left"/>"#),
         "the entry pins jc=left against Normal's both:\n{entry}"
+    );
+}
+
+#[test]
+fn footnote_multi_paragraph_body_emits_one_w_p_per_paragraph() {
+    let package = fixture_package("footnote_multi_para");
+    let footnotes = package.part_text("word/footnotes.xml");
+    // The real footnote is the block holding both paragraphs; the separator
+    // footnotes hold none of this text.
+    let start = footnotes
+        .find("First paragraph")
+        .expect("first paragraph should be in footnotes.xml");
+    let open = footnotes[..start]
+        .rfind("<w:footnote ")
+        .expect("footnote element should precede its text");
+    let close = footnotes[start..]
+        .find("</w:footnote>")
+        .map(|i| start + i + "</w:footnote>".len())
+        .expect("footnote element should close");
+    let entry = &footnotes[open..close];
+    assert!(
+        entry.contains("Second paragraph"),
+        "both footnote paragraphs should land in one footnote entry: {entry}"
+    );
+    assert_eq!(
+        entry.matches("<w:p>").count(),
+        2,
+        "one w:p per footnote paragraph, got: {entry}"
+    );
+    assert_eq!(
+        entry.matches("w:footnoteRef").count(),
+        1,
+        "the marker belongs on the first paragraph only, got: {entry}"
     );
 }

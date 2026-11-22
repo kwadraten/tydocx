@@ -316,8 +316,9 @@ fn complex_paper_has_footnotes() {
 
     // Verify footnote content was extracted
     let first_fn_text: String = doc.footnotes[0]
-        .content
+        .paragraphs
         .iter()
+        .flat_map(|p| p.inlines.iter())
         .filter_map(|i| {
             if let tydocx_ooxml::document::InlineElement::Text(r) = i {
                 Some(r.text.as_str())

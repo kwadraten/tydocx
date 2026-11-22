@@ -1,20 +1,60 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+use std::cell::RefCell;
 use std::io::Write;
 
 use codex::styling::{MathStyle, MathVariant, to_style};
 use quick_xml::Writer;
 use quick_xml::events::BytesText;
 use typst::foundations::Content;
-use typst_library::foundations::{SequenceElem, StyleChain, StyledElem, SymbolElem};
+use typst_library::foundations::{SequenceElem, Smart, StyleChain, StyledElem, SymbolElem, Value};
+use typst_library::layout::HElem;
 use typst_library::math::{
-    AccentElem, AlignPointElem, AttachElem, CasesElem, ClassElem, EquationElem, FracElem, LrElem,
-    MatElem, OpElem, OverbraceElem, OverbracketElem, OverlineElem, OverparenElem, OvershellElem,
-    RootElem, UnderbraceElem, UnderbracketElem, UnderlineElem, UnderparenElem, UndershellElem,
-    VecElem,
+    AccentElem, AlignPointElem, AttachElem, CancelAngle, CancelElem, CasesElem, ClassElem,
+    EquationElem, FracElem, LrElem, MatElem, OpElem, OverbraceElem, OverbracketElem, OverlineElem,
+    OverparenElem, OvershellElem, RootElem, UnderbraceElem, UnderbracketElem, UnderlineElem,
+    UnderparenElem, UndershellElem, VecElem,
 };
 use typst_library::text::{LinebreakElem, SpaceElem, TextElem};
+
+/// A math construct the OMML output approximated or could not express. One
+/// conversion collects these so the caller can report them as degradations
+/// instead of the construct vanishing silently.
+#[derive(Debug, Clone)]
+pub struct MathNote {
+    /// A stable construct identifier (degradation-registry key).
+    pub construct: &'static str,
+    /// Whether the construct's visible output was dropped (`true`) or only
+    /// approximated (`false`).
+    pub dropped: bool,
+    /// What was lost and what was emitted instead.
+    pub message: String,
+}
+
+thread_local! {
+    static MATH_NOTES: RefCell<Vec<MathNote>> = const { RefCell::new(Vec::new()) };
+}
+
+fn math_note(construct: &'static str, dropped: bool, message: impl Into<String>) {
+    MATH_NOTES.with(|notes| {
+        notes.borrow_mut().push(MathNote {
+            construct,
+            dropped,
+            message: message.into(),
+        });
+    });
+}
+
+/// Like [`equation_to_omml`], but also returns a note for every math construct
+/// the conversion dropped or approximated, so the caller can surface them.
+#[must_use]
+pub fn equation_to_omml_report(content: &Content) -> (String, Vec<MathNote>) {
+    MATH_NOTES.with(|notes| notes.borrow_mut().clear());
+    let omml = equation_to_omml_inner(content);
+    let notes = MATH_NOTES.with(|notes| std::mem::take(&mut *notes.borrow_mut()));
+    (omml, notes)
+}
 
 /// Convert a Typst `EquationElem` Content into an OMML XML string.
 ///
@@ -24,6 +64,10 @@ use typst_library::text::{LinebreakElem, SpaceElem, TextElem};
 /// Panics if the content is not an `EquationElem`.
 #[must_use]
 pub fn equation_to_omml(content: &Content) -> String {
+    equation_to_omml_report(content).0
+}
+
+fn equation_to_omml_inner(content: &Content) -> String {
     let eq = content
         .to_packed::<EquationElem>()
         .expect("content must be an EquationElem");
@@ -173,6 +217,8 @@ fn convert_content<W: Write>(writer: &mut Writer<W>, content: &Content) -> std::
         convert_vec(writer, vec_elem)?;
     } else if let Some(accent) = content.to_packed::<AccentElem>() {
         convert_accent(writer, accent)?;
+    } else if let Some(cancel) = content.to_packed::<CancelElem>() {
+        convert_cancel(writer, cancel)?;
     } else if let Some(overline) = content.to_packed::<OverlineElem>() {
         convert_bar(writer, &overline.body, "top")?;
     } else if let Some(underline) = content.to_packed::<UnderlineElem>() {
@@ -213,8 +259,31 @@ fn convert_content<W: Write>(writer: &mut Writer<W>, content: &Content) -> std::
         )?;
     } else if content.to_packed::<SpaceElem>().is_some() {
         // OMML handles inter-element spacing automatically — don't emit explicit spaces
+    } else if content.to_packed::<HElem>().is_some() {
+        // `quad` / `#h(...)` in math is horizontal spacing, same as `SpaceElem`
     } else {
-        // For unknown elements, skip silently.
+        // Unknown math element: recurse into every content field it carries so
+        // wrapped material survives, and name the node so the caller can report
+        // the approximation (or the drop, when nothing was wrapped).
+        let name = content.func().name();
+        let mut recursed = false;
+        for (_, value) in content.fields() {
+            if let Value::Content(child) = value {
+                convert_content(writer, &child)?;
+                recursed = true;
+            }
+        }
+        math_note(
+            "math-unknown-node",
+            !recursed,
+            if recursed {
+                format!(
+                    "math element `{name}` has no OMML mapping; its child content is emitted without the wrapper"
+                )
+            } else {
+                format!("math element `{name}` has no OMML mapping and is dropped")
+            },
+        );
     }
     Ok(())
 }
@@ -595,6 +664,11 @@ fn convert_root<W: Write>(writer: &mut Writer<W>, root: &RootElem) -> std::io::R
 
 /// Convert a `MatElem` (matrix) to `m:m` with `m:mr` rows and `m:e` cells.
 /// The matrix is wrapped in `m:d` delimiters matching the Typst delimiter pair.
+///
+/// `augment` vertical separators are emitted as an extra `m:e` column of `│`
+/// runs — OMML has no per-column rule element, and the bar column is the
+/// standard approximation. Horizontal separators have no OMML expression at
+/// all and are reported as dropped.
 fn convert_mat<W: Write>(writer: &mut Writer<W>, mat: &MatElem) -> std::io::Result<()> {
     // MatElem default delimiter is PAREN: ( )
     let (open, close) = if let Some(delim) = mat.delim.as_option().as_ref() {
@@ -606,15 +680,50 @@ fn convert_mat<W: Write>(writer: &mut Writer<W>, mat: &MatElem) -> std::io::Resu
         ("(".to_string(), ")".to_string())
     };
 
+    let ncols = mat.rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut vlines: Vec<usize> = Vec::new();
+    if let Some(augment) = mat.augment.as_option().as_ref().and_then(|a| a.as_ref()) {
+        // `augment: #k` draws a line after column k; negatives count from the
+        // end (`#(-1)` ≡ `#(ncols - 1)`).
+        for &v in &augment.vline.0 {
+            let k = if v < 0 {
+                ncols.saturating_add_signed(v)
+            } else {
+                usize::try_from(v).unwrap_or(usize::MAX)
+            };
+            if k > 0 && k < ncols {
+                vlines.push(k);
+            } else {
+                math_note(
+                    "math-augment-vline",
+                    true,
+                    format!(
+                        "a matrix augmentation line after column {v} is out of range and is dropped"
+                    ),
+                );
+            }
+        }
+        if !augment.hline.0.is_empty() {
+            math_note(
+                "math-augment-hline",
+                true,
+                "a horizontal matrix augmentation line is dropped; OMML matrices cannot express it",
+            );
+        }
+    }
+
     write_delimited(writer, open.as_str(), close.as_str(), |e| {
         e.create_element("m:m").write_inner_content(|m| {
             for row in &mat.rows {
                 m.create_element("m:mr").write_inner_content(|mr| {
-                    for cell in row {
+                    for (ci, cell) in row.iter().enumerate() {
                         mr.create_element("m:e").write_inner_content(|ce| {
                             convert_content(ce, cell)?;
                             Ok(())
                         })?;
+                        if vlines.contains(&(ci + 1)) {
+                            write_matrix_separator_cell(mr)?;
+                        }
                     }
                     Ok(())
                 })?;
@@ -623,6 +732,116 @@ fn convert_mat<W: Write>(writer: &mut Writer<W>, mat: &MatElem) -> std::io::Resu
         })?;
         Ok(())
     })
+}
+
+/// One augmentation separator cell: a `│` run inside `m:e`.
+fn write_matrix_separator_cell<W: Write>(writer: &mut Writer<W>) -> std::io::Result<()> {
+    writer.create_element("m:e").write_inner_content(|ce| {
+        ce.create_element("m:r").write_inner_content(|r| {
+            r.create_element("m:t")
+                .write_text_content(BytesText::new("│"))?;
+            Ok(())
+        })?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Convert `math.cancel` to `m:borderBox`: the four edges are hidden and only
+/// the strike flags carry the cancel line. `cross` draws both diagonals,
+/// `inverted` flips the diagonal, and a custom `angle` snaps to the nearest
+/// of vertical / rising-diagonal / horizontal / falling-diagonal.
+fn convert_cancel<W: Write>(writer: &mut Writer<W>, cancel: &CancelElem) -> std::io::Result<()> {
+    let mut strike_h = false;
+    let mut strike_v = false;
+    let mut strike_bltr = false;
+    let mut strike_tlbr = false;
+    if cancel
+        .cross
+        .as_option()
+        .as_ref()
+        .copied()
+        .unwrap_or_default()
+    {
+        strike_bltr = true;
+        strike_tlbr = true;
+    } else if let Some(Smart::Custom(angle)) = cancel.angle.as_option().as_ref() {
+        match angle {
+            // Typst rotates the line clockwise from the y-axis: 0° is
+            // vertical, 45° rises to the top right, 90° is horizontal,
+            // 135° falls to the bottom right.
+            CancelAngle::Angle(angle) => {
+                let deg = angle.to_deg().rem_euclid(180.0);
+                if !(22.5..157.5).contains(&deg) {
+                    strike_v = true;
+                } else if deg < 67.5 {
+                    strike_bltr = true;
+                } else if deg < 112.5 {
+                    strike_h = true;
+                } else {
+                    strike_tlbr = true;
+                }
+            }
+            CancelAngle::Func(_) => {
+                strike_bltr = true;
+                math_note(
+                    "math-cancel-angle",
+                    false,
+                    "a cancel() angle callback cannot be resolved without layout; the default diagonal strike is used",
+                );
+            }
+        }
+    } else if cancel
+        .inverted
+        .as_option()
+        .as_ref()
+        .copied()
+        .unwrap_or_default()
+    {
+        strike_tlbr = true;
+    } else {
+        strike_bltr = true;
+    }
+
+    writer
+        .create_element("m:borderBox")
+        .write_inner_content(|w| {
+            w.create_element("m:borderBoxPr")
+                .write_inner_content(|pr| {
+                    for edge in ["m:hideTop", "m:hideBot", "m:hideLeft", "m:hideRight"] {
+                        pr.create_element(edge)
+                            .with_attribute(("m:val", "1"))
+                            .write_empty()?;
+                    }
+                    if strike_h {
+                        pr.create_element("m:strikeH")
+                            .with_attribute(("m:val", "1"))
+                            .write_empty()?;
+                    }
+                    if strike_v {
+                        pr.create_element("m:strikeV")
+                            .with_attribute(("m:val", "1"))
+                            .write_empty()?;
+                    }
+                    if strike_bltr {
+                        pr.create_element("m:strikeBLTR")
+                            .with_attribute(("m:val", "1"))
+                            .write_empty()?;
+                    }
+                    if strike_tlbr {
+                        pr.create_element("m:strikeTLBR")
+                            .with_attribute(("m:val", "1"))
+                            .write_empty()?;
+                    }
+                    Ok(())
+                })?;
+            w.create_element("m:e").write_inner_content(|e| {
+                convert_content(e, &cancel.body)?;
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+    Ok(())
 }
 
 /// Convert a `VecElem` (column vector) to `m:d` wrapping `m:m` with one column.

@@ -17,6 +17,7 @@ mod grids;
 mod headings;
 mod images;
 mod ir_path;
+mod link_children;
 mod lists;
 mod math;
 mod misc;

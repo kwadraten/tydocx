@@ -90,6 +90,9 @@ pub struct ImageData {
     /// paged frame's clip geometry (`block/box(clip:)`, `image(fit: "cover")`).
     /// The original bytes stay embedded; Word displays only the window.
     pub src_rect: Option<SrcRect>,
+    /// `wp:docPr descr` — Typst `#image(alt:)` text carried into the document's
+    /// accessibility metadata.
+    pub alt: Option<String>,
 }
 
 /// `a:srcRect` — the visible window of an embedded image as a fraction of the
@@ -330,12 +333,21 @@ pub enum InlineElement {
         bold: bool,
         size_half_pt: Option<u32>,
     },
-    /// An external hyperlink using `fldSimple` with HYPERLINK field code.
-    Hyperlink { url: String, runs: Vec<Run> },
+    /// An external hyperlink using `fldSimple` with HYPERLINK field code. The
+    /// body holds the link's full inline content — OOXML allows drawings,
+    /// `m:oMath`, tabs, and fields inside a hyperlink, so image/math/tab
+    /// children of a Typst `#link` stay inside it instead of being dropped.
+    Hyperlink {
+        url: String,
+        body: Vec<InlineElement>,
+    },
     /// An internal hyperlink (`w:hyperlink w:anchor`) to a bookmark — e.g. a
     /// citation marker linking to its bibliography entry. The runs keep their own
     /// styling (no Hyperlink char style), so the marker just becomes clickable.
-    InternalLink { anchor: String, runs: Vec<Run> },
+    InternalLink {
+        anchor: String,
+        body: Vec<InlineElement>,
+    },
     /// A page break (`w:br type="page"`).
     PageBreak,
     /// A floating line shape anchored to this position in the text
@@ -615,8 +627,9 @@ impl RunFormat<'_> {
 pub struct Footnote {
     /// 1-based footnote ID.
     pub id: u32,
-    /// The inline content of the footnote (text runs, math, etc.).
-    pub content: Vec<InlineElement>,
+    /// The footnote's body paragraphs — a footnote may span several
+    /// paragraphs and each maps to its own `w:p`.
+    pub paragraphs: Vec<Paragraph>,
     /// A bookmark wrapping the footnote's reference mark — the target a
     /// `NOTEREF` field (Typst `counter(footnote).at(<label>)`) points at.
     pub bookmark: Option<FootnoteBookmark>,
@@ -741,52 +754,12 @@ impl Paragraph {
     /// Apply `f` to every text run in the paragraph, including hyperlink
     /// display runs and runs inside anchored text boxes.
     pub fn for_each_run_mut(&mut self, f: &mut dyn FnMut(&mut Run)) {
-        for inline in &mut self.inlines {
-            match inline {
-                InlineElement::Text(run) => f(run),
-                InlineElement::Hyperlink { runs, .. }
-                | InlineElement::Field { result: runs, .. } => {
-                    for run in runs {
-                        f(run);
-                    }
-                }
-                InlineElement::AnchoredFloat(float) => {
-                    if let AnchoredContent::Text { blocks, .. } = &mut float.content {
-                        for element in blocks {
-                            for_each_paragraph_in_block_mut(element, &mut |p| {
-                                p.for_each_run_mut(f);
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
+        for_each_run_in_inlines_mut(&mut self.inlines, f);
     }
 
     /// Immutable twin of [`Self::for_each_run_mut`].
     pub fn for_each_run(&self, f: &mut dyn FnMut(&Run)) {
-        for inline in &self.inlines {
-            match inline {
-                InlineElement::Text(run) => f(run),
-                InlineElement::Hyperlink { runs, .. }
-                | InlineElement::Field { result: runs, .. } => {
-                    for run in runs {
-                        f(run);
-                    }
-                }
-                InlineElement::AnchoredFloat(float) => {
-                    if let AnchoredContent::Text { blocks, .. } = &float.content {
-                        for element in blocks {
-                            for_each_paragraph_in_block(element, &mut |p| {
-                                p.for_each_run(f);
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
+        for_each_run_in_inlines(&self.inlines, f);
     }
 
     /// Get concatenated text content from all text runs.
@@ -817,9 +790,13 @@ impl Paragraph {
                         }
                     }
                 }
-                InlineElement::Hyperlink { runs, .. }
-                | InlineElement::InternalLink { runs, .. }
-                | InlineElement::Field { result: runs, .. } => {
+                InlineElement::Hyperlink { body, .. }
+                | InlineElement::InternalLink { body, .. } => {
+                    for inner in body {
+                        push_inline_text(inner, &mut text);
+                    }
+                }
+                InlineElement::Field { result: runs, .. } => {
                     for run in runs {
                         text.push_str(&run.text);
                     }
@@ -897,6 +874,14 @@ impl Paragraph {
         self.inlines.insert(0, InlineElement::Bookmark { id, name });
     }
 
+    /// Insert a bookmark enclosing the paragraph's whole content — a `REF`
+    /// target must cover the referenced text (a zero-length bookmark makes
+    /// Word's `REF` field resolve to nothing).
+    pub fn add_bookmark_wrapping(&mut self, id: u32, name: String) {
+        self.inlines.insert(0, InlineElement::Bookmark { id, name });
+        self.inlines.push(InlineElement::BookmarkEnd { id });
+    }
+
     /// Add a cross-reference field (REF field code).
     pub fn add_field_ref(&mut self, bookmark_name: String, display_text: String) {
         self.inlines.push(InlineElement::FieldRef {
@@ -924,14 +909,25 @@ impl Paragraph {
 
     /// Add an external hyperlink.
     pub fn add_hyperlink(&mut self, url: String, runs: Vec<Run>) {
-        self.inlines.push(InlineElement::Hyperlink { url, runs });
+        self.inlines.push(InlineElement::Hyperlink {
+            url,
+            body: runs.into_iter().map(InlineElement::Text).collect(),
+        });
+    }
+
+    /// Add an external hyperlink whose body is already lowered inlines
+    /// (images, math, and tabs inside a `#link` stay inside the hyperlink).
+    pub fn add_hyperlink_body(&mut self, url: String, body: Vec<InlineElement>) {
+        self.inlines.push(InlineElement::Hyperlink { url, body });
     }
 
     /// Add an internal hyperlink to a bookmark `anchor` (e.g. a citation marker
     /// linking to its bibliography entry).
     pub fn add_internal_link(&mut self, anchor: String, runs: Vec<Run>) {
-        self.inlines
-            .push(InlineElement::InternalLink { anchor, runs });
+        self.inlines.push(InlineElement::InternalLink {
+            anchor,
+            body: runs.into_iter().map(InlineElement::Text).collect(),
+        });
     }
 
     /// Add a Table of Contents field code.
@@ -1155,6 +1151,101 @@ pub enum BlockElement {
     BibliographyBlock {
         paragraphs: Vec<Paragraph>,
     },
+    /// A TOC field whose cached result is one paragraph per entry (hyperlinked
+    /// title + tab + `PAGEREF`). Emitted as a complex field spanning the entry
+    /// paragraphs, exactly as Word writes it.
+    TocBlock {
+        max_depth: u8,
+        paragraphs: Vec<Paragraph>,
+    },
+}
+
+/// Apply `f` to every text run reachable through a run-level inline list:
+/// text runs, runs inside hyperlink bodies (which may nest any run-level
+/// content), field cached results, and runs in anchored text boxes.
+fn for_each_run_in_inlines_mut(inlines: &mut [InlineElement], f: &mut dyn FnMut(&mut Run)) {
+    for inline in inlines {
+        match inline {
+            InlineElement::Text(run) => f(run),
+            InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
+                for_each_run_in_inlines_mut(body, f);
+            }
+            InlineElement::Field { result: runs, .. } => {
+                for run in runs {
+                    f(run);
+                }
+            }
+            InlineElement::AnchoredFloat(float) => {
+                if let AnchoredContent::Text { blocks, .. } = &mut float.content {
+                    for element in blocks {
+                        for_each_paragraph_in_block_mut(element, &mut |p| {
+                            p.for_each_run_mut(f);
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Immutable twin of [`for_each_run_in_inlines_mut`].
+fn for_each_run_in_inlines(inlines: &[InlineElement], f: &mut dyn FnMut(&Run)) {
+    for inline in inlines {
+        match inline {
+            InlineElement::Text(run) => f(run),
+            InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
+                for_each_run_in_inlines(body, f);
+            }
+            InlineElement::Field { result: runs, .. } => {
+                for run in runs {
+                    f(run);
+                }
+            }
+            InlineElement::AnchoredFloat(float) => {
+                if let AnchoredContent::Text { blocks, .. } = &float.content {
+                    for element in blocks {
+                        for_each_paragraph_in_block(element, &mut |p| {
+                            p.for_each_run(f);
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Push the readable text of one run-level inline (recursing into link
+/// bodies) for [`Paragraph::full_text_content`].
+fn push_inline_text(inline: &InlineElement, text: &mut String) {
+    match inline {
+        InlineElement::Text(run) => text.push_str(&run.text),
+        InlineElement::Math { omml_xml, .. } => {
+            for part in omml_xml.split("<m:t>") {
+                if let Some(end) = part.find("</m:t>") {
+                    text.push_str(&part[..end]);
+                }
+            }
+        }
+        InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
+            for inner in body {
+                push_inline_text(inner, text);
+            }
+        }
+        InlineElement::Field { result: runs, .. } => {
+            for run in runs {
+                text.push_str(&run.text);
+            }
+        }
+        InlineElement::FieldRef { display_text, .. }
+        | InlineElement::FieldPageRef { display_text, .. }
+        | InlineElement::FieldPage { display_text, .. }
+        | InlineElement::Citation { display_text, .. } => {
+            text.push_str(display_text);
+        }
+        _ => {}
+    }
 }
 
 /// Visit every paragraph the writer serializes under a block element: plain
@@ -1170,7 +1261,8 @@ pub fn for_each_paragraph_in_block_mut(
     match element {
         BlockElement::Paragraph(p) => f(p),
         BlockElement::Table(t) => for_each_paragraph_in_table_mut(t, f),
-        BlockElement::BibliographyBlock { paragraphs } => {
+        BlockElement::BibliographyBlock { paragraphs }
+        | BlockElement::TocBlock { paragraphs, .. } => {
             for p in paragraphs {
                 f(p);
             }
@@ -1199,7 +1291,8 @@ pub fn for_each_paragraph_in_block(element: &BlockElement, f: &mut dyn FnMut(&Pa
     match element {
         BlockElement::Paragraph(p) => f(p),
         BlockElement::Table(t) => for_each_paragraph_in_table(t, f),
-        BlockElement::BibliographyBlock { paragraphs } => {
+        BlockElement::BibliographyBlock { paragraphs }
+        | BlockElement::TocBlock { paragraphs, .. } => {
             for p in paragraphs {
                 f(p);
             }
@@ -1611,6 +1704,9 @@ pub struct Document {
     pub heading_num_instances: Vec<HeadingNumInstance>,
     /// Bibliography sources for Word's citation data store (customXml/item1.xml).
     pub citation_sources: Vec<CitationSource>,
+    /// Word bibliography style selection for Sources.xml: `(SelectedStyle,
+    /// StyleName)` — `None` writes the default APA selection.
+    pub bibliography_style: Option<(String, String)>,
     /// Emit `<w:updateFields w:val="true"/>` in settings.xml (C3: Word
     /// refreshes every field on open).
     pub update_fields: bool,
@@ -1640,6 +1736,7 @@ impl Default for Document {
             list_num_instances: Vec::new(),
             heading_num_instances: Vec::new(),
             citation_sources: Vec::new(),
+            bibliography_style: None,
             update_fields: false,
         }
     }
@@ -1675,16 +1772,8 @@ impl Document {
             for_each_paragraph_in_block_mut(element, &mut |p| p.for_each_run_mut(f));
         }
         for footnote in &mut self.footnotes {
-            for inline in &mut footnote.content {
-                match inline {
-                    InlineElement::Text(run) => f(run),
-                    InlineElement::Hyperlink { runs, .. } => {
-                        for run in runs {
-                            f(run);
-                        }
-                    }
-                    _ => {}
-                }
+            for para in &mut footnote.paragraphs {
+                for_each_run_in_inlines_mut(&mut para.inlines, f);
             }
         }
         for hf in self.header_footers_mut() {
@@ -1728,16 +1817,8 @@ impl Document {
             for_each_paragraph_in_block(element, &mut |p| p.for_each_run(f));
         }
         for footnote in &self.footnotes {
-            for inline in &footnote.content {
-                match inline {
-                    InlineElement::Text(run) => f(run),
-                    InlineElement::Hyperlink { runs, .. } => {
-                        for run in runs {
-                            f(run);
-                        }
-                    }
-                    _ => {}
-                }
+            for para in &footnote.paragraphs {
+                for_each_run_in_inlines(&para.inlines, f);
             }
         }
         for hf in self.header_footers() {
@@ -1811,11 +1892,11 @@ impl Document {
     }
 
     /// Add a footnote and return its ID (starting from 2, since 0 and 1 are reserved by OOXML).
-    pub fn add_footnote(&mut self, content: Vec<InlineElement>) -> u32 {
+    pub fn add_footnote(&mut self, paragraphs: Vec<Paragraph>) -> u32 {
         let id = u32::try_from(self.footnotes.len()).unwrap_or(u32::MAX - 3) + 2;
         self.footnotes.push(Footnote {
             id,
-            content,
+            paragraphs,
             bookmark: None,
         });
         id
