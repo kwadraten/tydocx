@@ -445,7 +445,7 @@ fn lower_block_in(
                 float: *float,
                 wrap: *wrap,
                 clearance_emu: *clearance_emu,
-                anchor: *anchor,
+                anchor: anchor.clone(),
                 body,
             },
             doc,
@@ -541,6 +541,7 @@ fn lower_heading(
     let mut para = Paragraph::new();
     para.style = Some(ParagraphStyle::Heading(spec.level));
     para.alignment = spec.alignment;
+    apply_par_overrides(&mut para, spec.par, ctx);
     let num_id = match spec.numbering {
         Some(IrHeadingNumbering::Mappable(pattern))
             if !ctx.compat.is_c1() && spec.numbering_text.is_some() =>
@@ -783,18 +784,28 @@ struct PlaceSpec<'a> {
 
 fn lower_place(spec: &PlaceSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
     if !ctx.compat.is_c1()
-        && let Some(anchor) = spec.anchor
+        && let Some(anchor) = spec.anchor.as_ref()
     {
         if let Some(blocks) = floating_table(spec, anchor, doc, ctx) {
             return blocks;
         }
-        if let Some(content) = anchored_content(spec.body, spec.float, doc, ctx) {
+        if let Some(content) = anchored_content(
+            spec.body,
+            spec.float,
+            anchor.backdrop_hex.as_deref(),
+            doc,
+            ctx,
+        ) {
             let mut para = Paragraph::new();
             para.mark_size_half_pt = Some(2);
             para.spacing_before = Some(0);
             para.spacing_after = Some(0);
+            // `wrap="none"`/`wrapNone` plus `a:noAutofit` let the box carry
+            // the measured ink extent: Word lays the text out on one line
+            // regardless, and the true extent is what Word needs to cover
+            // the underlay without a page-sized invisible patch.
             let (x_emu, width_emu, height_emu) =
-                overlay_text_span(anchor, &content, spec.float, ctx);
+                (anchor.x_emu, anchor.width_emu, anchor.height_emu);
             // A placed box that sits entirely inside a side margin is a
             // margin note — anchor it to the text-area edge so it tracks the
             // margin if the layout changes.
@@ -855,7 +866,7 @@ fn lower_place(spec: &PlaceSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) -> 
 /// it travels with the float.
 fn floating_table(
     spec: &PlaceSpec<'_>,
-    anchor: IrAnchor,
+    anchor: &IrAnchor,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> Option<Vec<BlockElement>> {
@@ -927,7 +938,7 @@ fn floating_table(
     Some(vec![BlockElement::Table(out)])
 }
 
-fn table_float(spec: &PlaceSpec<'_>, anchor: IrAnchor) -> TableFloat {
+fn table_float(spec: &PlaceSpec<'_>, anchor: &IrAnchor) -> TableFloat {
     TableFloat {
         x_twips: i32::try_from(anchor.x_emu / 635).unwrap_or(i32::MAX),
         y_twips: i32::try_from(anchor.y_emu / 635).unwrap_or(i32::MAX),
@@ -938,6 +949,7 @@ fn table_float(spec: &PlaceSpec<'_>, anchor: IrAnchor) -> TableFloat {
 fn anchored_content(
     body: &[IrBlock],
     float: bool,
+    backdrop_hex: Option<&str>,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> Option<AnchoredContent> {
@@ -948,8 +960,10 @@ fn anchored_content(
         return Some(AnchoredContent::Image(data));
     }
     // A placed `rect(fill:)` becomes a solid-filled text box, not a shaded
-    // marker line — the box itself carries the fill.
-    let (inner, fill_hex) = match body {
+    // marker line — the box itself carries the fill. Any other box borrows
+    // its underlay's colour so it covers what Typst shows through — a Word
+    // `wps:txbx` has no fill unless one is painted on.
+    let (inner, declared_fill) = match body {
         [
             IrBlock::Shape {
                 kind: IrShapeKind::Rectangle,
@@ -960,6 +974,8 @@ fn anchored_content(
         ] => (shape_body.as_slice(), Some(fill.clone())),
         _ => (body, None),
     };
+    let fill_hex =
+        declared_fill.or_else(|| (!float).then(|| backdrop_hex.map(str::to_owned)).flatten());
     let mut lowered = Vec::new();
     for block in inner {
         lowered.extend(lower_block(block, doc, ctx));
@@ -990,57 +1006,6 @@ fn anchored_content(
         blocks: lowered,
         fill_hex,
     })
-}
-
-/// Grow a non-floating text box until its text cannot re-wrap or clip. The
-/// measured extent is the text's ink bounds — narrower than the advance
-/// width and shorter than Word's line boxes — so the box is
-/// expanded to a page span while keeping the edge the content visually
-/// anchors to (left edge for `left`, the center for `center`, the right
-/// edge for `right`, and the top edge always, since text is top-anchored);
-/// `wrap="none"` + `wrapNone` keep the expansion invisible. Filled boxes
-/// (placed `rect`s) keep their declared extent.
-fn overlay_text_span(
-    anchor: IrAnchor,
-    content: &AnchoredContent,
-    float: bool,
-    ctx: &LowerCtx,
-) -> (i64, u64, u64) {
-    let (x_emu, width_emu, height_emu) = (anchor.x_emu, anchor.width_emu, anchor.height_emu);
-    let AnchoredContent::Text {
-        blocks,
-        fill_hex: None,
-    } = content
-    else {
-        return (x_emu, width_emu, height_emu);
-    };
-    if float {
-        return (x_emu, width_emu, height_emu);
-    }
-    let first_alignment = blocks.iter().find_map(|b| match b {
-        BlockElement::Paragraph(p) => p.alignment,
-        _ => None,
-    });
-    let page_w = ctx.page_width_emu;
-    let right = x_emu.saturating_add(i64::try_from(width_emu).unwrap_or(i64::MAX));
-    let page_w_u64 = u64::try_from(page_w).unwrap_or(u64::MAX);
-    let (x, w) = match first_alignment {
-        Some(Alignment::Center) => {
-            let center = x_emu.saturating_add(right) / 2;
-            (center - page_w / 2, page_w_u64)
-        }
-        Some(Alignment::Right) => (right - page_w, page_w_u64),
-        _ => (
-            x_emu,
-            u64::try_from(page_w.saturating_sub(x_emu).max(0))
-                .unwrap_or(u64::MAX)
-                .max(width_emu),
-        ),
-    };
-    let h = u64::try_from(ctx.page_height_emu.saturating_sub(anchor.y_emu).max(0))
-        .unwrap_or(u64::MAX)
-        .max(height_emu);
-    (x, w, h)
 }
 
 /// Pin `w:jc` on every paragraph in a placed text box: `left` unless the
@@ -1113,6 +1078,7 @@ struct HeadingSpec<'a> {
     numbering: Option<&'a IrHeadingNumbering>,
     body: &'a [IrInline],
     label: Option<&'a String>,
+    par: IrParStyle,
     alignment: Option<Alignment>,
     span: Option<typst_syntax::Span>,
 }
@@ -1128,6 +1094,7 @@ fn lower_heading_block(
         numbering,
         body,
         label,
+        par,
         alignment,
         span,
     } = block
@@ -1141,6 +1108,7 @@ fn lower_heading_block(
             numbering: numbering.as_ref(),
             body,
             label: label.as_ref(),
+            par: *par,
             alignment: *alignment,
             span: *span,
         },
@@ -1237,11 +1205,50 @@ fn apply_par_overrides(out: &mut Paragraph, par: IrParStyle, ctx: &LowerCtx) {
     }
 }
 
+/// Scan the paragraph's line structure for `#linebreak`s. Returns
+/// `(has_break, has_justified_break)` — a justified break tolerates the
+/// inherited `w:jc="both"`, a plain one does not.
+fn linebreak_state(inlines: &[IrInline]) -> (bool, bool) {
+    let (mut has_break, mut has_justified) = (false, false);
+    for inline in inlines {
+        match inline {
+            IrInline::LineBreak { justify } => {
+                if *justify {
+                    has_justified = true;
+                } else {
+                    has_break = true;
+                }
+            }
+            IrInline::Link { body, .. }
+            | IrInline::Field { body, .. }
+            | IrInline::Shape { body, .. } => {
+                let (b, j) = linebreak_state(body);
+                has_break |= b;
+                has_justified |= j;
+            }
+            _ => {}
+        }
+    }
+    (has_break, has_justified)
+}
+
 fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     let mut out = Paragraph::new();
     out.style.clone_from(&para.style);
     out.alignment = para.alignment;
     apply_par_overrides(&mut out, para.par, ctx);
+    // A paragraph that ends some lines with a plain `#linebreak` must not sit
+    // under an inherited `w:jc="both"`: Word stretches the line up to the
+    // break. Pin `left` unless an explicit `linebreak(justify: true)` or an
+    // explicit alignment already governs the line ends.
+    let (has_break, has_justified) = linebreak_state(&para.inlines);
+    if has_break
+        && !has_justified
+        && out.alignment.is_none()
+        && out.justify.unwrap_or(ctx.normal_justify)
+    {
+        out.justify = Some(false);
+    }
     out.suppress_indent = para.suppress_indent;
     out.hanging_indent = para.hanging_indent;
     out.left_indent = para.left_indent;
@@ -1315,7 +1322,7 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                     out.push(InlineElement::Text(Run::new(rendered)));
                 }
             }
-            IrInline::LineBreak => {
+            IrInline::LineBreak { .. } => {
                 let mut run = Run::new(String::new());
                 run.line_break = true;
                 out.push(InlineElement::Text(run));
@@ -1599,7 +1606,7 @@ fn inline_to_runs(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<Run> {
                 runs.push(Run::new(display_text));
             }
             IrInline::FootnoteMarker { rendered, .. } => runs.push(Run::new(rendered)),
-            IrInline::LineBreak => {
+            IrInline::LineBreak { .. } => {
                 let mut run = Run::new(String::new());
                 run.line_break = true;
                 runs.push(run);
@@ -1704,7 +1711,14 @@ fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<Bloc
         .rows
         .iter()
         .filter(|row| !row.cells.is_empty())
-        .map(|row| lower_row(row, grid.column_widths_pct.as_ref(), doc, ctx))
+        .map(|row| {
+            let mut lowered = lower_row(row, grid.column_widths_pct.as_ref(), doc, ctx);
+            // Measured heights exist to feed the planner's merged bands; on the
+            // generic path an `exact` trHeight would compress an ordinary grid
+            // in Word, so they are planner input, not output.
+            lowered.height_twips = None;
+            lowered
+        })
         .collect();
     vec![BlockElement::Table(Table {
         rows,
@@ -2337,6 +2351,7 @@ mod tests {
             numbering: None,
             body: vec![IrInline::Text(Run::new("Lists"))],
             label: Some("sec-lists".to_owned()),
+            par: IrParStyle::default(),
             alignment: None,
             span: None,
         });
@@ -2757,8 +2772,8 @@ mod tests {
     fn adjacent_line_break_runs_do_not_merge() {
         let mut ir = empty_doc();
         let mut para = IrParagraph::default();
-        para.inlines.push(IrInline::LineBreak);
-        para.inlines.push(IrInline::LineBreak);
+        para.inlines.push(IrInline::LineBreak { justify: false });
+        para.inlines.push(IrInline::LineBreak { justify: false });
         ir.body.push(IrBlock::Paragraph(para));
         let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         let BlockElement::Paragraph(para) = &doc.body.elements[0] else {
@@ -2921,6 +2936,7 @@ mod tests {
             numbering,
             body: vec![IrInline::Text(Run::new("Title"))],
             label: None,
+            par: IrParStyle::default(),
             alignment: None,
             span: None,
         }

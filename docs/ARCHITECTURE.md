@@ -221,7 +221,7 @@ they exercise that public API as integration tests.
 | `convert/realize/inline.rs` | Pair → `IrInline` collection: runs from `StyleChain`, links, refs, cites, images, math, breaks. |
 | `convert/realize/style.rs` | `StyleChain` → `Run` conversion (weight/style/size/color/font, smart quotes, run-merge key). |
 | `convert/realize/patch.rs` | Companion-Paged patch: footnote entry bodies from frame groups and image placements (display size + clip-derived `a:srcRect`) by content hash (with the intrinsic fallback). |
-| `convert/realize/place.rs` | Companion-Paged patch: `#place` geometry — each float's frame group (keyed by the place's `Location` in `FrameParent`) and each non-floating place's `Tag` bracket (the placed items' union bounds between `Tag::Start`/`Tag::End`) become a page-absolute `IrAnchor`. At lowering, an anchor feeds `wp:anchor` emission (non-floats carry `wp:wrapNone` and a `behindDoc` flag from paint order; a box fully inside a side margin anchors `relativeFrom="margin"`) or `w:tblpPr` when the body is a lone table. |
+| `convert/realize/place.rs` | Companion-Paged patch: `#place` geometry — each float's frame group (keyed by the place's `Location` in `FrameParent`) and each non-floating place's `Tag` bracket (the placed items' union bounds between `Tag::Start`/`Tag::End`) become a page-absolute `IrAnchor`. At lowering, an anchor feeds `wp:anchor` emission (non-floats carry `wp:wrapNone` and a `behindDoc` flag from paint order; an unfilled text box paints the colour of what it covers — the latest covering placed `rect`, else a declared solid `page(fill:)`, else paper; a box fully inside a side margin anchors `relativeFrom="margin"`) or `w:tblpPr` when the body is a lone table. |
 | `convert/block.rs` | Block-level HTML tag walk and dispatch, paragraphs, equations, figures, code blocks, blockquotes, and term lists. |
 | `convert/inline_walk.rs` | HTML inline traversal: formatted spans, links, citations, footnotes, images, and inline equations. |
 | `convert/headings.rs` | Semantic heading conversion, numbering, smart quotes, and inline heading content. |
@@ -235,7 +235,7 @@ they exercise that public API as integration tests.
 | `convert/page/units.rs`, `convert/page/style.rs` | Word-unit conversion and document-style detection from rendered frames. |
 | `convert/page/source_ast.rs`, `convert/page/hanging_indent.rs`, `convert/page/reachable.rs` | Authoritative source-AST `set`-rule parsing (including scoped hanging indents) and reachable local-source collection. |
 | `convert/page/margin.rs` | Page settings, body/margin zones, headers, footers, and page numbering from Paged geometry. Furniture-aware: artifact/`#place` bracket content is excluded from the zone's literal text so it can anchor instead of duplicating. |
-| `convert/page/furniture.rs` | Page `foreground:`/`background:`/`page(fill:)` and header/footer-zone `#place` → `wp:anchor` drawings inside header/footer parts at C2/C3. Zones are classified off the page frame's paint order and `ArtifactElem`/`Tag` brackets; each furniture unit is measured into an `AnchoredFloat` (`relativeFrom="page"`, `wps:txbx` text, `pic:pic` images, `a:solidFill` rects and full-page solid fills). The layer's page-variation signature picks the OOXML slot — uniform → default, first-vs-rest → `first` + `w:titlePg`, odd/even → `even` + `w:evenAndOddHeaders`; per-physical-page variation and unsupported unit content (non-solid fills, transforms/clips) report `page-foreground`. C1 keeps the literalized-text contract. |
+| `convert/page/furniture.rs` | Page `foreground:`/`background:`/`page(fill:)` and header/footer-zone `#place` → `wp:anchor` drawings inside header/footer parts at C2/C3. Zones are classified off the page frame's paint order and `ArtifactElem`/`Tag` brackets; a body `#place` (matched by location hash against the IR) is never furniture — it already anchors in `document.xml` — and introspection-only tags (`metadata`, counter/state updates) can be neither inner content nor the untagged-foreground start. Each furniture unit is measured into an `AnchoredFloat` (`relativeFrom="page"`, `wps:txbx` text, `pic:pic` images, `a:solidFill` rects and full-page solid fills). The layer's page-variation signature picks the OOXML slot — uniform → default, first-vs-rest → `first` + `w:titlePg`, odd/even → `even` + `w:evenAndOddHeaders`; per-physical-page variation and unsupported unit content (non-solid fills, transforms/clips) report `page-foreground`. C1 keeps the literalized-text contract. |
 | `convert/page/run_style.rs`, `convert/page/language.rs` | Per-run rendered-style overrides, measured per-level heading sizes, redundant heading-property suppression, BCP-47 helpers, and localized CJK font names. |
 | `convert/text_norm.rs` | CJK-space normalisation shared by the HTML walk (the recovery-side normalisers went with `convert/recovery/`). |
 | `convert/coalesce.rs` | Final pass: merges same-line paragraphs, coalesces adjacent runs with identical effective `rPr`, and folds whitespace-only runs. |
@@ -312,7 +312,10 @@ Rules the equivalence round established (see
   measured per row (`typst_layout::layout_frame` on the row's cell
   bodies at their resolved widths) instead of equal-sharing the
   fragment total; empty slots get zero cell margins and a 1pt
-  paragraph mark.
+  paragraph mark. The measured heights are planner input: only the
+  rows the planner actually rewrites carry `w:trHeight` — a grid it
+  leaves unchanged lowers like an ordinary table so Word reflows
+  its rows.
 - **Drawn figure bodies** attach their Paged canvas by `Location` hash
   and embed as SVG (`typst_svg`) plus a PNG fallback (`typst_render`)
   inside `mc:AlternateContent`; source SVG images keep their bytes the

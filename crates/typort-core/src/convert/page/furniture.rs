@@ -19,6 +19,8 @@
 //! the part, which is the only OOXML construct that repeats page-positioned
 //! content.
 
+use std::collections::HashSet;
+use std::hash::RandomState;
 use std::ops::Range;
 
 use typort_ir::pt_to_emu;
@@ -27,7 +29,9 @@ use typort_ooxml::document::{
     ImageFormat, InlineElement, Paragraph, RelFrom, Run,
 };
 use typst_layout::{Page, PagedDocument};
-use typst_library::introspection::{Location, Tag};
+use typst_library::introspection::{
+    CounterUpdateElem, Location, MetadataElem, StateUpdateElem, Tag,
+};
 use typst_library::layout::{Frame, FrameItem, GroupItem, Point, Size};
 use typst_library::pdf::{ArtifactElem, ArtifactKind};
 use typst_library::text::TextItem;
@@ -38,6 +42,7 @@ use super::margin::{MarginZone, MarginsPt};
 use super::run_style::effective_weight;
 use crate::compat::{Degradation, DegradationAction};
 use crate::convert::image::hash_bytes;
+use crate::convert::realize::collect::location_hash64;
 
 /// Tolerance (pt) for matching marginal positions/sizes on the page frame.
 const MARGINAL_TOLERANCE_PT: f64 = 2.0;
@@ -141,21 +146,27 @@ pub fn analyze(
     paged: &PagedDocument,
     margins: &MarginsPt,
     declared: DeclaredFurniture,
+    body_places: &HashSet<u64, RandomState>,
 ) -> FurnitureMaps {
     let per_page = paged
         .pages()
         .iter()
-        .map(|page| analyze_page(page, margins, declared))
+        .map(|page| analyze_page(page, margins, declared, body_places))
         .collect();
     FurnitureMaps { per_page, declared }
 }
 
-fn analyze_page(page: &Page, margins: &MarginsPt, declared: DeclaredFurniture) -> PageFurniture {
+fn analyze_page(
+    page: &Page,
+    margins: &MarginsPt,
+    declared: DeclaredFurniture,
+    body_places: &HashSet<u64, RandomState>,
+) -> PageFurniture {
     let frame = &page.frame;
     let page_w = frame.width().to_pt();
     let page_h = frame.height().to_pt();
 
-    let ranges = classify_page(frame, page_w, page_h, margins, declared);
+    let ranges = classify_page(frame, page_w, page_h, margins, declared, body_places);
     let mut out = PageFurniture::default();
 
     for range in &ranges {
@@ -163,7 +174,7 @@ fn analyze_page(page: &Page, margins: &MarginsPt, declared: DeclaredFurniture) -
         // Header/footer zones only contribute place-bracket units — their
         // loose items stay flat header/footer text on the existing path.
         let loose = matches!(range.zone, Zone::Background | Zone::Foreground);
-        let units = measure_zone(&items, loose, &mut out.drops, page_w, page_h);
+        let units = measure_zone(&items, loose, &mut out.drops, page_w, page_h, body_places);
         match range.zone {
             Zone::Background => {
                 out.saw_background = true;
@@ -280,6 +291,7 @@ fn classify_page(
     page_h: f64,
     margins: &MarginsPt,
     declared: DeclaredFurniture,
+    body_places: &HashSet<u64, RandomState>,
 ) -> Vec<ZoneRange> {
     let items: Vec<(Point, &FrameItem)> =
         frame.items().map(|&(pos, ref item)| (pos, item)).collect();
@@ -308,6 +320,26 @@ fn classify_page(
                         fg_start = Some(end + 1);
                         break;
                     }
+                    i = end + 1;
+                    continue;
+                }
+                if elem
+                    .location()
+                    .is_some_and(|loc| body_places.contains(&location_hash64(loc)))
+                {
+                    let end = find_bracket_end(&items, i, elem.location()).unwrap_or(i);
+                    saw_inner = true;
+                    i = end + 1;
+                    continue;
+                }
+                if elem.to_packed::<MetadataElem>().is_some()
+                    || elem.to_packed::<CounterUpdateElem>().is_some()
+                    || elem.to_packed::<StateUpdateElem>().is_some()
+                {
+                    // Introspection-only tags paint nothing and carry no
+                    // meaningful position — neither inner content nor the
+                    // untagged foreground start.
+                    let end = find_bracket_end(&items, i, elem.location()).unwrap_or(i);
                     i = end + 1;
                     continue;
                 }
@@ -486,6 +518,7 @@ fn measure_zone(
     drops: &mut DropCounts,
     page_w: f64,
     page_h: f64,
+    body_places: &HashSet<u64, RandomState>,
 ) -> Vec<FurnAnchor> {
     let mut units = Vec::new();
     let mut loose: Vec<(Point, &FrameItem)> = Vec::new();
@@ -496,7 +529,12 @@ fn measure_zone(
             && elem.elem().name() == "place"
         {
             let end = find_bracket_end(items, i, elem.location()).unwrap_or(i);
-            if let Some(unit) = measure_unit(&items[i + 1..end], Some(elem), drops, page_w, page_h)
+            let is_body = elem
+                .location()
+                .is_some_and(|loc| body_places.contains(&location_hash64(loc)));
+            if !is_body
+                && let Some(unit) =
+                    measure_unit(&items[i + 1..end], Some(elem), drops, page_w, page_h)
             {
                 units.push(unit);
             }

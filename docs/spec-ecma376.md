@@ -74,6 +74,7 @@ flowchart LR
 | `#text(hyphenate: false)` | `w:suppressAutoHyphens` in `settings.xml` | same | same |
 | `#text(case:)`, `#lower`/`#upper` | literal text transform | same | same |
 | smart quotes | literal typographic characters | same | same |
+| U+200B zero-width space / U+2060 word joiner (Typst's URL break hints in realized text) | dropped from `w:t` text; Word finds its own break opportunities | same | same |
 | `stroke`, `kerning`, `spacing`, `overhang`, `costs`, `cjk-latin-spacing`, fractions, slashed-zero, stylistic sets, font variations | not read — dropped silently | same | same |
 
 ## Paragraphs
@@ -97,7 +98,7 @@ flowchart LR
 
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
-| `= Heading` | `w:pStyle Heading1`–`Heading9` (level >5 uses the level-5 size) + `w:bookmarkStart/End` for labels | same | same |
+| `= Heading` | `w:pStyle Heading1`–`Heading9` (level >5 uses the level-5 size) + `w:bookmarkStart/End` for labels; the heading body's resolved `par` (`first-line-indent`, `justify` — including set rules scoped inside `show heading` bodies) emits `w:ind`/`w:jc` overrides where it differs from `Normal` | same | same |
 | `#set heading(numbering: "1.1")` | `w:numPr` against a heading `abstractNum` (per-level `lvlText`/`numFmt`); counter divergence vs the rendered number → `"heading-numbering"` approximated | literal `numbering_text` run in the heading paragraph | `w:numPr` mapping |
 | numbering via a function or unmappable numeral system | literal text + `"heading-numbering"` literalized (all levels) | same | same |
 | `#heading(outlined: false)` | plain paragraph (keeps the number text, keeps the bookmark) so it stays out of the TOC + `"unoutlined-heading"` (all levels) | same | same |
@@ -122,9 +123,9 @@ flowchart LR
 | `table.cell(fill:)` | `w:shd w:fill` | skipped + `"table-cell-fill"` | `w:shd` |
 | `#table(column-gutter:, row-gutter:)` | emulated with transparent `tcBorders` | skipped + `"table-gutter"` | gutter borders |
 | unresolved cell grid | falls back to a paragraph stream + `"table-grid-unresolved"` (all levels) | same | same |
-| `#grid` | `w:tbl` via the pure `grid_plan` lowering: fixed layout, measured column widths, `trHeight`, `tcBorders` | flattened to paragraphs + `"grid-layout"` | `w:tbl` |
+| `#grid` | `w:tbl` via the pure `grid_plan` lowering when the planner changes the structure (row coalescing, column merging, `trHeight`, `tcBorders`); a grid it leaves unchanged lowers to a plain `w:tbl` with no `trHeight` | flattened to paragraphs + `"grid-layout"` | `w:tbl` |
 | grid > 63 columns | split into stacked tables + `"grid-column-split"` (all levels) | flattened | split |
-| row heights | Typst layout height → `trHeight`; Word may reflow text (registered gap) | flattened | `trHeight` |
+| row heights | rows the grid planner rewrites get exact `trHeight` from Typst layout; ordinary grid/table rows carry none and Word reflows them (registered gap) | flattened | `trHeight` on planned rows only |
 
 ## Figures, equations, images
 
@@ -207,11 +208,11 @@ flowchart LR
 | mid-document `#set page(...)` change | `w:sectPr` transitions ending each section (`nextPage`, or `continuous` when only numbering/format changes) | sections collapsed to a single section + `"section-break"` report | `w:sectPr` per section |
 | `#pagebreak` | `w:br w:type="page"`; `weak:` honored — no break when the page is already fresh, and runs of consecutive breaks coalesce | same | same |
 | `#pagebreak(to: odd/even)` | `w:sectPr w:type` `oddPage`/`evenPage` (emitted at **all** levels — it is an authored break, not a style change) | same | same |
-| `#linebreak` | `w:br` | same | same |
+| `#linebreak` | `w:br`; a paragraph whose breaks are all plain (unjustified) pins `w:jc="left"` — Word stretches `w:br`-terminated lines under an inherited `both`; `linebreak(justify: true)` keeps the paragraph stretchable | same | same |
 | `#colbreak` | `w:br w:type="column"` | same | same |
 | `#columns(n)[…]` block | body kept flat + `"column-block"` (all levels) | same | same |
 | `#place(float: true)` | `wp:anchor` `w:drawing` with measured page-absolute position; `wrapTopAndBottom` or `wrapSquare`, `distT`/`distB` from `clearance:`, `behindDoc="0"`; a lone-table body → `w:tblpPr` floating table instead | body kept in flow + `"placed-content"` report | anchored float / `w:tblpPr`; unmeasured → flow fallback + `"placed-content"` |
-| `#place` non-float | `wp:anchor` measured the same way: `wp:wrapNone`, `behindDoc` from paint order (behind when the page paints more content after the place); text in editable `wps:txbx` (`w:jc` pinned), images as `pic:pic`, a filled `rect` as `a:solidFill` on the shape; a lone-table body → `w:tblpPr`; a box fully inside a side margin anchors `relativeFrom="margin"` | + `"placed-content"` | anchored overlay / `w:tblpPr`; unmeasured → flow fallback + `"placed-content"` |
+| `#place` non-float | `wp:anchor` at the measured extent (no page-edge expansion): `wp:wrapNone`, `behindDoc` from paint order (behind when the page paints more content after the place); text in editable `wps:txbx` (`w:jc` pinned, `bodyPr wrap="none"` + `a:noAutofit`), images as `pic:pic`, a filled `rect` as `a:solidFill`; an unfilled text box fills with the colour painting under it (latest covering placed `rect`, else solid `page(fill:)`, else paper) so it covers its underlay; a lone-table body → `w:tblpPr`; a box fully inside a side margin anchors `relativeFrom="margin"` | + `"placed-content"` | anchored overlay / `w:tblpPr`; unmeasured → flow fallback + `"placed-content"` |
 | `float(dx:/dy:)` offsets | included in the anchor position | n/a | same |
 
 ## Shapes, lines, transforms
@@ -323,5 +324,7 @@ per-feature *degradation* list above is exhaustive.
 - **Image `alt:`** is never emitted (`wp:docPr descr` is a backlog item at
   every level); `fit:` contain/stretch is silently dropped at C2/C3 (cover
   lowers to `a:srcRect`).
-- **Grid row heights** are fixed from Typst layout (`trHeight`), not Word
-  reflow; wide grids split at 63 columns.
+- **Grid row heights** from Typst layout are emitted as `trHeight` only on
+  rows the planner rewrites (timetable-style coalescing/merging); ordinary
+  grid and table rows carry none, so Word reflows them itself. Wide grids
+  split at 63 columns.

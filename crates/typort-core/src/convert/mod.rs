@@ -34,6 +34,7 @@ mod text_norm;
 pub use realize::{DocxDocument, convert_ir, export_ir, export_ir_with_ir};
 
 use std::collections::{HashMap, HashSet};
+use std::hash::RandomState;
 use std::str::FromStr;
 
 use typort_ooxml::document::{
@@ -213,6 +214,7 @@ pub fn export(
         &mut doc,
         options.compat,
         &mut degradations,
+        &HashSet::new(),
     );
 
     // 5. Run post-processing passes.
@@ -336,6 +338,7 @@ fn apply_headers_and_footers(
     doc: &mut Document,
     compat: CompatMode,
     degradations: &mut Vec<Degradation>,
+    body_places: &HashSet<u64, RandomState>,
 ) {
     // Extract headers and footers first so header/footer text is not
     // misidentified as body content. All margin-zone consumers
@@ -347,7 +350,7 @@ fn apply_headers_and_footers(
         // `#place` inside the header/footer zones, `page(fill:)`) so they can
         // ride as `wp:anchor` drawings in header/footer parts. C1 keeps its
         // literalize-furniture contract and skips all of this.
-        let furniture_maps = analyze_furniture(paged, world, &margins, compat);
+        let furniture_maps = analyze_furniture(paged, world, &margins, compat, body_places);
         let maps = furniture_maps.as_ref();
         // The declared page-numbering format (from `#set page(numbering:)`,
         // consumed in `apply_source_overrides`) wins over glyph guessing.
@@ -486,6 +489,7 @@ fn analyze_furniture(
     world: &TyportWorld,
     margins: &page::MarginsPt,
     compat: CompatMode,
+    body_places: &HashSet<u64, RandomState>,
 ) -> Option<page::furniture::FurnitureMaps> {
     (compat != CompatMode::C1).then(|| {
         let overrides = gather_source_overrides(world);
@@ -496,6 +500,7 @@ fn analyze_furniture(
                 foreground: overrides.page_foreground,
                 background: overrides.page_background,
             },
+            body_places,
         )
     })
 }

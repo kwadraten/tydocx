@@ -464,11 +464,21 @@ pub struct Run {
     pub position_half_pt: Option<i32>,
 }
 
+/// Drop the invisible hints Typst plants in text for its own line breaker —
+/// U+200B ZERO WIDTH SPACE and U+2060 WORD JOINER mark URL break
+/// opportunities in the PDF but must not reach Word, which finds its own.
+#[must_use]
+pub fn strip_break_hints(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '\u{200B}' | '\u{2060}'))
+        .collect()
+}
+
 impl Run {
     #[must_use]
     pub fn new(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            text: strip_break_hints(&text.into()),
             bold: false,
             italic: false,
             superscript: false,

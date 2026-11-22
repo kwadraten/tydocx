@@ -11,20 +11,51 @@
 
 use std::collections::{HashMap, HashSet};
 
-use typort_ir::{IrAnchor, IrBlock, IrDocument, pt_to_emu};
+use typort_ir::{IrAnchor, IrBlock, IrDocument, IrInline, IrShapeKind, pt_to_emu};
 use typst_layout::PagedDocument;
 use typst_library::introspection::Tag;
 use typst_library::layout::{Frame, FrameItem, Point};
 
 use super::collect::location_hash64;
 use crate::convert::frames::{ItemBounds, visit_frame_items};
+use crate::convert::table_align::paint_to_shd_hex;
+
+/// What the page paints under a placed unit, insofar as the OOXML lowering
+/// needs to know: a solid `rect` whose fill a box above must carry to cover
+/// what Typst shows through, or an image no flat colour can stand in for.
+enum Underlay {
+    Fill(String),
+    Image,
+}
+
+/// Classify a place body whose own paint is a single flat layer under
+/// whatever paints later.
+fn place_underlay(body: &[IrBlock]) -> Option<Underlay> {
+    match body {
+        [
+            IrBlock::Shape {
+                kind: IrShapeKind::Rectangle,
+                fill_hex: Some(hex),
+                ..
+            },
+        ] => Some(Underlay::Fill(hex.clone())),
+        [IrBlock::Paragraph(para)] if matches!(para.inlines.as_slice(), [IrInline::Image(_)]) => {
+            Some(Underlay::Image)
+        }
+        _ => None,
+    }
+}
 
 /// Fill `anchor` on every `IrBlock::Place` whose `Location` hash matches a
 /// rendered placement in the paged document.
 pub fn patch_places(doc: &mut IrDocument, paged: &PagedDocument) {
     let mut wanted = HashSet::new();
-    for_each_place(&doc.body, &mut |hash| {
+    let mut underlays = HashMap::new();
+    for_each_place(&doc.body, &mut |hash, body| {
         wanted.insert(hash);
+        if let Some(underlay) = place_underlay(body) {
+            underlays.insert(hash, underlay);
+        }
     });
     if wanted.is_empty() {
         return;
@@ -48,12 +79,25 @@ pub fn patch_places(doc: &mut IrDocument, paged: &PagedDocument) {
                             width_emu: pt_to_emu(group.frame.width().to_pt()),
                             height_emu: pt_to_emu(group.frame.height().to_pt()),
                             behind_doc: false,
+                            backdrop_hex: None,
                         });
                     }
                 }
             },
         );
-        scan_placed_events(&page.frame, &wanted, &mut geometry);
+        // The box's underlay colour: a solid `page(fill:)` when declared,
+        // else paper white; a non-solid fill has no shape-fill stand-in.
+        let page_backdrop = match page.fill_or_transparent() {
+            None => Some(String::from("FFFFFF")),
+            Some(paint) => paint_to_shd_hex(&paint),
+        };
+        scan_placed_events(
+            &page.frame,
+            &wanted,
+            &underlays,
+            page_backdrop.as_deref(),
+            &mut geometry,
+        );
     }
     if geometry.is_empty() {
         return;
@@ -73,9 +117,19 @@ type FrameEvent<'a> = (usize, Point, &'a FrameItem);
 /// text still paints after the place on this page" (images and shapes that
 /// paint after only other drawings stay in front, layered among the anchors
 /// by document order).
-fn scan_placed_events(frame: &Frame, wanted: &HashSet<u64>, geometry: &mut HashMap<u64, IrAnchor>) {
+fn scan_placed_events(
+    frame: &Frame,
+    wanted: &HashSet<u64>,
+    underlays: &HashMap<u64, Underlay>,
+    page_backdrop: Option<&str>,
+    geometry: &mut HashMap<u64, IrAnchor>,
+) {
     let mut events = Vec::new();
     collect_events(frame, Point::zero(), 0, &mut events);
+    // Non-float places measured on this page, in paint order — a new anchor
+    // paints over them, so the latest one covering its bounds is its underlay.
+    let mut placed: Vec<(u64, IrAnchor)> = Vec::new();
+    let mut brackets: Vec<(usize, usize)> = Vec::new();
     for (i, &(depth, _, item)) in events.iter().enumerate() {
         let FrameItem::Tag(Tag::Start(elem, _)) = item else {
             continue;
@@ -112,15 +166,78 @@ fn scan_placed_events(frame: &Frame, wanted: &HashSet<u64>, geometry: &mut HashM
         let Some(end_index) = end else {
             continue;
         };
-        if let Some(anchor) = anchor_from(
+        if let Some(mut anchor) = anchor_from(
             &bounds,
             events[end_index..]
                 .iter()
                 .any(|(_, _, it)| matches!(it, FrameItem::Text(_))),
         ) {
+            // Earlier content that is not itself a measured place and that
+            // overlaps this anchor — the underlay the paper fallback must not
+            // paint over.
+            let under_content = events[..i].iter().enumerate().any(|(k, &(_, pos, it))| {
+                if matches!(it, FrameItem::Tag(_)) || brackets.iter().any(|&(s, e)| k > s && k < e)
+                {
+                    return false;
+                }
+                let mut b = ItemBounds::default();
+                b.add(pos, it);
+                bounds
+                    .rect()
+                    .is_some_and(|anchor_rect| b.rect().is_some_and(|r| overlaps(r, anchor_rect)))
+            });
+            let fallback = if under_content { None } else { page_backdrop };
+            anchor.backdrop_hex = backdrop_hex(&placed, underlays, &anchor, fallback);
+            placed.push((hash, anchor.clone()));
+            brackets.push((i, end_index));
             geometry.insert(hash, anchor);
         }
     }
+}
+
+/// The colour a transparent `wps:txbx` must carry so the unit covers what
+/// paints under it: the latest covering fill rect wins, an image keeps the
+/// box unfilled, unfilled text boxes let the search continue further down.
+fn backdrop_hex(
+    placed: &[(u64, IrAnchor)],
+    underlays: &HashMap<u64, Underlay>,
+    anchor: &IrAnchor,
+    page_backdrop: Option<&str>,
+) -> Option<String> {
+    for (hash, earlier) in placed.iter().rev() {
+        if !covers(earlier, anchor) {
+            continue;
+        }
+        match underlays.get(hash) {
+            Some(Underlay::Fill(hex)) => return Some(hex.clone()),
+            Some(Underlay::Image) => return None,
+            None => {}
+        }
+    }
+    page_backdrop.map(str::to_owned)
+}
+
+/// Two `(x, y, w, h)` pt rects intersect.
+fn overlaps(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {
+    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
+}
+
+/// `outer` fully covers `inner` (page-absolute EMU rects).
+fn covers(outer: &IrAnchor, inner: &IrAnchor) -> bool {
+    outer.x_emu <= inner.x_emu
+        && outer.y_emu <= inner.y_emu
+        && outer
+            .x_emu
+            .saturating_add(i64::try_from(outer.width_emu).unwrap_or(i64::MAX))
+            >= inner
+                .x_emu
+                .saturating_add(i64::try_from(inner.width_emu).unwrap_or(i64::MAX))
+        && outer
+            .y_emu
+            .saturating_add(i64::try_from(outer.height_emu).unwrap_or(i64::MAX))
+            >= inner
+                .y_emu
+                .saturating_add(i64::try_from(inner.height_emu).unwrap_or(i64::MAX))
 }
 
 fn collect_events<'a>(
@@ -147,11 +264,23 @@ fn anchor_from(bounds: &ItemBounds, behind_doc: bool) -> Option<IrAnchor> {
         width_emu: pt_to_emu(width),
         height_emu: pt_to_emu(height),
         behind_doc,
+        backdrop_hex: None,
     })
 }
 
-/// Visit the `location_hash` of every `IrBlock::Place` in the IR.
-fn for_each_place(blocks: &[IrBlock], f: &mut impl FnMut(u64)) {
+/// Location hashes of every `IrBlock::Place` in the document body — the set
+/// the furniture classifier must treat as inner content, not page furniture.
+pub(crate) fn place_location_hashes(blocks: &[IrBlock]) -> HashSet<u64> {
+    let mut hashes = HashSet::new();
+    for_each_place(blocks, &mut |hash, _| {
+        hashes.insert(hash);
+    });
+    hashes
+}
+
+/// Visit the `location_hash` of every `IrBlock::Place` in the IR, with its
+/// body so the caller can classify what the place paints.
+fn for_each_place(blocks: &[IrBlock], f: &mut impl FnMut(u64, &[IrBlock])) {
     for block in blocks {
         match block {
             IrBlock::Place {
@@ -160,7 +289,7 @@ fn for_each_place(blocks: &[IrBlock], f: &mut impl FnMut(u64)) {
                 ..
             } => {
                 if let Some(hash) = location_hash {
-                    f(*hash);
+                    f(*hash, body);
                 }
                 for_each_place(body, f);
             }
@@ -206,7 +335,7 @@ fn apply_anchors(blocks: &mut [IrBlock], geometry: &HashMap<u64, IrAnchor>) {
                 ..
             } => {
                 if let Some(geo) = location_hash.and_then(|hash| geometry.get(&hash)) {
-                    *anchor = Some(*geo);
+                    *anchor = Some(geo.clone());
                 }
                 apply_anchors(body, geometry);
             }

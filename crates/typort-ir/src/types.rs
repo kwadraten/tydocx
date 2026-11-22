@@ -131,6 +131,10 @@ pub enum IrBlock {
         numbering: Option<IrHeadingNumbering>,
         body: Vec<IrInline>,
         label: Option<String>,
+        /// `par` settings resolved on the heading body's `StyleChain`
+        /// (e.g. `#show heading: set par(first-line-indent: 0pt)`); emitted as
+        /// `w:ind`/`w:jc` overrides when they differ from Normal.
+        par: IrParStyle,
         alignment: Option<Alignment>,
         span: Option<typst_syntax::Span>,
     },
@@ -223,7 +227,7 @@ pub enum IrPlaceWrap {
 
 /// Page-absolute geometry of a rendered float or non-floating placement,
 /// measured from the paged frame.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IrAnchor {
     /// Offset from the page's left edge (`relativeFrom="page"`), EMU.
     pub x_emu: i64,
@@ -237,6 +241,13 @@ pub struct IrAnchor {
     /// paints after it on the page. Floats keep `false` — Word displaces
     /// flow text for them anyway.
     pub behind_doc: bool,
+    /// The solid colour painting directly under this unit on the page — the
+    /// fill of an earlier placed rect covering the unit's bounds, or the
+    /// page's own solid `fill`, or `"FFFFFF"` paper when neither declares
+    /// one. Word gives a `wps:txbx` no fill unless asked, so a text box over
+    /// a coloured backdrop would show it through; the lowerer paints this on
+    /// the shape when the place itself declares no fill.
+    pub backdrop_hex: Option<String>,
 }
 
 /// Only properties the OOXML `Paragraph` can carry are represented here;
@@ -316,7 +327,12 @@ pub enum IrInline {
         ordinal: u32,
         rendered: String,
     },
-    LineBreak,
+    /// `#linebreak(justify:)` — Word stretches `w:br`-terminated lines under an
+    /// inherited `w:jc="both"`, so the flag must survive to the paragraph
+    /// alignment decision (see `lower_paragraph`).
+    LineBreak {
+        justify: bool,
+    },
     Space,
     Image(IrImage),
     Math {

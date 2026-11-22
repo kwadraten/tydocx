@@ -41,9 +41,10 @@ fn inline_text(inlines: &[IrInline], out: &mut String, generated: &mut BTreeSet<
             IrInline::Shape { body, .. } | IrInline::Field { body, .. } => {
                 inline_text(body, out, generated)
             }
-            IrInline::LineBreak | IrInline::Tab | IrInline::PageBreak | IrInline::ColumnBreak => {
-                out.push(' ')
-            }
+            IrInline::LineBreak { .. }
+            | IrInline::Tab
+            | IrInline::PageBreak
+            | IrInline::ColumnBreak => out.push(' '),
             IrInline::Image(_) | IrInline::Math { .. } | IrInline::Overline(_) => {}
         }
     }
@@ -317,7 +318,7 @@ fn inline_variant_names<'a>(
             IrInline::Ref { .. } => "Ref",
             IrInline::Cite { .. } => "Cite",
             IrInline::FootnoteMarker { .. } => "FootnoteMarker",
-            IrInline::LineBreak => "LineBreak",
+            IrInline::LineBreak { .. } => "LineBreak",
             IrInline::Space => "Space",
             IrInline::Image(_) => "Image",
             IrInline::Math { .. } => "Math",
