@@ -16,7 +16,7 @@ kept — resolved history lives in git.
   (every fixture either byte-identical or carrying a documented,
   user-accepted diff), **and** the C1 gates are ported to the IR path —
   done. Deleting `export()` also deletes `compile_both_targets` and the
-  `HtmlDocument` dependency of `typort-core`.
+  `HtmlDocument` dependency of `tydocx-core`.
 - **Owner:** user decision (merge gate), after the equivalence corpus is
   accepted.
 
@@ -382,14 +382,14 @@ bodies — now comes from `StyleChain`s or element identity.
   See `docs/spec-ecma376.md` for the per-feature rows.
 
 ### Dual `CompatMode` / `Degradation` definitions
-- **What:** `typort-core` (`compat.rs`) and `typort-ir` (`mode.rs`,
+- **What:** `tydocx-core` (`compat.rs`) and `tydocx-ir` (`mode.rs`,
   `degradation.rs`) define identical `CompatMode`/`DegradationAction`/
   `Degradation` types, converted at the boundary in `realize/mod.rs`
   (`ir_compat`, `core_degradation`). Not a correctness issue — the
   conversion is exhaustive and pinned — but duplication worth one cleanup
   change.
 - **Unify when:** a follow-up moves the canonical definitions into
-  `typort-ir` and has core re-export them (or vice versa).
+  `tydocx-ir` and has core re-export them (or vice versa).
 
 ### C3 field layer
 - **What landed:** `--compat c3` emits `w:updateFields`, ` NUMPAGES `

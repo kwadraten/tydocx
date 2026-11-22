@@ -1,7 +1,7 @@
 // `first-line-indent: (amount: 2em, all: true)` indents EVERY paragraph,
 // including the first one after a heading (the Chinese-typography convention).
 // With the bare `first-line-indent: 2em` shorthand (all: false, the Typst
-// default), Typst — and typort — suppress that first paragraph's indent.
+// default), Typst — and tydocx — suppress that first paragraph's indent.
 
 #set par(first-line-indent: (amount: 2em, all: true))
 

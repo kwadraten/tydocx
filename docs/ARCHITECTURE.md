@@ -82,7 +82,7 @@ semantic HTML representation:
 - **Math is MathML, not OMML.** The HTML target (typst 0.15) renders equations to
   **MathML** `<math>` elements — semantic, but not what Word edits. Both paths
   pull the original `EquationElem` Content tree through the **introspector** and
-  convert it to OMML (`typort-math`); the HTML walk skips the `<math>` node so
+  convert it to OMML (`tydocx-math`); the HTML walk skips the `<math>` node so
   the equation's glyphs aren't re-emitted as duplicate literal text
   (`convert/inline_walk.rs`, `"math"` arm), and the realize collector
   likewise emits only the OMML, not the equation's rendered text pairs.
@@ -135,7 +135,7 @@ fields no chain could provide.
 
 ## The pipeline
 
-`typort_core::convert::convert(world, &options) -> Result<ConvertOutcome, Vec<SourceDiagnostic>>`
+`tydocx_core::convert::convert(world, &options) -> Result<ConvertOutcome, Vec<SourceDiagnostic>>`
 is the heart of the system. It is a thin wrapper: it compiles the realize
 document and a companion `PagedDocument` (`convert_ir`) and hands them to
 `export_ir`, which lowers the collected IR. `export_ir(docx_doc, paged_doc, world, &options) -> ConvertOutcome`
@@ -145,15 +145,15 @@ pairs the document with its degradation report (`ConvertOutcome { document, degr
 the compat mode rides in `ConvertOptions` (see `docs/spec-ecma376.md`). Compilation failures keep
 their spans: they are returned as `Vec<SourceDiagnostic>`, never as plain
 strings. The steps are grouped here by purpose; see the numbered comments in
-`crates/typort-core/src/convert/realize/mod.rs` for the exact order.
+`crates/tydocx-core/src/convert/realize/mod.rs` for the exact order.
 
 ```mermaid
 flowchart TD
-    INPUT["input.typ"] --> WORLD["TyportWorld (World trait: source, fonts, packages, Feature::Html)"]
+    INPUT["input.typ"] --> WORLD["TydocxWorld (World trait: source, fonts, packages, Feature::Html)"]
     WORLD -->|compile::&lt;DocxDocument&gt; — realize pairs + collect IR| COMPILE["convert_ir(): thin wrapper<br/>1 compile DocxDocument + companion PagedDocument"]
     WORLD -->|compile::&lt;PagedDocument&gt; — geometry + frames| COMPILE
-    COMPILE --> EXPORT["export_ir(docx_doc, paged_doc, world, &options)<br/>2 page + style from Paged + StyleChain overrides (+ narrow AST fill-in)<br/>3 patch: footnote bodies + image sizes/crops from Paged frames<br/>4 pure lowering: IrDocument → typort_ooxml::Document<br/>5 post-passes (paragraph formatting, CJK fonts, run coalescing)"]
-    EXPORT --> IR["typort_ooxml::Document"]
+    COMPILE --> EXPORT["export_ir(docx_doc, paged_doc, world, &options)<br/>2 page + style from Paged + StyleChain overrides (+ narrow AST fill-in)<br/>3 patch: footnote bodies + image sizes/crops from Paged frames<br/>4 pure lowering: IrDocument → tydocx_ooxml::Document<br/>5 post-passes (paragraph formatting, CJK fonts, run coalescing)"]
+    EXPORT --> IR["tydocx_ooxml::Document"]
     IR --> WRITER["writer → XML parts → ZIP"]
     WRITER --> OUT["output.docx"]
 ```
@@ -187,18 +187,18 @@ natively (the per-item evidence is in `docs/fallback-registry.md`).
 
 ```mermaid
 flowchart TD
-    CRATES["crates/"] --> CLI["typort-cli/ — Thin clap binary: parse args → convert → write .docx"]
-    CRATES --> CORE["typort-core/ — Typst compilation + the conversion engine (the brain)"]
-    CRATES --> IR["typort-ir/ — The owned realize IR (IrDocument) + its pure lowering to typort_ooxml::Document"]
-    CRATES --> OOXML["typort-ooxml/ — The OOXML document model (IR) + XML writer + ZIP packaging"]
-    CRATES --> MATH["typort-math/ — Typst math Content tree → OMML"]
+    CRATES["crates/"] --> CLI["tydocx-cli/ — Thin clap binary: parse args → convert → write .docx"]
+    CRATES --> CORE["tydocx-core/ — Typst compilation + the conversion engine (the brain)"]
+    CRATES --> IR["tydocx-ir/ — The owned realize IR (IrDocument) + its pure lowering to tydocx_ooxml::Document"]
+    CRATES --> OOXML["tydocx-ooxml/ — The OOXML document model (IR) + XML writer + ZIP packaging"]
+    CRATES --> MATH["tydocx-math/ — Typst math Content tree → OMML"]
 ```
 
-`typort-ooxml/src/lib.rs` is the crate's public API index: it contains only module
-declarations and re-exports. Its writer tests live in `typort-ooxml/tests/`, where
+`tydocx-ooxml/src/lib.rs` is the crate's public API index: it contains only module
+declarations and re-exports. Its writer tests live in `tydocx-ooxml/tests/`, where
 they exercise that public API as integration tests.
 
-### typort-ooxml writer internals
+### tydocx-ooxml writer internals
 
 | File | Responsibility |
 |------|----------------|
@@ -210,11 +210,11 @@ they exercise that public API as integration tests.
 | `writer/math.rs`, `writer/image.rs`, `writer/citation.rs` | OMML passthrough, DrawingML images/media inventory, and citation/bibliography XML. |
 | `writer/header_footer.rs` | Header and footer parts, including automatic page numbering and anchored furniture drawings (`wp:anchor` text boxes, pictures, solid-fill shapes) with part-local image relationships. |
 
-### typort-core internals
+### tydocx-core internals
 
 | File | Responsibility |
 |------|----------------|
-| `world.rs` | `TyportWorld`: implements Typst's `World` trait (source, system fonts, `@preview` package download, `Feature::Html`). |
+| `world.rs` | `TydocxWorld`: implements Typst's `World` trait (source, system fonts, `@preview` package download, `Feature::Html`). |
 | `convert/mod.rs` | Entry orchestration: `convert` (the realize path, thin wrapper over `convert_ir`) and `convert_legacy`/`export` (the legacy HtmlDocument pipeline, kept as fallback and equivalence baseline), module declarations/re-exports, `WalkCtx`, equation state, and the legacy pipeline phases. |
 | `convert/realize/mod.rs` | The realize path: `DocxDocument: Output` (`Target::Paged`, collects the IR during `create`), `with_fragment` (fragment re-realization), `convert_ir`/`export_ir` (page/style via a scratch `Document`, patch, pure lowering, path-independent post-passes), and the core↔ir `CompatMode`/`Degradation` boundary conversions. `DocxDocument`'s `introspector()` is an `ElementIntrospector` fed from the pairs' tag stream; the feed **must recurse into `ParElem`/`BlockElem` bodies** for nested `TagElem`s — top-level-only collection leaves `CiteGroup`s undiscovered and fails the final compile round ("citation could not be located"). |
 | `convert/realize/collect.rs` | Pair → `IrDocument` collection: the tag-group walk, label/bibliography pass, footnote markers, and fragment-resolved tables/grids/figures. |
@@ -247,10 +247,10 @@ they exercise that public API as integration tests.
 | `convert/image.rs` | Image content decoded from each `<img>`'s base64 src data-URL (typst-html 0.15 embeds the bytes in the DOM); Paged frames contribute display sizes and clip-derived `a:srcRect` crops (by content hash — the frame walk accumulates `GroupItem::clip` windows, the mechanism both `clip:` and `fit:` route through) and drawing-canvas SVG+raster pairs keyed by their figure's `Location`. |
 | `convert/inline.rs` | Typst Content-AST inline formatting (bold/italic/…) → styled runs. |
 
-## The IR: `typort_ooxml::Document`
+## The IR: `tydocx_ooxml::Document`
 
-This is the typed contract between the two halves of the system. `typort-core`
-**writes** it; `typort-ooxml::writer` **reads** it; it is the only thing they
+This is the typed contract between the two halves of the system. `tydocx-core`
+**writes** it; `tydocx-ooxml::writer` **reads** it; it is the only thing they
 share.
 
 - `Document` — root: body elements, footnotes, page settings, document style,
@@ -269,10 +269,10 @@ share.
 Units are stored in **Word-native form** (half-points for size, twips for
 spacing/indent) so the writer does minimal conversion.
 
-## The realize IR: `typort_ir::IrDocument`
+## The realize IR: `tydocx_ir::IrDocument`
 
-Between the realize pairs and `typort_ooxml::Document` sits a second,
-owned IR — the **Styled Semantic IR** (`crates/typort-ir`). The pairs
+Between the realize pairs and `tydocx_ooxml::Document` sits a second,
+owned IR — the **Styled Semantic IR** (`crates/tydocx-ir`). The pairs
 borrow the realize arenas and cannot outlive `create()` — and `create()`
 runs once per round of the compiler's introspection-convergence loop, so it
 keeps no cross-call state — so the collector
@@ -287,7 +287,7 @@ them into `TextElem` by the time the pairs exist, so the IR records them
 where the writer reads them (bold/italic/superscript/subscript on `Run`).
 
 Rules the equivalence round established (see
-`crates/typort-cli/tests/integration/ir_path.rs` for the rulings):
+`crates/tydocx-cli/tests/integration/ir_path.rs` for the rulings):
 
 - **Alignment** comes from the pair's `StyleChain` (`AlignElem` in
   scope); justification is document-level (the Normal style's
@@ -299,7 +299,7 @@ Rules the equivalence round established (see
   fiftieths of a percent (5000 = 100%), summed over spanned tracks
   without rescaling.
 - **Grids** lower to fixed-layout tables through a pure planner
-  (`typort-ir::grid_plan`): occupancy is derived from cell `x`/spans,
+  (`tydocx-ir::grid_plan`): occupancy is derived from cell `x`/spans,
   empty source rows run-length-merge into single rows with summed
   `w:trHeight`, identical adjacent columns merge into `w:gridSpan`
   lanes, and `rowspan`s become `w:vMerge` (a continuation keeps the
@@ -377,18 +377,18 @@ Rules the equivalence round established (see
   (`flatten_sequences`), so a display equation inside a `#body`
   substitution is dispatched as a block.
 
-The lowering (`typort_ir::lower(ir, geometry, compat) -> (Document,
+The lowering (`tydocx_ir::lower(ir, geometry, compat) -> (Document,
 Vec<Degradation>)`) is a **pure function**: no `World`, no `Engine`, no
 `PagedDocument` — geometry arrives as the explicit `GeometryInput {
 page_size, page_numbering, supplement, header (_even/_first), footer
 (_even/_first), even_and_odd_headers, title_page }` struct. That
-purity is what makes the lowering unit-testable (`crates/typort-ir` has
+purity is what makes the lowering unit-testable (`crates/tydocx-ir` has
 its own lib tests) and what lets the two conversion paths share the
 writer without sharing a walk.
 
 ## The writer: direct OOXML, no library
 
-`typort-ooxml::writer` emits the `.docx` XML parts directly via `quick-xml` — **no
+`tydocx-ooxml::writer` emits the `.docx` XML parts directly via `quick-xml` — **no
 `docx-rs`, no intermediate format**. This is a deliberate choice: Word is strict
 about WML child-element ordering (`rPr`/`pPr` children must appear in schema
 order), and direct emission gives full control. Its root owns package orchestration
@@ -398,7 +398,7 @@ footnotes, citations, math, and media before the entry point zips them.
 
 ## Math → OMML
 
-`typort-math` converts the Typst math Content tree (obtained *semantically* via
+`tydocx-math` converts the Typst math Content tree (obtained *semantically* via
 the introspector, not from rendered glyphs) into OMML, which keeps equations
 **editable** in Word. It implements a broad set of OMML constructs: fractions
 (`m:f`), scripts (`m:sSub`/`m:sSup`/`m:sSubSup`), pre-scripts (`m:sPre`), radicals
@@ -429,7 +429,7 @@ The step-5 conformance suite (`tests/integration/conformance.rs`,
 `tests/integration/numbering.rs`) pins the backend's structural contract
 rather than individual features:
 
-- **Canonical fingerprint** (`typort-ooxml/src/canonical.rs`): a
+- **Canonical fingerprint** (`tydocx-ooxml/src/canonical.rs`): a
   namespace-aware canonicalization of a generated XML part — qualified
   element names, attributes sorted, per-instance ids (`w:id`, `paraId`,
   `rsid*`) dropped — so comparisons measure the tree, not serialization
@@ -484,7 +484,7 @@ output are collected from the pairs (`realize/collect.rs`), `#line()` rules
 come from the `LineElem` pair (`line_blocks`), table borders from the
 realized grid strokes (`table_borders_from_grid`), and section breaks from
 the collected `PageSnapshot` chains (`ir.sections` → `lower_body` /
-`attach_section_break` in `typort-ir`). The geometry constants and the
+`attach_section_break` in `tydocx-ir`). The geometry constants and the
 element→page map went with it; the remaining live gaps are recorded in
 `docs/fallback-registry.md`.
 

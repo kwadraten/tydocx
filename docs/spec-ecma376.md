@@ -2,15 +2,15 @@
 
 How tydocx expresses each Typst construct in Office Open XML (ECMA-376), per
 compatibility level. Every claim here is verified against the implementation
-(`typort-core/src/convert/realize/`, `typort-ir/src/lower.rs`,
-`typort-ooxml/src/writer/`) and the test suite; where behavior differs from the
+(`tydocx-core/src/convert/realize/`, `tydocx-ir/src/lower.rs`,
+`tydocx-ooxml/src/writer/`) and the test suite; where behavior differs from the
 old `compat-modes.md` design doc, the code is authoritative and the difference
 is noted.
 
 ## Compatibility levels
 
-`CompatMode` is defined twice — `typort_core::compat::CompatMode` (user-facing,
-richer degradation formatting) and `typort_ir::CompatMode` (used by the
+`CompatMode` is defined twice — `tydocx_core::compat::CompatMode` (user-facing,
+richer degradation formatting) and `tydocx_ir::CompatMode` (used by the
 lowerer). Both accept `c1` / `c2` / `c3`; the CLI flag is `--compat`, default
 `c2`.
 
@@ -45,8 +45,8 @@ flowchart LR
     pairs --> collect["collect.rs<br/>semantic walk → IrDocument"]
     paged --> patch["patch.rs / place.rs / overline.rs<br/>footnote bodies, image sizes,<br/>float & overline geometry"]
     collect --> patch
-    patch --> lower["typort_ir::lower<br/>IrDocument → ooxml::Document"]
-    lower --> write["typort-ooxml writers<br/>document.xml, numbering.xml,<br/>styles.xml, OMML, drawings"]
+    patch --> lower["tydocx_ir::lower<br/>IrDocument → ooxml::Document"]
+    lower --> write["tydocx-ooxml writers<br/>document.xml, numbering.xml,<br/>styles.xml, OMML, drawings"]
     write --> docx[(.docx package)]
 ```
 
@@ -319,8 +319,8 @@ per-feature *degradation* list above is exhaustive.
   unsupported item kinds, per-physical-page variation — is reported as
   `page-foreground`. C1 keeps its literalized-text contract.
 - **Bare/angled shapes** are silently dropped at C2/C3; only C1 reports them.
-- **Dual `CompatMode`/`Degradation` definitions** in `typort-core` and
-  `typort-ir` remain to be unified.
+- **Dual `CompatMode`/`Degradation` definitions** in `tydocx-core` and
+  `tydocx-ir` remain to be unified.
 - **Image `alt:`** is never emitted (`wp:docPr descr` is a backlog item at
   every level); `fit:` contain/stretch is silently dropped at C2/C3 (cover
   lowers to `a:srcRect`).

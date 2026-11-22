@@ -53,9 +53,9 @@ for typ_file in "$@"; do
         continue
     fi
 
-    if ! cargo run -p typort --release --quiet -- \
+    if ! cargo run -p tydocx --release --quiet -- \
         "$typ_file" -o "$file_dir/converted.docx" 2>/dev/null; then
-        echo "SKIP $typ_file (typort convert failed)"
+        echo "SKIP $typ_file (tydocx convert failed)"
         failed="${failed}${failed:+ }$typ_file"
         continue
     fi

@@ -1,7 +1,7 @@
 // Issue: typst#8100 — HTML whitespace preservation in content sequences
 // Trailing/leading spaces inside styled spans (highlight, underline, etc.)
 // may be collapsed in HTML export, causing words to merge.
-// typort relies on HtmlDocument, so this can cause run-together text.
+// tydocx relies on HtmlDocument, so this can cause run-together text.
 
 = Whitespace in Styled Spans
 

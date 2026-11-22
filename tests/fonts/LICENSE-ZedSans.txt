@@ -1,5 +1,5 @@
 ZedSans.ttf is a subset of DejaVu Sans Mono, renamed to the family
-"Zed Sans" for typort's code-font detection test (#26). Only printable
+"Zed Sans" for tydocx's code-font detection test (#26). Only printable
 ASCII glyphs are kept; nothing else about the face was changed.
 
 DejaVu Sans Mono is free software under the license below:

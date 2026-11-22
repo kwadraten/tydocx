@@ -4,17 +4,21 @@
 
 Universal Typst to Word (.docx) converter. Any valid `.typ` file should convert to an editable `.docx`.
 
+## Lineage and plans
+
+tydocx evolved from [dianzuan/typort](https://github.com/dianzuan/typort): it is the branch that takes the compile-backend technical route. The plan going forward is to publish it as an independent Rust crate and to ship libraries for three language ecosystems — the Rust crate itself, Python bindings built with pyo3, and .NET bindings.
+
 ## Install
 
 ```bash
-cargo install typort                    # from crates.io
-cargo install --path crates/typort-cli  # from a checkout
+cargo install tydocx                    # from crates.io
+cargo install --path crates/tydocx-cli  # from a checkout
 ```
 
 ## Usage
 
 ```bash
-typort input.typ -o output.docx
+tydocx input.typ -o output.docx
 ```
 
 Layout (page margins, footnote style, …) is controlled entirely by the
@@ -77,11 +81,11 @@ OOXML XML is generated directly via `quick-xml`. No docx-rs, no intermediate for
 
 ```mermaid
 flowchart TD
-    CRATES["crates/"] --> CLI["typort-cli/ — CLI binary (clap)"]
-    CRATES --> CORE["typort-core/ — Typst compilation + conversion engine"]
-    CRATES --> IR["typort-ir/ — Owned realize IR + pure lowering"]
-    CRATES --> OOXML["typort-ooxml/ — OOXML document model + XML writer + ZIP packaging"]
-    CRATES --> MATH["typort-math/ — Typst math → OMML conversion"]
+    CRATES["crates/"] --> CLI["tydocx-cli/ — CLI binary (clap)"]
+    CRATES --> CORE["tydocx-core/ — Typst compilation + conversion engine"]
+    CRATES --> IR["tydocx-ir/ — Owned realize IR + pure lowering"]
+    CRATES --> OOXML["tydocx-ooxml/ — OOXML document model + XML writer + ZIP packaging"]
+    CRATES --> MATH["tydocx-math/ — Typst math → OMML conversion"]
 ```
 
 ## Prerequisites

@@ -7,6 +7,10 @@ All notable changes to tydocx are documented here. The format follows
 
 ### Changed
 
+- The project is renamed from typort to tydocx throughout: crates are now
+  `tydocx`, `tydocx-core`, `tydocx-ir`, `tydocx-math`, `tydocx-ooxml`, the CLI
+  binary is `tydocx`, and `TyportWorld` is now `TydocxWorld`. Pure rename — no
+  behavior change.
 - Preset schema: the unused `[font]` section is removed (it was parsed but never
   applied). Presets now carry `[journal]`, `[page]`, `[footnote]`.
 

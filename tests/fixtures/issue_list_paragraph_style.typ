@@ -1,6 +1,6 @@
 // Issue: pandoc#10974 — List items use "Normal" style instead of "List Paragraph"
 // Word expects list items to use the "List Paragraph" style for proper spacing.
-// typort should emit w:pStyle val="ListParagraph" for list items.
+// tydocx should emit w:pStyle val="ListParagraph" for list items.
 
 = Lists with Proper Styling
 
