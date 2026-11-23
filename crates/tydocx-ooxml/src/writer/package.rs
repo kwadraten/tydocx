@@ -116,6 +116,7 @@ pub(super) fn generate_content_types(
     writer: &mut Writer<&mut Vec<u8>>,
     parts: &DocParts,
     images: &[&ImageData],
+    has_xsl_item: bool,
 ) -> io::Result<()> {
     writer
         .create_element("Types")
@@ -192,6 +193,12 @@ pub(super) fn generate_content_types(
                     .with_attribute(("PartName", "/customXml/itemProps1.xml"))
                     .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.customXmlProperties+xml"))
                     .write_empty()?;
+                if has_xsl_item {
+                    w.create_element("Override")
+                        .with_attribute(("PartName", "/customXml/itemProps2.xml"))
+                        .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.customXmlProperties+xml"))
+                        .write_empty()?;
+                }
             }
             Ok(())
         })?;

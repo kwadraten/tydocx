@@ -23,6 +23,7 @@ mod table;
 
 use citation::{
     generate_custom_xml_item_props, generate_custom_xml_rels, generate_custom_xml_sources,
+    generate_item2_rels, generate_xsl_item_props,
 };
 use document::generate_document_xml;
 use footnotes::{footnotes_have_math, generate_footnotes_xml};
@@ -154,7 +155,9 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     zip.start_file("[Content_Types].xml", options)?;
-    zip.write_all(&xml_part(|w| generate_content_types(w, &parts, &images))?)?;
+    zip.write_all(&xml_part(|w| {
+        generate_content_types(w, &parts, &images, doc.bibliography_style_xsl.is_some())
+    })?)?;
 
     zip.start_file("_rels/.rels", options)?;
     zip.write_all(&xml_part(generate_rels)?)?;
@@ -187,7 +190,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
                 w,
                 doc,
                 &ctx,
-                footnote_image_base,
+                &footnote_images,
                 footnotes_have_drawing(doc),
                 footnotes_have_math(doc),
             )
@@ -227,21 +230,47 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
 
     // Custom XML bibliography data source
     if parts.has(RelKind::Bibliography) {
-        zip.start_file("customXml/item1.xml", options)?;
-        zip.write_all(&xml_part(|w| {
-            generate_custom_xml_sources(w, &doc.citation_sources, doc.bibliography_style.as_ref())
-        })?)?;
-
-        zip.start_file("customXml/itemProps1.xml", options)?;
-        zip.write_all(&xml_part(|w| {
-            generate_custom_xml_item_props(w, &doc.citation_sources)
-        })?)?;
-
-        zip.start_file("customXml/_rels/item1.xml.rels", options)?;
-        zip.write_all(&xml_part(generate_custom_xml_rels)?)?;
+        write_bibliography_parts(&mut zip, doc, options)?;
     }
 
     zip.finish()?;
+    Ok(())
+}
+
+/// Write the `customXml/` bibliography item set: `item1.xml` carries the
+/// Sources.xml data source plus its property/rels companions. A
+/// `--bibliography-style` XSL travels as a second custom-XML item: Word
+/// resolves `SelectedStyle` from its installed style directories, so the
+/// embedded copy is payload, not activation — tools that can read the
+/// package can extract and install it.
+fn write_bibliography_parts<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    doc: &Document,
+    options: SimpleFileOptions,
+) -> Result<(), Box<dyn Error>> {
+    zip.start_file("customXml/item1.xml", options)?;
+    zip.write_all(&xml_part(|w| {
+        generate_custom_xml_sources(w, &doc.citation_sources, doc.bibliography_style.as_ref())
+    })?)?;
+
+    zip.start_file("customXml/itemProps1.xml", options)?;
+    zip.write_all(&xml_part(|w| {
+        generate_custom_xml_item_props(w, &doc.citation_sources)
+    })?)?;
+
+    zip.start_file("customXml/_rels/item1.xml.rels", options)?;
+    zip.write_all(&xml_part(generate_custom_xml_rels)?)?;
+
+    if let Some(xsl) = &doc.bibliography_style_xsl {
+        zip.start_file("customXml/item2.xml", options)?;
+        zip.write_all(xsl)?;
+
+        zip.start_file("customXml/itemProps2.xml", options)?;
+        zip.write_all(&xml_part(generate_xsl_item_props)?)?;
+
+        zip.start_file("customXml/_rels/item2.xml.rels", options)?;
+        zip.write_all(&xml_part(generate_item2_rels)?)?;
+    }
     Ok(())
 }
 

@@ -77,10 +77,16 @@ fn v04_show_outline_entry_rule() {
 
 #[test]
 fn v05_outline_target_figure() {
-    let constructs = c1_constructs("universe_outline_target");
-    assert_has(&constructs, "outline-target");
     let xml = fixture_doc_xml("universe_outline_target");
     assert!(xml.contains("List of Figures"));
+    assert!(
+        xml.contains("TOC \\h \\z \\c"),
+        "a figure-targeted outline emits the \\c switch"
+    );
+    assert!(
+        xml.contains("A rect") && xml.contains("PAGEREF outline-target-0"),
+        "the figure entry is cached behind the field"
+    );
     assert!(
         !xml.contains("TOC \\o"),
         "a heading TOC must not masquerade as a list of figures"

@@ -175,7 +175,14 @@ pub enum IrBlock {
         entries: Vec<IrOutlineEntry>,
         depth: u8,
         custom_target: bool,
-        custom_indent: bool,
+        /// Left indent added per entry level (`level - 1` times this many
+        /// twips): Typst's default is `1.2em`; a `Rel` indent resolves to
+        /// its declared length per level.
+        indent_twips_per_level: u32,
+        /// When every entry came from figures of one kind, the Word `SEQ`
+        /// identifier the TOC field's `\c` switch regenerates (`"Figure"`,
+        /// `"Table"`). `None` for heading TOCs and mixed-kind figure TOCs.
+        figure_caption_id: Option<String>,
     },
     Bibliography {
         entries: Vec<IrBibEntry>,
@@ -475,14 +482,17 @@ pub enum IrTrackSize {
 }
 
 /// A `grid.hline`/`grid.vline` resolved onto the track grid. `index` is the
-/// boundary after that many tracks (non-gutter space); `start..end` is the
-/// covered perpendicular range.
+/// boundary after that many tracks (non-gutter space) — a line placed
+/// `after` track `k` on a guttered grid is normalized to boundary `k + 1`,
+/// the same DOCX edge; `start..end` is the covered perpendicular range.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrGridLine {
     pub index: usize,
     pub start: usize,
     pub end: usize,
-    pub border: IrBorder,
+    /// `None` is a `stroke: none` line: it removes every stroke on the
+    /// covered boundary segments, including cell edges declared there.
+    pub border: Option<IrBorder>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

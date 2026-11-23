@@ -1095,3 +1095,133 @@ fn toc_field_cache_lists_heading_entries_with_page_refs() {
         );
     }
 }
+
+#[test]
+fn toc_entries_link_to_bookmarks_written_before_outline() {
+    // Headings that precede `#outline()` must still get the bookmark each
+    // cached TOC entry links to — bookmarks are pre-allocated by heading
+    // position, not minted while the outline collects.
+    let doc_xml = fixture_doc_xml("toc_headings_before_outline");
+    let bookmark = |name: &str| doc_xml.contains(&format!("w:name=\"{name}\""));
+    for page_ref in doc_xml
+        .split("PAGEREF ")
+        .skip(1)
+        .map(|rest| rest.split(' ').next().unwrap())
+    {
+        assert!(
+            bookmark(page_ref),
+            "PAGEREF {page_ref} must resolve to a bookmark: {doc_xml}"
+        );
+    }
+}
+
+#[test]
+fn toc_level_filter_emits_its_entries() {
+    let outcome = fixture_outcome("toc_level_filter");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "outline-target"),
+        "the selector restriction must stay a named degradation: {:?}",
+        outcome.degradations
+    );
+    let doc_xml = fixture_doc_xml("toc_level_filter");
+    let toc_start = doc_xml.find("Top Level").expect("outline title");
+    let body_start = doc_xml[toc_start..]
+        .find("w:pStyle w:val=\"Heading1\"")
+        .map(|i| toc_start + i)
+        .expect("first heading after the outline");
+    let toc = &doc_xml[toc_start..body_start];
+    assert!(toc.contains("Alpha") && toc.contains("Gamma"));
+    assert!(
+        !toc.contains("Beta one"),
+        "level-2 headings stay out of a level-1 target outline: {toc}"
+    );
+    assert_eq!(
+        toc.matches("PAGEREF outline-target-").count(),
+        2,
+        "one cached page ref per level-1 entry: {toc}"
+    );
+}
+
+#[test]
+fn toc_figure_outline_caches_entries() {
+    let doc_xml = fixture_doc_xml("toc_figure_entries");
+    assert!(
+        doc_xml.contains("TOC \\h \\z \\c"),
+        "figure outlines use the \\c switch: {doc_xml}"
+    );
+    assert!(doc_xml.contains("First shape") && doc_xml.contains("Second shape"));
+    assert_eq!(
+        doc_xml.matches("PAGEREF outline-target-").count(),
+        2,
+        "one cached page ref per figure entry: {doc_xml}"
+    );
+}
+
+#[test]
+fn toc_default_depth_covers_every_level() {
+    let doc_xml = fixture_doc_xml("toc_depth");
+    assert!(
+        doc_xml.contains("&quot;1-255&quot;"),
+        "the default depth reaches every level: {doc_xml}"
+    );
+    assert_eq!(
+        doc_xml.matches("PAGEREF outline-target-").count(),
+        4,
+        "a level-4 heading must not be truncated out of the entries: {doc_xml}"
+    );
+}
+
+#[test]
+fn toc_cached_page_numbers_follow_page_numbering() {
+    let doc_xml = fixture_doc_xml("toc_roman_pages");
+    let toc_start = doc_xml.find("Contents").expect("outline title");
+    let body_start = doc_xml[toc_start..]
+        .find("w:pStyle w:val=\"Heading1\"")
+        .map(|i| toc_start + i)
+        .expect("first heading after the outline");
+    let toc = &doc_xml[toc_start..body_start];
+    for roman in [">I<", ">II<"] {
+        assert!(
+            toc.contains(roman),
+            "cached page number {roman} must keep the page's numbering format: {toc}"
+        );
+    }
+    assert!(
+        !toc.contains(">1<") && !toc.contains(">2<"),
+        "arabic digits must not replace the roman numbering: {toc}"
+    );
+}
+
+#[test]
+fn toc_entries_indent_by_level() {
+    let doc_xml = fixture_doc_xml("toc_level_indent");
+    let toc_start = doc_xml.find("Contents").expect("outline title");
+    let body_start = doc_xml[toc_start..]
+        .find("w:pStyle w:val=\"Heading1\"")
+        .map(|i| toc_start + i)
+        .expect("first heading after the outline");
+    let toc = &doc_xml[toc_start..body_start];
+    let indent_of = |needle: &str| {
+        let pos = toc.find(needle).expect("entry text");
+        let open = toc[..pos]
+            .rfind("<w:p>")
+            .or_else(|| toc[..pos].rfind("<w:p "))
+            .unwrap();
+        let para = &toc[open..pos];
+        para.split("<w:ind ")
+            .nth(1)
+            .and_then(|rest| rest.split("w:left=\"").nth(1))
+            .and_then(|rest| rest.split('"').next())
+            .map(str::to_string)
+    };
+    let level2 = indent_of("Beta inner").expect("level-2 entry carries w:ind");
+    assert_ne!(level2, "0", "level-2 entries indent under level 1: {toc}");
+    assert_eq!(
+        indent_of("Gamma"),
+        None,
+        "level-1 entries need no indent: {toc}"
+    );
+}

@@ -247,7 +247,7 @@ pub(super) fn handle_outline(
     }
     if !custom_target {
         let mut para = Paragraph::new();
-        para.add_toc(depth);
+        para.add_toc(depth, None);
         ctx.doc.add_paragraph(para);
     }
     find_tag_end(children, i, location)

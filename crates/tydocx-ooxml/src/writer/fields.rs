@@ -235,8 +235,21 @@ pub(super) fn write_field<W: Write>(
     write_fld_char(writer, "end")
 }
 
-pub(super) fn write_toc_field<W: Write>(writer: &mut Writer<W>, max_depth: u8) -> io::Result<()> {
-    let instr = format!(r#" TOC \o "1-{max_depth}" \h \z \u "#);
+/// The `TOC` instruction: `\o "1-N"` lists headings by outline level; a table
+/// of figures uses `\c "Id"` to list captions of one `SEQ` identifier instead.
+fn toc_instruction(max_depth: u8, caption_id: Option<&str>) -> String {
+    caption_id.map_or_else(
+        || format!(r#" TOC \o "1-{max_depth}" \h \z \u "#),
+        |id| format!(r#" TOC \h \z \c "{id}" "#),
+    )
+}
+
+pub(super) fn write_toc_field<W: Write>(
+    writer: &mut Writer<W>,
+    max_depth: u8,
+    caption_id: Option<&str>,
+) -> io::Result<()> {
+    let instr = toc_instruction(max_depth, caption_id);
     write_complex_field(
         writer,
         &instr,
@@ -251,12 +264,13 @@ pub(super) fn write_toc_field<W: Write>(writer: &mut Writer<W>, max_depth: u8) -
 pub(super) fn write_toc_block<W: Write>(
     writer: &mut Writer<W>,
     max_depth: u8,
+    caption_id: Option<&str>,
     paragraphs: &[crate::document::Paragraph],
     ctx: &WriteCtx,
 ) -> io::Result<()> {
-    let instr = format!(r#" TOC \o "1-{max_depth}" \h \z \u "#);
+    let instr = toc_instruction(max_depth, caption_id);
     if paragraphs.is_empty() {
-        return write_toc_field(writer, max_depth);
+        return write_toc_field(writer, max_depth, caption_id);
     }
     writer.create_element("w:p").write_inner_content(|pw| {
         write_fld_char(pw, "begin")?;

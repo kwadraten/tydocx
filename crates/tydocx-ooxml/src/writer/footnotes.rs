@@ -4,12 +4,12 @@ use quick_xml::Writer;
 
 use super::WriteCtx;
 use super::fields::{write_bookmark_end, write_bookmark_start};
-use super::image::write_image_inline;
+use super::header_footer::PartCtx;
 use super::package::write_value_element;
 use super::run::{write_inline, write_text_run};
 use crate::document::{
-    AnchoredContent, BlockElement, CellContent, Document, Footnote, FootnoteEntryStyle,
-    FootnoteFormat, InlineElement, Paragraph, Table,
+    Alignment, AnchoredContent, BlockElement, CellContent, Document, Footnote, FootnoteEntryStyle,
+    FootnoteFormat, ImageData, InlineElement, Paragraph, Table,
 };
 
 /// Write `w:footnotePr` element with optional circled-number format and
@@ -74,15 +74,17 @@ pub(super) fn write_footnote_ref<W: Write>(writer: &mut Writer<W>, id: u32) -> i
 
 /// Write `word/footnotes.xml`.
 ///
-/// `footnote_image_base` is the number of body images: footnote images are
-/// numbered after them in the document-wide media numbering, while their
-/// relationships live in `word/_rels/footnotes.xml.rels` (written by
-/// [`generate_part_image_rels`]) with ids restarting at `rId1`.
+/// `footnote_images` is the document-ordered list of every image inside a
+/// footnote (top-level or nested in a link/float) — the same list
+/// [`generate_part_image_rels`] enumerates for `word/_rels/footnotes.xml.rels`.
+/// The part writes through a part-local [`PartCtx`] so every image reference,
+/// wherever it nests, gets a footnote-local `rId`; the media files keep the
+/// document-wide image numbering.
 pub(super) fn generate_footnotes_xml(
     writer: &mut Writer<&mut Vec<u8>>,
     doc: &Document,
     ctx: &WriteCtx,
-    footnote_image_base: usize,
+    footnote_images: &[&ImageData],
     has_drawings: bool,
     has_math: bool,
 ) -> io::Result<()> {
@@ -127,21 +129,13 @@ pub(super) fn generate_footnotes_xml(
             &FootnoteEntryStyle::default(),
         )?;
 
-        // Actual footnotes. The image ordinal counts across all footnotes:
-        // `generate_part_image_rels` enumerates footnote images globally
-        // (rId{k+1}), so the ordinal must not reset per footnote or a later
-        // footnote's drawing would embed the first image again.
-        let mut image_ordinal = 0_usize;
-        let mut rel_ordinal = 0_usize;
+        // Actual footnotes. The part-local context enumerates footnote images
+        // globally across footnotes (rId{k+1}), so a later footnote's drawing
+        // cannot embed the first image again.
+        let part = PartCtx::new(footnote_images.to_vec());
+        let part_ctx = part.ctx(ctx);
         for footnote in &doc.footnotes {
-            write_footnote_entry(
-                w,
-                footnote,
-                ctx,
-                footnote_image_base,
-                &mut image_ordinal,
-                &mut rel_ordinal,
-            )?;
+            write_footnote_entry(w, footnote, &part_ctx)?;
         }
         Ok(())
     })?;
@@ -150,17 +144,13 @@ pub(super) fn generate_footnotes_xml(
 
 /// One `w:footnote` element: the style properties, the Word-generated mark
 /// (wrapped in the NOTEREF bookmark when the footnote was labelled), and the
-/// content inlines. Images are intercepted here: their relationship lives
-/// in `word/_rels/footnotes.xml.rels`, not in `document.xml.rels`, so the
-/// relationship id restarts at `rId1` for this part while the media file
-/// number continues the document-wide image numbering.
+/// content inlines written through the footnote part-local context — image
+/// relationships resolve against `word/_rels/footnotes.xml.rels`, not
+/// `document.xml.rels`, including images nested inside links.
 fn write_footnote_entry(
     w: &mut Writer<&mut Vec<u8>>,
     footnote: &Footnote,
     ctx: &WriteCtx,
-    footnote_image_base: usize,
-    image_ordinal: &mut usize,
-    rel_ordinal: &mut usize,
 ) -> io::Result<()> {
     let id_str = footnote.id.to_string();
     w.create_element("w:footnote")
@@ -187,9 +177,14 @@ fn write_footnote_entry(
                                 .with_attribute(("w:firstLine", indent.as_str()))
                                 .write_empty()?;
                         }
-                        if let Some(justify) = entry.justify {
+                        let jc = para
+                            .alignment
+                            .map(Alignment::ooxml_value)
+                            .or_else(|| para.justify.map(|j| if j { "both" } else { "left" }))
+                            .or_else(|| entry.justify.map(|j| if j { "both" } else { "left" }));
+                        if let Some(jc) = jc {
                             ppr.create_element("w:jc")
-                                .with_attribute(("w:val", if justify { "both" } else { "left" }))
+                                .with_attribute(("w:val", jc))
                                 .write_empty()?;
                         }
                         Ok(())
@@ -210,19 +205,7 @@ fn write_footnote_entry(
                         first_para = false;
                     }
                     for inline in &para.inlines {
-                        if let InlineElement::Image(img) = inline {
-                            *image_ordinal += 1;
-                            *rel_ordinal += 1;
-                            let n = footnote_image_base + *image_ordinal;
-                            let rid = format!("rId{rel_ordinal}");
-                            let svg_rid = img.svg.as_ref().map(|_| {
-                                *rel_ordinal += 1;
-                                format!("rId{rel_ordinal}")
-                            });
-                            write_image_inline(p_w, img, n, &rid, svg_rid.as_deref())?;
-                        } else {
-                            write_inline(p_w, inline, ctx)?;
-                        }
+                        write_inline(p_w, inline, ctx)?;
                     }
                     Ok(())
                 })?;

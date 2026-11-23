@@ -338,9 +338,34 @@ pub(super) fn generate_custom_xml_item_props(
             .collect::<Vec<_>>()
             .join(","),
     );
+    write_datastore_item(
+        writer,
+        &guid,
+        "http://schemas.openxmlformats.org/officeDocument/2006/bibliography",
+    )
+}
+
+/// Generate `customXml/itemProps2.xml` for the embedded bibliography style
+/// sheet (`customXml/item2.xml`) — declared against the XSLT schema so Word
+/// treats it as an opaque custom-XML payload.
+pub(super) fn generate_xsl_item_props(writer: &mut Writer<&mut Vec<u8>>) -> io::Result<()> {
+    write_datastore_item(
+        writer,
+        "{00000000-0000-0000-0000-0000000000A5}",
+        XSLT_SCHEMA_URI,
+    )
+}
+
+const XSLT_SCHEMA_URI: &str = "http://www.w3.org/1999/XSL/Transform";
+
+fn write_datastore_item(
+    writer: &mut Writer<&mut Vec<u8>>,
+    item_id: &str,
+    schema_uri: &str,
+) -> io::Result<()> {
     writer
         .create_element("ds:datastoreItem")
-        .with_attribute(("ds:itemID", guid.as_str()))
+        .with_attribute(("ds:itemID", item_id))
         .with_attribute((
             "xmlns:ds",
             "http://schemas.openxmlformats.org/officeDocument/2006/customXml",
@@ -349,10 +374,7 @@ pub(super) fn generate_custom_xml_item_props(
             w.create_element("ds:schemaRefs")
                 .write_inner_content(|sr| {
                     sr.create_element("ds:schemaRef")
-                        .with_attribute((
-                            "ds:uri",
-                            "http://schemas.openxmlformats.org/officeDocument/2006/bibliography",
-                        ))
+                        .with_attribute(("ds:uri", schema_uri))
                         .write_empty()?;
                     Ok(())
                 })?;
@@ -363,6 +385,16 @@ pub(super) fn generate_custom_xml_item_props(
 
 /// Generate the `customXml/_rels/item1.xml.rels` relationship file.
 pub(super) fn generate_custom_xml_rels(writer: &mut Writer<&mut Vec<u8>>) -> io::Result<()> {
+    generate_item_rels(writer, "itemProps1.xml")
+}
+
+/// Generate the `customXml/_rels/item2.xml.rels` relationship file for the
+/// embedded bibliography style sheet.
+pub(super) fn generate_item2_rels(writer: &mut Writer<&mut Vec<u8>>) -> io::Result<()> {
+    generate_item_rels(writer, "itemProps2.xml")
+}
+
+fn generate_item_rels(writer: &mut Writer<&mut Vec<u8>>, props_target: &str) -> io::Result<()> {
     writer
         .create_element("Relationships")
         .with_attribute((
@@ -376,7 +408,7 @@ pub(super) fn generate_custom_xml_rels(writer: &mut Writer<&mut Vec<u8>>) -> io:
                     "Type",
                     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps",
                 ))
-                .with_attribute(("Target", "itemProps1.xml"))
+                .with_attribute(("Target", props_target))
                 .write_empty()?;
             Ok(())
         })?;

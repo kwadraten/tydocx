@@ -359,10 +359,14 @@ pub enum InlineElement {
     AnchoredFloat(AnchoredFloat),
     /// A column break (`w:br type="column"`) — `#colbreak()` in a multi-column page.
     ColumnBreak,
-    /// A Table of Contents field code (`TOC \o "1-N" \h \z \u`).
+    /// A Table of Contents field code (`TOC \o "1-N" \h \z \u` for headings,
+    /// `TOC \h \z \c "Id"` for a table of figures).
     FieldToc {
         /// Maximum outline depth (e.g. 3 → headings 1–3).
         max_depth: u8,
+        /// `SEQ` identifier for a table of figures (`"Figure"`, `"Table"`);
+        /// `None` emits the heading-oriented `\o` switches.
+        caption_id: Option<String>,
     },
     /// A tab character (`w:r` containing `w:tab`).
     Tab,
@@ -931,8 +935,11 @@ impl Paragraph {
     }
 
     /// Add a Table of Contents field code.
-    pub fn add_toc(&mut self, max_depth: u8) {
-        self.inlines.push(InlineElement::FieldToc { max_depth });
+    pub fn add_toc(&mut self, max_depth: u8, caption_id: Option<String>) {
+        self.inlines.push(InlineElement::FieldToc {
+            max_depth,
+            caption_id,
+        });
     }
 
     /// Add a page break.
@@ -1156,6 +1163,9 @@ pub enum BlockElement {
     /// paragraphs, exactly as Word writes it.
     TocBlock {
         max_depth: u8,
+        /// `SEQ` identifier for a table of figures; `None` emits the
+        /// heading-oriented `\o` switches.
+        caption_id: Option<String>,
         paragraphs: Vec<Paragraph>,
     },
 }
@@ -1707,6 +1717,13 @@ pub struct Document {
     /// Word bibliography style selection for Sources.xml: `(SelectedStyle,
     /// StyleName)` — `None` writes the default APA selection.
     pub bibliography_style: Option<(String, String)>,
+    /// The raw XSL bytes behind a `--bibliography-style` selection, packaged
+    /// as `customXml/item2.xml` so the style sheet travels with the document.
+    /// Word itself resolves `SelectedStyle` only from installed style
+    /// directories — the embedded copy does not make the style apply; it is
+    /// there so the file (and tools that can extract it) carry everything
+    /// needed to install the style beside the reader.
+    pub bibliography_style_xsl: Option<Vec<u8>>,
     /// Emit `<w:updateFields w:val="true"/>` in settings.xml (C3: Word
     /// refreshes every field on open).
     pub update_fields: bool,
@@ -1737,6 +1754,7 @@ impl Default for Document {
             heading_num_instances: Vec::new(),
             citation_sources: Vec::new(),
             bibliography_style: None,
+            bibliography_style_xsl: None,
             update_fields: false,
         }
     }

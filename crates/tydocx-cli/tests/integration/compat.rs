@@ -422,8 +422,6 @@ fn c1_misc_gates() {
     let constructs = c1_constructs("issue_c1_misc");
     for construct in [
         "figure-placement",
-        "outline-target",
-        "outline-indent",
         "list-marker",
         "enum-reversed",
         "image-fit",
@@ -431,24 +429,19 @@ fn c1_misc_gates() {
     ] {
         assert_has(&constructs, construct);
     }
-    // The indent-only outline must NOT also report an outline-target:
-    // the default target (headings) is not a custom target.
-    assert_eq!(
-        constructs
-            .iter()
-            .filter(|c| c.as_str() == "outline-target")
-            .count(),
-        1,
-        "only the target: figure outline should report outline-target: {constructs:?}"
+    // The figure-targeted outline resolves its entries and emits a `\c`
+    // field, so no outline degradation survives in any mode — and the
+    // `indent: 2em` outline is an explicit relative indent, which is
+    // honoured exactly.
+    assert!(
+        !constructs.iter().any(|c| c.starts_with("outline-")),
+        "resolved outlines report nothing: {constructs:?}"
     );
-    // The figure-targeted outline's entries cannot be cached (headings only),
-    // so C2/C3 honestly report that one remainder instead of silently dropping
-    // it — the old C2-clean premise died with the silent drop.
     for mode in [CompatMode::C2, CompatMode::C3] {
         assert_eq!(
             constructs_for("issue_c1_misc", mode),
-            vec!["outline-target-kind".to_string()],
-            "C2/C3 should report only the figure-outline remainder"
+            Vec::<String>::new(),
+            "C2/C3 should report no outline remainder"
         );
     }
 }

@@ -1,9 +1,10 @@
 //! Bibliography and citation tests.
 
 use crate::common::{
-    fixture_doc_xml, fixture_doc_xml_legacy, fixture_document, fixture_package, fixture_styles_xml,
-    paragraph_containing,
+    fixture_doc_xml, fixture_doc_xml_legacy, fixture_document, fixture_outcome_with_options,
+    fixture_package, fixture_package_with_options, fixture_styles_xml, paragraph_containing,
 };
+use std::path::PathBuf;
 
 #[test]
 fn bibliography_citations_are_markers_not_field_refs() {
@@ -333,4 +334,63 @@ fn citations_link_to_bibliography_entry_bookmarks() {
             "citation anchor {a:?} has no matching entry bookmark"
         );
     }
+}
+
+#[test]
+fn bibliography_style_xsl_travels_in_the_package() {
+    // `--bibliography-style` must carry the XSL bytes into the DOCX: the
+    // selection points Word at the named style while the embedded copy lets
+    // tools extract and install it. The cached field result keeps the CSL
+    // render — that remainder is a named degradation, never silent APA.
+    let style = PathBuf::from("../../tests/fixtures/test_style.xsl");
+    let mut options = tydocx_core::ConvertOptions::default();
+    options.bibliography_style = Some(style.to_string_lossy().into_owned());
+    let outcome = fixture_outcome_with_options("bibliography_basic", &options);
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "bibliography-style"),
+        "the unrendered cache must stay a named degradation: {:?}",
+        outcome.degradations
+    );
+    let package = fixture_package_with_options("bibliography_basic", &options);
+    let expected = std::fs::read_to_string(&style).unwrap();
+    assert_eq!(
+        package.part_text("customXml/item2.xml"),
+        expected,
+        "the XSL bytes must ship verbatim as a custom-XML item"
+    );
+    assert!(
+        package
+            .part_text("customXml/itemProps2.xml")
+            .contains("XSL/Transform"),
+        "itemProps2 declares the XSLT schema"
+    );
+    let sources = package.part_text("customXml/item1.xml");
+    assert!(
+        sources.contains("SelectedStyle=\"\\test_style.xsl\"")
+            && sources.contains("StyleName=\"Test Style\""),
+        "Sources.xml must select the requested style: {sources}"
+    );
+}
+
+#[test]
+fn bibliography_style_without_sources_reports_a_skip() {
+    // A requested style on a document with no bibliography cannot ride
+    // along — the drop is named rather than silent, as a *skip* of the
+    // selection (not the cache-approximation a sourced document reports).
+    let mut options = tydocx_core::ConvertOptions::default();
+    options.bibliography_style = Some("../../tests/fixtures/test_style.xsl".to_string());
+    let outcome = fixture_outcome_with_options("toc_test", &options);
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "bibliography-style"
+                && matches!(d.action, tydocx_core::DegradationAction::Skipped)
+                && d.message.contains("no bibliography sources")),
+        "the dropped selection must be reported as a skip naming the missing sources: {:?}",
+        outcome.degradations
+    );
 }

@@ -8,9 +8,10 @@ mod style;
 
 use std::collections::HashMap;
 
+use codex::numeral_systems::NamedNumeralSystem;
 use tydocx_ir::{
     CompatMode as IrCompatMode, Degradation as IrDegradation, DegradationAction as IrAction,
-    GeometryInput, IrBlock, IrDocument, IrInline, IrParagraph, lower,
+    GeometryInput, IrBlock, IrDocument, IrInline, IrNumeralSystem, IrParagraph, lower,
 };
 use tydocx_ooxml::document::{Document, FootnoteFormat};
 use typst::World;
@@ -531,7 +532,7 @@ pub fn export_ir_with_ir(
     };
 
     if let Some(paged) = paged_doc {
-        patch_outline_page_numbers(&mut ir, paged);
+        patch_outline_page_numbers(&mut ir, paged, &mut degradations);
         let style = ir.style.clone();
         let patch_degradations = patch_document(
             &mut ir,
@@ -650,27 +651,79 @@ fn ir_plain_text(inlines: &[IrInline]) -> String {
     text
 }
 
+/// Render `n` in a `#set page(numbering:)` pattern — `prefix + numeral` per
+/// piece plus the trailing `suffix`. Function numberings and numeral systems
+/// the IR cannot render return `None`.
+fn render_page_number(numbering: &Numbering, n: usize) -> Option<String> {
+    let Numbering::Pattern(pattern) = numbering else {
+        return None;
+    };
+    let mut out = String::new();
+    for (prefix, system) in &pattern.pieces {
+        let system = match system {
+            NamedNumeralSystem::Arabic => IrNumeralSystem::Arabic,
+            NamedNumeralSystem::LowerLatin => IrNumeralSystem::LowerLatin,
+            NamedNumeralSystem::UpperLatin => IrNumeralSystem::UpperLatin,
+            NamedNumeralSystem::LowerRoman => IrNumeralSystem::LowerRoman,
+            NamedNumeralSystem::UpperRoman => IrNumeralSystem::UpperRoman,
+            _ => return None,
+        };
+        out.push_str(prefix);
+        out.push_str(&system.render(n as u64));
+    }
+    out.push_str(&pattern.suffix);
+    Some(out)
+}
+
 /// Fill `IrOutlineEntry.page_number` from the companion `PagedDocument` — the
-/// only representation that knows rendered page positions. Locations are
-/// content hashes stable across the two compiles.
-fn patch_outline_page_numbers(ir: &mut IrDocument, paged: &PagedDocument) {
-    fn patch(blocks: &mut [IrBlock], paged: &PagedDocument) {
-        for block in blocks {
-            if let IrBlock::Outline { entries, .. } = block {
-                for entry in entries.iter_mut() {
-                    if entry.page_number.is_none()
-                        && let Some(hash) = entry.page_loc
-                        && let Some(page) = paged
-                            .introspector()
-                            .page(typst_library::introspection::Location::new(hash))
-                    {
-                        entry.page_number = Some(page.get().to_string());
-                    }
-                }
+/// only representation that knows rendered page positions and the page
+/// numbering format applying at each target. Locations are content hashes
+/// stable across the two compiles. A numbering the pattern renderer cannot
+/// express falls back to decimal digits and is reported — the `PAGEREF`
+/// field still re-renders correctly on update.
+fn patch_outline_page_numbers(
+    ir: &mut IrDocument,
+    paged: &PagedDocument,
+    degradations: &mut Vec<Degradation>,
+) {
+    let mut unrenderable = false;
+    for block in &mut ir.body {
+        let IrBlock::Outline { entries, .. } = block else {
+            continue;
+        };
+        for entry in entries.iter_mut() {
+            if entry.page_number.is_none()
+                && let Some(hash) = entry.page_loc
+            {
+                let location = typst_library::introspection::Location::new(hash);
+                let Some(page) = paged.introspector().page(location) else {
+                    continue;
+                };
+                let formatted = paged
+                    .introspector()
+                    .page_numbering(location)
+                    .and_then(|numbering| {
+                        render_page_number(numbering, page.get()).or_else(|| {
+                            unrenderable = true;
+                            None
+                        })
+                    })
+                    .unwrap_or_else(|| page.get().to_string());
+                entry.page_number = Some(formatted);
             }
         }
     }
-    patch(&mut ir.body, paged);
+    if unrenderable {
+        degradations.push(Degradation::new(
+            None,
+            "outline-page-number",
+            DegradationAction::Approximated,
+            "a page numbering format not renderable in isolation (a numbering function or \
+             an unsupported numeral system) fell back to decimal digits in the cached TOC \
+             page numbers; a field update re-renders them"
+                .to_string(),
+        ));
+    }
 }
 
 /// Extract the Word style name from a bibliography XSL: Office styles declare
@@ -696,10 +749,13 @@ fn xsl_style_name(xsl: &str) -> Option<String> {
 }
 
 /// Resolve `--bibliography-style <file.xsl>` into Sources.xml's
-/// `SelectedStyle`/`StyleName`, degrading (never silently) when the file is
-/// unreadable. The cached field result keeps the document's CSL render — the
-/// XSL is a Word-side transform applied on field update — so a successful
-/// selection is reported as an approximation.
+/// `SelectedStyle`/`StyleName` plus an embedded copy of the XSL
+/// (`customXml/item2.xml`). Word resolves `SelectedStyle` only from
+/// installed style directories, so the embedded XSL travels with the
+/// document for tools that can extract and install it — it does not make
+/// Word apply the style. The cached field result keeps the document's CSL
+/// render and is never silently re-rendered under another style: the
+/// selection always reports what the cache does not honour.
 fn apply_bibliography_style_option(
     doc: &mut tydocx_ooxml::document::Document,
     options: &ConvertOptions,
@@ -708,34 +764,52 @@ fn apply_bibliography_style_option(
     let Some(style_path) = &options.bibliography_style else {
         return;
     };
+    if doc.citation_sources.is_empty() {
+        degradations.push(Degradation::new(
+            None,
+            "bibliography-style",
+            DegradationAction::Skipped,
+            format!(
+                "bibliography style {style_path:?} was requested but the document has no \
+                 bibliography sources; no Sources.xml is emitted and the selection is dropped"
+            ),
+        ));
+        return;
+    }
     let file_name = std::path::Path::new(style_path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned());
     let Some((name, xsl)) =
-        file_name.and_then(|name| std::fs::read_to_string(style_path).ok().map(|x| (name, x)))
+        file_name.and_then(|name| std::fs::read(style_path).ok().map(|x| (name, x)))
     else {
         degradations.push(Degradation::new(
             None,
             "bibliography-style",
             DegradationAction::Skipped,
             format!(
-                "bibliography style file {style_path:?} could not be read;                  Sources.xml keeps the default APA selection",
+                "bibliography style file {style_path:?} could not be read; \
+                 Sources.xml keeps the default APA selection"
             ),
         ));
         return;
     };
-    let style_name = xsl_style_name(&xsl).unwrap_or_else(|| {
+    let style_name = xsl_style_name(&String::from_utf8_lossy(&xsl)).unwrap_or_else(|| {
         name.trim_end_matches(".xsl")
             .trim_end_matches(".XSL")
             .to_string()
     });
     doc.bibliography_style = Some((format!("\\{name}"), style_name.clone()));
+    doc.bibliography_style_xsl = Some(xsl);
     degradations.push(Degradation::new(
         None,
         "bibliography-style",
         DegradationAction::Approximated,
         format!(
-            "Sources.xml selects bibliography style '{style_name}' ({name});              the cached field result keeps the document's CSL render and              a field update re-renders entries with the selected style",
+            "Sources.xml selects bibliography style '{style_name}' ({name}); \
+             the XSL is embedded in the package, but the cached field result keeps the \
+             document's CSL render — it is not re-rendered in '{style_name}'. Word \
+             resolves the selection only after the style is installed on the reader's \
+             system, at which point a field update re-renders the entries"
         ),
     ));
 }

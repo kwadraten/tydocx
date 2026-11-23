@@ -630,9 +630,16 @@ fn write_float_textbox<W: Write>(
                                 }
                                 BlockElement::TocBlock {
                                     max_depth,
+                                    caption_id,
                                     paragraphs,
                                 } => {
-                                    write_toc_block(c, *max_depth, paragraphs, ctx)?;
+                                    write_toc_block(
+                                        c,
+                                        *max_depth,
+                                        caption_id.as_deref(),
+                                        paragraphs,
+                                        ctx,
+                                    )?;
                                 }
                             }
                         }
