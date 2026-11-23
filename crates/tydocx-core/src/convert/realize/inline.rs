@@ -12,7 +12,9 @@ use tydocx_ir::{
 use tydocx_ooxml::document::Alignment;
 use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
-use typst_library::foundations::{Content, ContextElem, Packed, SequenceElem, Smart, StyleChain};
+use typst_library::foundations::{
+    Content, ContextElem, Packed, SequenceElem, Smart, StyleChain, StyledElem,
+};
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::{
     Abs, AlignElem, BlockElem, BoxElem, HAlignment, HElem, HideElem, PadElem, Spacing,
@@ -730,6 +732,14 @@ fn handle_tag_start(
         if let FootnoteBody::Content(body) = &fn_elem.body {
             // Split on parbreak children so a multi-paragraph footnote body
             // keeps its paragraphs (each maps to its own `w:p` downstream).
+            // `set`/`align` rules inside the body arrive as `StyledElem` /
+            // `AlignElem` children — their chain decides that segment's
+            // paragraph alignment, not the footnote's ambient chain.
+            let mut alignment = alignment_from_styles(styles);
+            let mut par = IrParStyle {
+                justify: Some(styles.get(ParElem::justify)),
+                ..IrParStyle::default()
+            };
             let mut paragraphs: Vec<IrParagraph> = Vec::new();
             let mut inlines = Vec::new();
             for child in body
@@ -740,6 +750,8 @@ fn handle_tag_start(
                     if !inlines.is_empty() {
                         paragraphs.push(IrParagraph {
                             inlines: std::mem::take(&mut inlines),
+                            alignment,
+                            par,
                             ..IrParagraph::default()
                         });
                     }
@@ -747,11 +759,27 @@ fn handle_tag_start(
                     collect_inlines(&child, styles, engine, locator, &mut body_ctx)
                 {
                     inlines.append(&mut child_inlines);
+                    if let Some(styled) = child.to_packed::<StyledElem>() {
+                        let chain = styles.chain(&styled.styles);
+                        alignment = alignment_from_styles(chain);
+                        par = IrParStyle {
+                            justify: Some(chain.get(ParElem::justify)),
+                            ..IrParStyle::default()
+                        };
+                    } else if let Some(align) = child.to_packed::<AlignElem>() {
+                        alignment = match align.alignment.get(styles).x() {
+                            Some(HAlignment::Center) => Some(Alignment::Center),
+                            Some(HAlignment::Right | HAlignment::End) => Some(Alignment::Right),
+                            Some(HAlignment::Left | HAlignment::Start) | None => None,
+                        };
+                    }
                 }
             }
             if !inlines.is_empty() {
                 paragraphs.push(IrParagraph {
                     inlines,
+                    alignment,
+                    par,
                     ..IrParagraph::default()
                 });
             }

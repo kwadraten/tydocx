@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use codex::numeral_systems::NamedNumeralSystem;
 use tydocx_ir::{
@@ -18,10 +18,10 @@ use typst_library::foundations::{
     Content, ContextElem, Datetime, Element, LocatableSelector, NativeElement, Packed,
     SequenceElem, Smart, StyleChain, StyledElem, Styles, Value,
 };
-use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
+use typst_library::introspection::{Counter, Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::grid::Celled;
 use typst_library::layout::grid::GridCell;
-use typst_library::layout::grid::resolve::{Cell, CellGrid, Entry, Line};
+use typst_library::layout::grid::resolve::{Cell, CellGrid, Entry, Line, LinePosition};
 use typst_library::layout::{
     Abs, AlignElem, Angle, Axes, BlockBody, BlockElem, ColbreakElem, ColumnsElem, GridElem,
     HAlignment, HideElem, Length, Margin, MoveElem, PadElem, PageElem, PagebreakElem, Parity,
@@ -32,8 +32,8 @@ use typst_library::math::EquationElem;
 use typst_library::model::{
     BibliographyElem, CiteGroup, Destination, DirectLinkElem, EnumElem, EnumItem, FigureCaption,
     FigureElem, FigureKind, HeadingElem, LinkElem, LinkTarget, ListElem, ListItem, ListMarker,
-    Numbering, OutlineElem, ParElem, ParbreakElem, QuoteElem, TableCell, TableElem, TermItem,
-    TermsElem, Works,
+    Numbering, OutlineElem, OutlineIndent, ParElem, ParbreakElem, QuoteElem, Supplement, TableCell,
+    TableElem, TermItem, TermsElem, Works,
 };
 use typst_library::routines::Pair;
 use typst_library::text::{RawElem, RawLine, SmartQuoter, SpaceElem, TextElem};
@@ -75,7 +75,10 @@ pub struct Collector<'a> {
     /// `OutlineElem` span → resolved TOC entries, precomputed in `pass_one`
     /// (entry collection registers heading bookmarks, which headings consume
     /// later in document order — the outline itself precedes them).
-    outline_entries: HashMap<Span, Vec<IrOutlineEntry>>,
+    outline_entries: HashMap<Span, OutlineEntries>,
+    /// Next synthesized `outline-target-N` bookmark index — monotonic so
+    /// rebuilds and multiple outlines cannot collide on the same name.
+    next_outline_bookmark: usize,
     bib_entries: Option<Vec<IrBibEntry>>,
     works: Option<std::sync::Arc<Works>>,
     footnote_markers: Vec<FootnoteMarker>,
@@ -170,6 +173,7 @@ pub fn collect_document(
         cite_span_map: HashMap::new(),
         heading_bookmarks: HashMap::new(),
         outline_entries: HashMap::new(),
+        next_outline_bookmark: 0,
         bib_entries: None,
         works: None,
         footnote_markers: Vec::new(),
@@ -288,6 +292,20 @@ struct ListCtx {
     inherited: Option<(IrNumberingPattern, u8)>,
 }
 
+/// The entries `build_outline_entries` resolved for one `#outline`.
+#[derive(Clone)]
+struct OutlineEntries {
+    entries: Vec<IrOutlineEntry>,
+    /// `SEQ` identifier when every entry is a figure/equation caption —
+    /// selects the Word `TOC \c "Id"` field instead of the heading `\o`
+    /// switches.
+    figure_caption_id: Option<String>,
+    /// Any entry carried a numbering prefix — the `auto` outline indent
+    /// then follows each level's prefix width, so the per-level fallback
+    /// is an approximation.
+    numbered: bool,
+}
+
 struct FigureMeta {
     kind: IrFigureKind,
     label: Option<String>,
@@ -321,6 +339,27 @@ impl Collector<'_> {
                 collect_nested_labels(content, &mut self.label_map);
             }
             i += 1;
+        }
+        // TOC entries resolve against the full introspector and register
+        // synthesized bookmarks on their targets — ahead of document order,
+        // so an outline anywhere (including at the end) finds every target
+        // already book-marked when it is collected.
+        for (content, styles) in pairs {
+            let (outline, span) = if let Some(tagged) = content.to_packed::<TagElem>() {
+                match &tagged.tag {
+                    Tag::Start(inner, _) => match inner.to_packed::<OutlineElem>() {
+                        Some(outline) => (outline, inner.span()),
+                        None => continue,
+                    },
+                    Tag::End(..) => continue,
+                }
+            } else if let Some(outline) = content.to_packed::<OutlineElem>() {
+                (outline, content.span())
+            } else {
+                continue;
+            };
+            let resolved = self.build_outline_entries(outline, *styles, engine, locator)?;
+            self.outline_entries.insert(span, resolved);
         }
         if let Some((group, styles, tag_content)) =
             find_tag_group_elem(pairs, BibliographyElem::ELEM)
@@ -1253,16 +1292,17 @@ impl Collector<'_> {
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
         let title = self.outline_title(outline, styles, engine, locator)?;
-        let mut entries = self.outline_entries.get(&span).cloned().unwrap_or_default();
-        if entries.is_empty() {
-            entries = self.build_outline_entries(outline, styles, engine, locator)?;
-        }
+        let resolved = match self.outline_entries.get(&span) {
+            Some(resolved) => resolved.clone(),
+            None => self.build_outline_entries(outline, styles, engine, locator)?,
+        };
         Ok(IrBlock::Outline {
             title,
-            entries,
+            indent_twips_per_level: self.outline_indent_twips(outline, styles, resolved.numbered),
+            entries: resolved.entries,
             depth: outline_depth(outline),
             custom_target: outline_custom_target(outline, styles),
-            custom_indent: outline_custom_indent(outline),
+            figure_caption_id: resolved.figure_caption_id,
         })
     }
 
@@ -1452,7 +1492,10 @@ impl Collector<'_> {
             return Ok(vec![IrBlock::Equation(IrEquation {
                 omml,
                 number,
-                bookmark: child.label().map(|l| l.resolve().to_string()),
+                bookmark: child
+                    .label()
+                    .map(|l| l.resolve().to_string())
+                    .or_else(|| self.heading_bookmarks.get(&child.span()).cloned()),
             })]);
         }
         let mut ctx = self.inline_ctx();
@@ -2126,7 +2169,7 @@ impl Collector<'_> {
         locator: &mut SplitLocator,
     ) -> SourceResult<IrTable> {
         let (mut rows, col_count) = self.cell_grid_rows(grid, false, styles, engine, locator)?;
-        fold_partial_lines_into_cells(&mut rows, grid);
+        fold_lines_into_cells(&mut rows, grid, &mut self.degradations);
         let column_widths_pct = self.table_column_widths(table, col_count, styles);
         Ok(IrTable {
             rows,
@@ -2149,6 +2192,7 @@ impl Collector<'_> {
     ) -> SourceResult<IrGrid> {
         let heights = measure_grid_row_heights(grid, content, styles, engine, locator);
         let (mut rows, col_count) = self.cell_grid_rows(grid, true, styles, engine, locator)?;
+        fold_lines_into_cells(&mut rows, grid, &mut self.degradations);
         if let Some(heights) = heights {
             for (row, twips) in rows.iter_mut().zip(heights.iter()) {
                 row.height_twips = *twips;
@@ -2167,13 +2211,13 @@ impl Collector<'_> {
                 .hlines
                 .iter()
                 .flatten()
-                .filter_map(|line| ir_grid_line(line, n_col_tracks))
+                .map(|line| ir_grid_line(line, n_col_tracks))
                 .collect(),
             vlines: grid
                 .vlines
                 .iter()
                 .flatten()
-                .filter_map(|line| ir_grid_line(line, n_row_tracks))
+                .map(|line| ir_grid_line(line, n_row_tracks))
                 .collect(),
         })
     }
@@ -2470,7 +2514,10 @@ impl Collector<'_> {
         vec![IrBlock::Equation(IrEquation {
             omml,
             number,
-            bookmark: inner.label().map(|l| l.resolve().to_string()),
+            bookmark: inner
+                .label()
+                .map(|l| l.resolve().to_string())
+                .or_else(|| self.heading_bookmarks.get(&inner.span()).cloned()),
         })]
     }
 
@@ -2595,16 +2642,17 @@ impl Collector<'_> {
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
         let title = self.outline_title(outline, styles, engine, locator)?;
-        let mut entries = self.outline_entries.get(&span).cloned().unwrap_or_default();
-        if entries.is_empty() {
-            entries = self.build_outline_entries(outline, styles, engine, locator)?;
-        }
+        let resolved = match self.outline_entries.get(&span) {
+            Some(resolved) => resolved.clone(),
+            None => self.build_outline_entries(outline, styles, engine, locator)?,
+        };
         Ok(IrBlock::Outline {
             title,
-            entries,
+            indent_twips_per_level: self.outline_indent_twips(outline, styles, resolved.numbered),
+            entries: resolved.entries,
             depth: outline_depth(outline),
             custom_target: outline_custom_target(outline, styles),
-            custom_indent: outline_custom_indent(outline),
+            figure_caption_id: resolved.figure_caption_id,
         })
     }
 
@@ -2612,20 +2660,25 @@ impl Collector<'_> {
     /// only carry the outline's title — the `OutlineEntry` list is assembled
     /// by a layout-time show rule. Heading targets yield hyperlinked TOC
     /// entries (`target` + `page_loc` for the paged page-number patch);
-    /// non-heading kinds report a named degradation. `pass_one` runs this
-    /// ahead of document collection so the synthesized heading bookmarks are
-    /// registered before the headings themselves are collected.
+    /// figure/equation targets yield caption entries; other kinds report a
+    /// named degradation. `pass_one` runs this ahead of document collection
+    /// so the synthesized bookmarks register before the targets themselves
+    /// are collected.
     fn build_outline_entries(
         &mut self,
         outline: &OutlineElem,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
-    ) -> SourceResult<Vec<IrOutlineEntry>> {
+    ) -> SourceResult<OutlineEntries> {
         let depth = outline_depth(outline);
         let span = Span::detached();
         let mut entries = Vec::new();
         let mut non_heading_kinds: Vec<String> = Vec::new();
+        let mut any_heading = false;
+        let mut numbered = false;
+        let mut caption_id: Option<&'static str> = None;
+        let mut caption_kinds_mixed = false;
         let queried: Vec<Content> = engine
             .introspect(typst_library::introspection::QueryIntrospection(
                 outline.target.get_ref(styles).0.clone(),
@@ -2634,65 +2687,344 @@ impl Collector<'_> {
             .into_iter()
             .collect();
         for content in &queried {
-            let Some(heading) = content.to_packed::<HeadingElem>() else {
+            if let Some(heading) = content.to_packed::<HeadingElem>() {
+                if !heading.outlined.get(styles) {
+                    continue;
+                }
+                let level = heading.resolve_level(styles).get().min(255);
+                let Ok(level) = u8::try_from(level) else {
+                    continue;
+                };
+                if level > depth {
+                    continue;
+                }
+                let mut entry_title = Vec::new();
+                if let Some(numbers) = heading_numbers(heading) {
+                    numbered = true;
+                    let mut run = tydocx_ooxml::document::Run::new(format!("{numbers} "));
+                    run.bold = true;
+                    entry_title.push(IrInline::Text(run));
+                }
+                let mut ctx = self.inline_ctx();
+                entry_title.extend(collect_inlines(
+                    &heading.body,
+                    styles,
+                    engine,
+                    locator,
+                    &mut ctx,
+                )?);
+                any_heading = true;
+                entries.push(IrOutlineEntry {
+                    level,
+                    title: entry_title,
+                    target: Some(self.outline_target_bookmark(content)),
+                    page_number: None,
+                    page_loc: content.location().map(typst::introspection::Location::hash),
+                });
+            } else if let Some(figure) = content.to_packed::<FigureElem>() {
+                let Some(id) = self.figure_outline_entry(
+                    figure,
+                    content,
+                    &mut entries,
+                    styles,
+                    engine,
+                    locator,
+                )?
+                else {
+                    continue;
+                };
+                track_caption_id(&mut caption_id, &mut caption_kinds_mixed, id);
+            } else if let Some(equation) = content.to_packed::<EquationElem>() {
+                if !self.equation_outline_entry(equation, content, &mut entries, styles, engine) {
+                    continue;
+                }
+                track_caption_id(&mut caption_id, &mut caption_kinds_mixed, "Equation");
+            } else {
                 let name = content.func().name();
                 if !non_heading_kinds.iter().any(|k| k == name) {
                     non_heading_kinds.push(name.to_string());
                 }
-                continue;
-            };
-            if !heading.outlined.get(styles) {
-                continue;
             }
-            let level = heading.resolve_level(styles).get().min(255);
-            let Ok(level) = u8::try_from(level) else {
-                continue;
-            };
-            if level > depth {
-                continue;
-            }
-            let mut entry_title = Vec::new();
-            if let Some(numbers) = heading_numbers(heading) {
-                let mut run = tydocx_ooxml::document::Run::new(format!("{numbers} "));
-                run.bold = true;
-                entry_title.push(IrInline::Text(run));
-            }
-            let mut ctx = self.inline_ctx();
-            entry_title.extend(collect_inlines(
-                &heading.body,
-                styles,
-                engine,
-                locator,
-                &mut ctx,
-            )?);
-            let target = content
-                .label()
-                .map(|label| label.resolve().to_string())
-                .or_else(|| {
-                    let name = format!("outline-target-{}", entries.len());
-                    self.heading_bookmarks.insert(content.span(), name.clone());
-                    Some(name)
-                });
-            entries.push(IrOutlineEntry {
-                level,
-                title: entry_title,
-                target,
-                page_number: None,
-                page_loc: content.location().map(typst::introspection::Location::hash),
-            });
         }
+        let figure_caption_id = self.finish_outline_entries(
+            outline,
+            styles,
+            &non_heading_kinds,
+            any_heading,
+            caption_id,
+            caption_kinds_mixed,
+        );
+        Ok(OutlineEntries {
+            entries,
+            figure_caption_id,
+            numbered,
+        })
+    }
+
+    /// The degradations a resolved entry list still owes: unmatched target
+    /// kinds, mixed caption kinds a single `\c` switch cannot name, a
+    /// heading/figure mix a field update cannot regenerate, and a custom
+    /// selector that widens on update. Returns the `SEQ` identifier for the
+    /// `\c` switch when the outline lists exactly one caption kind.
+    fn finish_outline_entries(
+        &mut self,
+        outline: &OutlineElem,
+        styles: StyleChain<'_>,
+        non_heading_kinds: &[String],
+        any_heading: bool,
+        caption_id: Option<&'static str>,
+        caption_kinds_mixed: bool,
+    ) -> Option<String> {
         for kind in non_heading_kinds {
             self.degradations.push(Degradation {
                 span: None,
                 construct: "outline-target-kind",
                 action: DegradationAction::Skipped,
                 message: format!(
-                    "outline target matched `{kind}` elements; only heading entries can be \
+                    "outline target matched `{kind}` elements; these cannot be \
                      listed in the TOC field cache, so those entries are dropped"
                 ),
             });
         }
-        Ok(entries)
+        if caption_kinds_mixed {
+            self.degradations.push(Degradation {
+                span: None,
+                construct: "outline-target-kinds",
+                action: DegradationAction::Approximated,
+                message: "the outline lists more than one caption kind; the Word TOC field's \
+                          \\c switch names only one, so a field update regenerates fewer entries"
+                    .to_string(),
+            });
+        }
+        let figure_caption_id = if any_heading || caption_id.is_none() {
+            if any_heading && caption_id.is_some() {
+                self.degradations.push(Degradation {
+                    span: None,
+                    construct: "outline-target",
+                    action: DegradationAction::Approximated,
+                    message: "the outline mixes headings with figure/equation captions; a Word \
+                              field update regenerates only the heading entries"
+                        .to_string(),
+                });
+            }
+            None
+        } else {
+            caption_id.map(str::to_string)
+        };
+        if any_heading && outline_custom_target(outline, styles) && caption_id.is_none() {
+            self.degradations.push(Degradation {
+                span: None,
+                construct: "outline-target",
+                action: DegradationAction::Approximated,
+                message: "the outline's selector restricts the listed entries; a Word field \
+                          update regenerates all headings to the outline depth"
+                    .to_string(),
+            });
+        }
+        figure_caption_id
+    }
+
+    /// The bookmark an outline entry hyperlinks to: the element's own label,
+    /// or a synthesized `outline-target-N` registered so the element emits it
+    /// when collected later in document order.
+    fn outline_target_bookmark(&mut self, content: &Content) -> String {
+        if let Some(label) = content.label() {
+            return label.resolve().to_string();
+        }
+        if let Some(name) = self.heading_bookmarks.get(&content.span()) {
+            return name.clone();
+        }
+        let name = format!("outline-target-{}", self.next_outline_bookmark);
+        self.next_outline_bookmark += 1;
+        self.heading_bookmarks.insert(content.span(), name.clone());
+        name
+    }
+
+    /// One figure's outline entry, matching Typst's `Outlinable` for figures:
+    /// outlined when `outlined` holds and the figure has a caption or a
+    /// numbering; the prefix is `supplement + NBSP + numbers` and the body is
+    /// the caption body. Returns the `SEQ` identifier for the TOC `\c` switch.
+    fn figure_outline_entry(
+        &mut self,
+        figure: &Packed<FigureElem>,
+        content: &Content,
+        entries: &mut Vec<IrOutlineEntry>,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Option<&'static str>> {
+        let caption = figure.caption.get_ref(styles);
+        if !figure.outlined.get(styles)
+            || (caption.is_none() && figure.numbering.get_ref(styles).is_none())
+        {
+            return Ok(None);
+        }
+        let id = seq_identifier(figure_kind(figure, styles));
+        let mut number_text = String::new();
+        if let Some(caption) = caption.as_ref()
+            && let (Some(numbering), Some(counter), Some(loc)) = (
+                caption.numbering.as_ref().and_then(Option::as_ref),
+                caption.counter.as_ref().and_then(Option::as_ref),
+                caption.figure_location.as_ref().and_then(Option::as_ref),
+            )
+            && let Ok(rendered) =
+                counter.display_at(engine, *loc, styles, numbering, caption.span())
+        {
+            number_text = plain_text(&rendered);
+        }
+        if number_text.is_empty()
+            && let Some(numbering) = figure.numbering.get_ref(styles).as_ref()
+            && let Some(loc) = content.location()
+        {
+            let counter = figure
+                .counter
+                .clone()
+                .flatten()
+                .unwrap_or_else(|| Counter::of(FigureElem::ELEM));
+            if let Ok(rendered) = counter.display_at(engine, loc, styles, numbering, content.span())
+            {
+                number_text = plain_text(&rendered);
+            }
+        }
+        let supplement = match figure.supplement.get_cloned(styles) {
+            Smart::Custom(Some(Supplement::Content(content))) => plain_text(&content),
+            _ => String::new(),
+        };
+        let mut prefix = supplement;
+        if !prefix.is_empty() {
+            prefix.push('\u{a0}');
+        }
+        prefix.push_str(&number_text);
+        let mut entry_title = Vec::new();
+        if !prefix.is_empty() {
+            let mut run = tydocx_ooxml::document::Run::new(format!("{prefix} "));
+            run.bold = true;
+            entry_title.push(IrInline::Text(run));
+        }
+        if let Some(caption) = caption.as_ref() {
+            let mut ctx = self.inline_ctx();
+            entry_title.extend(collect_inlines(
+                &caption.body,
+                styles,
+                engine,
+                locator,
+                &mut ctx,
+            )?);
+        }
+        entries.push(IrOutlineEntry {
+            level: 1,
+            title: entry_title,
+            target: Some(self.outline_target_bookmark(content)),
+            page_number: None,
+            page_loc: content.location().map(typst::introspection::Location::hash),
+        });
+        Ok(Some(id))
+    }
+
+    /// One equation's outline entry, matching Typst's `Outlinable` for
+    /// equations: outlined when block-level and numbered; the body is empty.
+    fn equation_outline_entry(
+        &mut self,
+        equation: &Packed<EquationElem>,
+        content: &Content,
+        entries: &mut Vec<IrOutlineEntry>,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+    ) -> bool {
+        let Some(numbering) = equation.numbering.get_ref(styles).as_ref() else {
+            return false;
+        };
+        if !equation.block.get(styles) {
+            return false;
+        }
+        let mut number_text = String::new();
+        if let Some(loc) = content.location()
+            && let Ok(rendered) = Counter::of(EquationElem::ELEM).display_at(
+                engine,
+                loc,
+                styles,
+                numbering,
+                content.span(),
+            )
+        {
+            number_text = plain_text(&rendered);
+        }
+        let supplement = match equation.supplement.get_cloned(styles) {
+            Smart::Custom(Some(Supplement::Content(content))) => plain_text(&content),
+            _ => String::new(),
+        };
+        let mut prefix = supplement;
+        if !prefix.is_empty() {
+            prefix.push('\u{a0}');
+        }
+        prefix.push_str(&number_text);
+        let mut entry_title = Vec::new();
+        if !prefix.is_empty() {
+            let mut run = tydocx_ooxml::document::Run::new(prefix);
+            run.bold = true;
+            entry_title.push(IrInline::Text(run));
+        }
+        entries.push(IrOutlineEntry {
+            level: 1,
+            title: entry_title,
+            target: Some(self.outline_target_bookmark(content)),
+            page_number: None,
+            page_loc: content.location().map(typst::introspection::Location::hash),
+        });
+        true
+    }
+
+    /// The per-level indent of the outline's entries: a declared `Rel` indent
+    /// resolves to its absolute length; `auto` and a `Func` indent fall back
+    /// to Typst's 1.2em-per-level default. Function indents cannot be resolved
+    /// here, and `auto` follows each level's actual prefix width once entries
+    /// are numbered — both named approximations.
+    fn outline_indent_twips(
+        &mut self,
+        outline: &OutlineElem,
+        styles: StyleChain<'_>,
+        numbered: bool,
+    ) -> u32 {
+        let em_pt = self.em_pt();
+        match outline.indent.get_ref(styles) {
+            Smart::Custom(OutlineIndent::Rel(rel)) => {
+                if rel.rel != typst_library::layout::Ratio::zero() {
+                    self.degradations.push(Degradation {
+                        span: None,
+                        construct: "outline-indent",
+                        action: DegradationAction::Approximated,
+                        message: "the outline indent has a relative part that cannot be resolved \
+                                  against a container; only its absolute part is used"
+                            .to_string(),
+                    });
+                }
+                length_twips(rel.abs, em_pt)
+            }
+            Smart::Custom(OutlineIndent::Func(_)) => {
+                self.degradations.push(Degradation {
+                    span: None,
+                    construct: "outline-indent",
+                    action: DegradationAction::Approximated,
+                    message: "the outline indent is a function and cannot be resolved per level; \
+                              entries use the 1.2em-per-level default"
+                        .to_string(),
+                });
+                em_indent_twips(em_pt)
+            }
+            Smart::Auto => {
+                if numbered {
+                    self.degradations.push(Degradation {
+                        span: None,
+                        construct: "outline-indent",
+                        action: DegradationAction::Approximated,
+                        message: "the automatic outline indent follows each level's number width; \
+                                  entries use a flat 1.2em per level"
+                            .to_string(),
+                    });
+                }
+                em_indent_twips(em_pt)
+            }
+        }
     }
 
     fn outline_title(
@@ -3323,8 +3655,26 @@ fn outline_custom_target(outline: &OutlineElem, styles: StyleChain<'_>) -> bool 
     outline.target.get_ref(styles) != &LocatableSelector(HeadingElem::ELEM.select())
 }
 
-fn outline_custom_indent(outline: &OutlineElem) -> bool {
-    matches!(outline.indent.as_option(), Some(Smart::Custom(_)))
+/// Accumulate the `SEQ` identifier of a caption entry — `mixed` flips once
+/// two different identifiers appear.
+fn track_caption_id(caption_id: &mut Option<&'static str>, mixed: &mut bool, id: &'static str) {
+    match caption_id {
+        None => *caption_id = Some(id),
+        Some(known) if *known != id => *mixed = true,
+        Some(_) => {}
+    }
+}
+
+/// The `1.2em`-per-level indent `outline(indent: auto)` falls back to.
+fn em_indent_twips(em_pt: f64) -> u32 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "1.2em is small and positive"
+    )]
+    {
+        (1.2 * em_pt * 20.0).round() as u32
+    }
 }
 
 fn figure_kind(figure: &FigureElem, styles: StyleChain<'_>) -> IrFigureKind {
@@ -3563,10 +3913,12 @@ fn heading_block(spec: HeadingSpec) -> IrBlock {
     }
 }
 
+/// `outline(depth:)` — `auto`/`none` means every level, pinned as `u8::MAX`
+/// rather than a silent level-3 cap.
 fn outline_depth(outline: &OutlineElem) -> u8 {
     match outline.depth.as_option() {
-        Some(Some(depth)) => u8::try_from(depth.get()).unwrap_or(3),
-        _ => 3,
+        Some(Some(depth)) => u8::try_from(depth.get()).unwrap_or(u8::MAX),
+        _ => u8::MAX,
     }
 }
 
@@ -3644,11 +3996,12 @@ fn borders_from_lines(grid: &CellGrid) -> TableBorders {
                 continue;
             }
             let thickness = line_thickness(line);
-            if line.index == 0 {
+            let boundary = line_boundary_index(line);
+            if boundary == 0 {
                 top = thickness;
-            } else if line.index == rows {
+            } else if boundary == rows {
                 bottom = thickness;
-            } else if line.index == header_rows && header_rows > 0 {
+            } else if boundary == header_rows && header_rows > 0 {
                 header_sep = thickness;
             } else if let Some(thickness) = thickness {
                 inside_h.push(thickness);
@@ -3664,9 +4017,10 @@ fn borders_from_lines(grid: &CellGrid) -> TableBorders {
                 continue;
             }
             let thickness = line_thickness(line);
-            if line.index == 0 {
+            let boundary = line_boundary_index(line);
+            if boundary == 0 {
                 left = thickness;
-            } else if line.index == cols {
+            } else if boundary == cols {
                 right = thickness;
             } else if let Some(thickness) = thickness {
                 inside_v.push(thickness);
@@ -3689,84 +4043,178 @@ fn line_spans_full(line: &Line, tracks: usize) -> bool {
     line.start == 0 && line.end.is_none_or(|end| end.get() >= tracks)
 }
 
-/// Fold `hline`/`vline` segments that do NOT span the full table into the
-/// cells they bound (full-span lines already reach `tblBorders` via
-/// [`borders_from_lines`]). A partial line's stroke lands on the touched edge
-/// of every covered cell — matching what Typst draws — and marks the edge as
-/// declared so lowering emits `w:tcBorders` for it. A cell's own declared
-/// stroke keeps precedence over the line, and vertical-merge continuation
-/// cells (whose touched edges sit inside a merge) are skipped.
-fn fold_partial_lines_into_cells(rows: &mut [IrTableRow], grid: &CellGrid) {
-    let n_cols = grid.non_gutter_column_count();
-    let n_rows = grid.non_gutter_row_count();
-    for group in &grid.hlines {
-        for line in group {
-            if line_spans_full(line, n_cols) {
-                continue;
-            }
-            let Some(border) = line.stroke.as_ref().and_then(|s| ir_border(s)) else {
-                continue;
-            };
-            let end = line.end.map_or(n_cols, std::num::NonZero::get);
-            for (ri, row) in rows.iter_mut().enumerate() {
-                for cell in &mut row.cells {
-                    if cell.vmerge == IrVMerge::Continue {
-                        continue;
-                    }
-                    let covered = cell.x < end
-                        && cell
-                            .x
-                            .saturating_add(usize::try_from(cell.colspan).unwrap_or(usize::MAX))
-                            > line.start;
-                    if !covered {
-                        continue;
-                    }
-                    if line.index == ri && !cell.borders_declared.top {
-                        cell.borders.top = Some(border.clone());
-                        cell.borders_declared.top = true;
-                    }
-                    if line.index
-                        == ri.saturating_add(usize::try_from(cell.rowspan).unwrap_or(usize::MAX))
-                        && !cell.borders_declared.bottom
-                    {
-                        cell.borders.bottom = Some(border.clone());
-                        cell.borders_declared.bottom = true;
-                    }
-                }
-            }
+/// Two lines placed `after` track `k` and `before` track `k + 1` draw at the
+/// two ends of the gutter between those tracks — distinct rules in Typst
+/// that collapse onto one DOCX edge. Report the collapse when they carry
+/// different strokes; same-stroke pairs paint identically anyway.
+fn report_collapsed_line_boundaries<'a>(
+    lines: impl Iterator<Item = &'a Line>,
+    degradations: &mut Vec<Degradation>,
+) {
+    let mut by_boundary: BTreeMap<usize, Vec<(usize, Option<IrBorder>)>> = BTreeMap::new();
+    for line in lines {
+        let stroke = line.stroke.as_ref().and_then(|s| ir_border(s));
+        by_boundary
+            .entry(line_boundary_index(line))
+            .or_default()
+            .push((line.index, stroke));
+    }
+    for (boundary, group) in &by_boundary {
+        let distinct_positions = group.iter().any(|(i, _)| *i != group[0].0);
+        let distinct_strokes = group.iter().any(|(_, s)| *s != group[0].1);
+        if distinct_positions && distinct_strokes {
+            degradations.push(Degradation {
+                span: None,
+                construct: "grid-line",
+                action: DegradationAction::Approximated,
+                message: format!(
+                    "lines placed at both ends of the gutter next to boundary {boundary} \
+                     collapse onto a single table edge; the last-declared stroke wins"
+                ),
+            });
         }
     }
-    for group in &grid.vlines {
+}
+
+/// Fold `hline`/`vline` strokes into the cells they bound. A line always
+/// wins over the cell's own edge (Typst's `ExplicitLine` priority), including
+/// `stroke: none` lines, which fold to a `nil` edge that also clears the
+/// cell's declared stroke. Full-span lines already reach `tblBorders` via
+/// [`borders_from_lines`], so they only need folding where the table-level
+/// border cannot speak: a declared cell edge it must beat, or a colour/dash
+/// `tblBorders` cannot carry. Partial lines fold everywhere — Word has no
+/// per-segment edges — and a line covering only part of a spanning cell's
+/// edge widens to the whole edge, which is reported. Vertical-merge
+/// continuation cells are skipped: Typst draws no line inside a merge.
+fn fold_lines_into_cells(
+    rows: &mut [IrTableRow],
+    grid: &CellGrid,
+    degradations: &mut Vec<Degradation>,
+) {
+    let n_cols = grid.non_gutter_column_count();
+    let n_rows = grid.non_gutter_row_count();
+    report_collapsed_line_boundaries(grid.hlines.iter().flatten(), degradations);
+    report_collapsed_line_boundaries(grid.vlines.iter().flatten(), degradations);
+    fold_hlines_into_cells(rows, grid, n_cols, degradations);
+    fold_vlines_into_cells(rows, grid, n_rows, degradations);
+}
+
+/// Horizontal lines fold onto the top/bottom edges of the cells they bound.
+fn fold_hlines_into_cells(
+    rows: &mut [IrTableRow],
+    grid: &CellGrid,
+    n_cols: usize,
+    degradations: &mut Vec<Degradation>,
+) {
+    for group in &grid.hlines {
         for line in group {
-            if line_spans_full(line, n_rows) {
-                continue;
-            }
-            let Some(border) = line.stroke.as_ref().and_then(|s| ir_border(s)) else {
-                continue;
-            };
-            let end = line.end.map_or(n_rows, std::num::NonZero::get);
+            let full = line_spans_full(line, n_cols);
+            let boundary = line_boundary_index(line);
+            let border = line.stroke.as_ref().and_then(|s| ir_border(s));
+            // `tblBorders` cannot express a `stroke: none` full-span line at
+            // an inside boundary (`insideH` would still paint it), a colour,
+            // or a dash — those fold onto every cell edge regardless.
+            let needs_fold = !full
+                || border.is_none()
+                || border
+                    .as_ref()
+                    .is_some_and(|b| b.color_hex.is_some() || b.dashed);
+            let end = line.end.map_or(n_cols, std::num::NonZero::get);
+            let mut widened = false;
             for (ri, row) in rows.iter_mut().enumerate() {
                 for cell in &mut row.cells {
                     if cell.vmerge == IrVMerge::Continue {
-                        continue;
-                    }
-                    let covered = ri < end
-                        && ri.saturating_add(usize::try_from(cell.rowspan).unwrap_or(usize::MAX))
-                            > line.start;
-                    if !covered {
                         continue;
                     }
                     let colspan = usize::try_from(cell.colspan).unwrap_or(usize::MAX);
-                    if line.index == cell.x && !cell.borders_declared.left {
-                        cell.borders.left = Some(border.clone());
-                        cell.borders_declared.left = true;
+                    if cell.x >= end || cell.x.saturating_add(colspan) <= line.start {
+                        continue;
                     }
-                    if line.index == cell.x.saturating_add(colspan) && !cell.borders_declared.right
+                    let rowspan = usize::try_from(cell.rowspan).unwrap_or(usize::MAX);
+                    let mut folded = false;
+                    if boundary == ri && (needs_fold || cell.borders_declared.top) {
+                        cell.borders.top.clone_from(&border);
+                        cell.borders_declared.top = true;
+                        folded = true;
+                    }
+                    if boundary == ri.saturating_add(rowspan)
+                        && (needs_fold || cell.borders_declared.bottom)
                     {
-                        cell.borders.right = Some(border.clone());
-                        cell.borders_declared.right = true;
+                        cell.borders.bottom.clone_from(&border);
+                        cell.borders_declared.bottom = true;
+                        folded = true;
                     }
+                    widened |= folded && (cell.x < line.start || cell.x + colspan > end);
                 }
+            }
+            if widened {
+                degradations.push(Degradation {
+                    span: None,
+                    construct: "grid-line",
+                    action: DegradationAction::Approximated,
+                    message: "a partial horizontal line covers only part of a cell edge; \
+                              the cell's whole edge takes the line's stroke"
+                        .to_string(),
+                });
+            }
+        }
+    }
+}
+
+/// Vertical lines fold onto the left/right edges of the cells they bound.
+fn fold_vlines_into_cells(
+    rows: &mut [IrTableRow],
+    grid: &CellGrid,
+    n_rows: usize,
+    degradations: &mut Vec<Degradation>,
+) {
+    for group in &grid.vlines {
+        for line in group {
+            let full = line_spans_full(line, n_rows);
+            let boundary = line_boundary_index(line);
+            let border = line.stroke.as_ref().and_then(|s| ir_border(s));
+            let needs_fold = !full
+                || border.is_none()
+                || border
+                    .as_ref()
+                    .is_some_and(|b| b.color_hex.is_some() || b.dashed);
+            let end = line.end.map_or(n_rows, std::num::NonZero::get);
+            let mut widened = false;
+            for (ri, row) in rows.iter_mut().enumerate() {
+                for cell in &mut row.cells {
+                    if cell.vmerge == IrVMerge::Continue {
+                        continue;
+                    }
+                    let rowspan = usize::try_from(cell.rowspan).unwrap_or(usize::MAX);
+                    if ri >= end || ri.saturating_add(rowspan) <= line.start {
+                        continue;
+                    }
+                    let colspan = usize::try_from(cell.colspan).unwrap_or(usize::MAX);
+                    let mut folded = false;
+                    if boundary == cell.x && (needs_fold || cell.borders_declared.left) {
+                        cell.borders.left.clone_from(&border);
+                        cell.borders_declared.left = true;
+                        folded = true;
+                    }
+                    if boundary == cell.x.saturating_add(colspan)
+                        && (needs_fold || cell.borders_declared.right)
+                    {
+                        cell.borders.right.clone_from(&border);
+                        cell.borders_declared.right = true;
+                        folded = true;
+                    }
+                    widened |= folded && (ri < line.start || ri + rowspan > end);
+                }
+            }
+            if widened {
+                degradations.push(Degradation {
+                    span: None,
+                    construct: "grid-line",
+                    action: DegradationAction::Approximated,
+                    message: "a partial vertical line covers only part of a cell edge; \
+                              the cell's whole edge takes the line's stroke"
+                        .to_string(),
+                });
             }
         }
     }
@@ -4255,14 +4703,23 @@ fn cell_borders_from_stroke(
     }
 }
 
-fn ir_grid_line(line: &Line, track_count: usize) -> Option<IrGridLine> {
-    let border = line.stroke.as_ref().and_then(|s| ir_border(s))?;
-    Some(IrGridLine {
-        index: line.index,
+/// The non-gutter boundary index a resolved `Line` draws on: `Before` sits
+/// above track `index`, `After` (which only survives Typst's own
+/// normalization on a guttered grid) sits below track `index` — the same
+/// DOCX edge as `index + 1`.
+fn line_boundary_index(line: &Line) -> usize {
+    line.index + usize::from(line.position == LinePosition::After)
+}
+
+/// Convert a resolved `Line`, keeping a `stroke: none` line as an explicit
+/// removal (`border: None`) rather than dropping it.
+fn ir_grid_line(line: &Line, track_count: usize) -> IrGridLine {
+    IrGridLine {
+        index: line_boundary_index(line),
         start: line.start,
         end: line.end.map_or(track_count, std::num::NonZero::get),
-        border,
-    })
+        border: line.stroke.as_ref().and_then(|s| ir_border(s)),
+    }
 }
 
 /// Lay the grid out once against the page content area and derive row

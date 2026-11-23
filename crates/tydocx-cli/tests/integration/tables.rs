@@ -1146,3 +1146,76 @@ fn table_2x2_span_writes_one_vmerge_continuation() {
         "the continuation must span the same grid columns:\n{row2}"
     );
 }
+
+#[test]
+fn table_local_line_wins_over_cell_stroke() {
+    // The red 1pt hline must paint over the blue 4pt cell bottom border on
+    // the boundary it covers — Typst draws explicit lines above cell
+    // borders.
+    let xml = fixture_doc_xml("table_local_line_priority");
+    let a1_pos = xml.find(">A1<").expect("cell A1");
+    let a1 = &xml[xml[..a1_pos].rfind("<w:tc>").unwrap()..a1_pos + 30];
+    assert!(
+        a1.contains("w:val=\"single\" w:sz=\"8\"") && a1.contains("FF4136"),
+        "A1's bottom edge must take the red line's stroke, got: {a1}"
+    );
+    assert!(
+        !a1.contains("w:sz=\"32\""),
+        "the 4pt cell border must not win on that edge: {a1}"
+    );
+}
+
+#[test]
+fn table_local_line_honours_position_below_row() {
+    // With a row gutter, `hline(y: 0, position: bottom)` belongs below the
+    // first row — after gutter collapse that is the boundary before row 2,
+    // not the table's top edge.
+    let xml = fixture_doc_xml("table_line_gutter_position");
+    let a1_pos = xml.find(">A1<").expect("cell A1");
+    let a1 = &xml[xml[..a1_pos].rfind("<w:tc>").unwrap()..a1_pos + 30];
+    assert!(
+        a1.contains("<w:top w:val=\"nil\""),
+        "nothing may be drawn above row 1: {a1}"
+    );
+    assert!(
+        a1.contains("<w:bottom w:val=\"single\" w:sz=\"8\"") && a1.contains("FF4136"),
+        "the line lands below row 1: {a1}"
+    );
+}
+
+#[test]
+fn table_stroke_none_line_removes_the_boundary() {
+    // `table.hline(stroke: none)` is an explicit removal: it beats the
+    // table's red 1pt stroke on that boundary rather than being ignored.
+    let xml = fixture_doc_xml("table_line_stroke_none");
+    let a1_pos = xml.find(">A1<").expect("cell A1");
+    let a1 = &xml[xml[..a1_pos].rfind("<w:tc>").unwrap()..a1_pos + 30];
+    assert!(
+        a1.contains("<w:bottom w:val=\"nil\""),
+        "the none-line suppresses the interior boundary: {a1}"
+    );
+    assert!(
+        a1.contains("<w:left w:val=\"single\""),
+        "the table stroke still paints the outer frame: {a1}"
+    );
+}
+
+#[test]
+fn table_line_over_merged_cell_reports_widening() {
+    // A line covering only part of a merged cell's edge cannot keep its
+    // declared extent — the widening is a named degradation, not silent.
+    let outcome = crate::common::fixture_outcome("table_line_unrepresentable");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "grid-line"),
+        "the partial line must report a grid-line degradation: {:?}",
+        outcome.degradations
+    );
+    let xml = fixture_doc_xml("table_line_unrepresentable");
+    assert!(
+        xml.contains("FF4136"),
+        "the widened edge still paints the line's stroke: {xml}"
+    );
+}

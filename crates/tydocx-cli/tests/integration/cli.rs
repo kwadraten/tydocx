@@ -198,8 +198,6 @@ fn cli_degradation_report_sidecar() {
     );
     for construct in [
         "figure-placement",
-        "outline-target",
-        "outline-indent",
         "list-marker",
         "enum-reversed",
         "image-fit",
@@ -210,8 +208,8 @@ fn cli_degradation_report_sidecar() {
             "report should list {construct}, got: {json}"
         );
     }
-    // A C2 run reports only the figure-outline remainder: the figure-targeted
-    // outline's entries cannot be cached (headings only).
+    // A C2 run reports nothing: the figure-targeted outline resolves its
+    // entries into a cached `\c` field result.
     let report_c2 = dir.join("report-c2.json");
     let result = run_tydocx_extra(
         &fixture_path("issue_c1_misc"),
@@ -229,14 +227,10 @@ fn cli_degradation_report_sidecar() {
         String::from_utf8_lossy(&result.stderr)
     );
     let sidecar_c2 = fs::read_to_string(&report_c2).unwrap();
-    assert!(
-        sidecar_c2.contains("\"construct\": \"outline-target-kind\""),
-        "c2 sidecar should report the figure-outline remainder, got: {sidecar_c2}"
-    );
     assert_eq!(
         sidecar_c2.matches("\"construct\"").count(),
-        1,
-        "c2 sidecar should list only that remainder, got: {sidecar_c2}"
+        0,
+        "the figure outline resolves its entries, so c2 reports nothing, got: {sidecar_c2}"
     );
     let _ = fs::remove_dir_all(&dir);
 }

@@ -523,9 +523,11 @@ fn fold_edge(outer: Option<&EdgeStroke>, inner: Option<&EdgeStroke>) -> Option<R
 
 /// Merge per-side cell candidates and the grid's explicit lines into the
 /// winning stroke per boundary segment. Lines win outright and emit on the
-/// inner side; otherwise the outer/inner candidates fold per [`fold_edge`].
-/// `covered(boundary, track)` reports whether the segment lies inside a
-/// spanning cell, where Typst draws no line at all.
+/// inner side — a `stroke: none` line ([`IrGridLine::border`] `None`) wins
+/// too, removing every stroke on its segments; otherwise the outer/inner
+/// candidates fold per [`fold_edge`]. `covered(boundary, track)` reports
+/// whether the segment lies inside a spanning cell, where Typst draws no
+/// line at all.
 fn resolve_boundary_map(
     lines: &[IrGridLine],
     outer: &BTreeMap<(usize, usize), EdgeStroke>,
@@ -535,7 +537,7 @@ fn resolve_boundary_map(
     horizontal: bool,
 ) -> BTreeMap<(usize, usize), ResolvedEdge> {
     let mut keys: BTreeSet<(usize, usize)> = outer.keys().chain(inner.keys()).copied().collect();
-    let mut line_map: BTreeMap<(usize, usize), ResolvedEdge> = BTreeMap::new();
+    let mut line_map: BTreeMap<(usize, usize), Option<ResolvedEdge>> = BTreeMap::new();
     for line in lines {
         for t in line.start..line.end.min(track_limit) {
             let key = if horizontal {
@@ -545,10 +547,10 @@ fn resolve_boundary_map(
             };
             line_map.insert(
                 key,
-                ResolvedEdge {
-                    border: line.border.clone(),
+                line.border.clone().map(|border| ResolvedEdge {
+                    border,
                     owner: EdgeOwner::Inner,
-                },
+                }),
             );
             keys.insert(key);
         }
@@ -556,14 +558,18 @@ fn resolve_boundary_map(
     keys.into_iter()
         .filter(|key| !covered(key.0, key.1))
         .filter_map(|key| {
-            line_map
-                .get(&key)
-                .map(|e| ResolvedEdge {
-                    border: e.border.clone(),
-                    owner: e.owner,
-                })
-                .or_else(|| fold_edge(outer.get(&key), inner.get(&key)))
-                .map(|edge| (key, edge))
+            if let Some(edge) = line_map.get(&key) {
+                return edge.as_ref().map(|e| {
+                    (
+                        key,
+                        ResolvedEdge {
+                            border: e.border.clone(),
+                            owner: e.owner,
+                        },
+                    )
+                });
+            }
+            fold_edge(outer.get(&key), inner.get(&key)).map(|edge| (key, edge))
         })
         .collect()
 }
@@ -968,7 +974,7 @@ mod tests {
             index: 1,
             start: 0,
             end: 2,
-            border: border(4),
+            border: Some(border(4)),
         });
         let plan = plan_grid(&g, Some(900));
         let t = &plan.tables[0];
@@ -1041,7 +1047,7 @@ mod tests {
             index: 2,
             start: 0,
             end: 2,
-            border: border(4),
+            border: Some(border(4)),
         });
         let plan = plan_grid(&g, Some(600));
         let t = &plan.tables[0];

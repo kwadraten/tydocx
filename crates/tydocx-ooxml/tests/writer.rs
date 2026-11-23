@@ -450,6 +450,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn footnote_linked_image_gets_footnote_local_rel_id() {
+        let image = |seed: u8| document::ImageData {
+            svg: None,
+            bytes: vec![0x89, 0x50, 0x4E, 0x47, seed],
+            format: document::ImageFormat::Png,
+            width_emu: 914_400,
+            height_emu: 457_200,
+            src_rect: None,
+            alt: None,
+        };
+        let mut fn_para = document::Paragraph::new();
+        fn_para.add_hyperlink_body(
+            "https://example.com".to_string(),
+            vec![document::InlineElement::Image(image(1))],
+        );
+        fn_para.add_image(image(2));
+        let mut doc = Document::new();
+        doc.add_footnote(vec![fn_para]);
+        let mut para = document::Paragraph::new();
+        para.add_footnote_ref(2);
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        let fn_xml = read_zip_entry(&buf, "word/footnotes.xml");
+        let rels = read_zip_entry(&buf, "word/_rels/footnotes.xml.rels");
+        let embeds: Vec<&str> = fn_xml
+            .split("r:embed=\"")
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap())
+            .collect();
+        assert_eq!(embeds.len(), 2, "both images embed in footnotes: {fn_xml}");
+        for embed in &embeds {
+            assert!(
+                rels.contains(&format!("Id=\"{embed}\"")),
+                "{embed} must resolve in footnotes.xml.rels: {rels}"
+            );
+        }
+        let targets: Vec<&str> = embeds
+            .iter()
+            .map(|embed| {
+                rels.split(&format!("Id=\"{embed}\""))
+                    .nth(1)
+                    .and_then(|rest| rest.split("Target=\"media/").nth(1))
+                    .and_then(|rest| rest.split('"').next())
+                    .unwrap()
+            })
+            .collect();
+        assert_ne!(
+            targets[0], targets[1],
+            "linked and plain images must point at their own media: {rels}"
+        );
+        let doc_xml = read_zip_entry(&buf, "word/document.xml");
+        assert!(
+            !doc_xml.contains("r:embed"),
+            "this document embeds images only inside its footnote: {doc_xml}"
+        );
+    }
+
     // ── 12. Table borders ───────────────────────────────────────────────
 
     #[test]

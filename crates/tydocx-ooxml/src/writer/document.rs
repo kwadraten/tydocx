@@ -127,9 +127,16 @@ pub(super) fn generate_document_xml(
                     }
                     BlockElement::TocBlock {
                         max_depth,
+                        caption_id,
                         paragraphs,
                     } => {
-                        write_toc_block(body_w, *max_depth, paragraphs, ctx)?;
+                        write_toc_block(
+                            body_w,
+                            *max_depth,
+                            caption_id.as_deref(),
+                            paragraphs,
+                            ctx,
+                        )?;
                     }
                 }
             }

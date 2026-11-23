@@ -529,3 +529,75 @@ fn footnote_multi_paragraph_body_emits_one_w_p_per_paragraph() {
         "the marker belongs on the first paragraph only, got: {entry}"
     );
 }
+
+#[test]
+fn footnote_linked_image_resolves_in_footnote_rels() {
+    let package = fixture_package("footnote_linked_image");
+    let footnotes = package.part_text("word/footnotes.xml");
+    let rels = package.part_text("word/_rels/footnotes.xml.rels");
+    let embeds: Vec<&str> = footnotes
+        .split("r:embed=\"")
+        .skip(1)
+        .map(|rest| rest.split('"').next().unwrap())
+        .collect();
+    assert_eq!(
+        embeds.len(),
+        2,
+        "linked and plain footnote images both embed in footnotes.xml: {footnotes}"
+    );
+    let mut targets = Vec::new();
+    for embed in &embeds {
+        let rel = rels
+            .split(&format!("Id=\"{embed}\""))
+            .nth(1)
+            .and_then(|rest| rest.split("Target=\"").nth(1))
+            .and_then(|rest| rest.split('"').next())
+            .unwrap_or_else(|| panic!("{embed} must resolve in footnotes.xml.rels: {rels}"));
+        targets.push(rel.to_string());
+    }
+    assert_ne!(
+        targets[0], targets[1],
+        "the two footnote images must resolve to their own media: {rels}"
+    );
+    for target in &targets {
+        assert!(
+            package
+                .part_names()
+                .any(|name| name == format!("word/{target}")),
+            "media part {target} should ship in the package"
+        );
+    }
+}
+
+#[test]
+fn footnote_paragraphs_keep_their_own_alignment() {
+    let package = fixture_package("footnote_alignment");
+    let footnotes = package.part_text("word/footnotes.xml");
+    let para_jc = |needle: &str| {
+        let start = footnotes
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} should be a footnote paragraph"));
+        let open = footnotes[..start]
+            .rfind("<w:p>")
+            .or_else(|| footnotes[..start].rfind("<w:p "))
+            .expect("paragraph start");
+        let end = footnotes[start..]
+            .find("</w:p>")
+            .map(|i| start + i)
+            .expect("paragraph end");
+        let para = &footnotes[open..end];
+        para.split("<w:jc w:val=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+    };
+    assert_eq!(
+        para_jc("Centered paragraph"),
+        Some("center"),
+        "the centered footnote paragraph keeps w:jc=center"
+    );
+    assert_eq!(
+        para_jc("Right paragraph"),
+        Some("right"),
+        "the right-aligned footnote paragraph keeps w:jc=right"
+    );
+}

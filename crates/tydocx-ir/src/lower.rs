@@ -430,8 +430,17 @@ fn lower_block_in(
             entries,
             depth,
             custom_target,
-            custom_indent,
-        } => lower_outline(title, entries, *depth, *custom_target, *custom_indent, ctx),
+            indent_twips_per_level,
+            figure_caption_id,
+        } => lower_outline(
+            title,
+            entries,
+            *depth,
+            *custom_target,
+            *indent_twips_per_level,
+            figure_caption_id.as_deref(),
+            ctx,
+        ),
         IrBlock::Bibliography { entries } => lower_bibliography(entries, ctx),
         IrBlock::Place {
             float,
@@ -494,30 +503,21 @@ fn lower_outline(
     entries: &[IrOutlineEntry],
     depth: u8,
     custom_target: bool,
-    custom_indent: bool,
+    indent_twips_per_level: u32,
+    caption_id: Option<&str>,
     ctx: &mut LowerCtx,
 ) -> Vec<BlockElement> {
-    if ctx.compat.is_c1() {
-        if custom_target {
-            ctx.degrade(
-                "outline-target",
-                DegradationAction::Skipped,
-                "outline target is not headings; entries are dropped and only the title is kept"
-                    .to_string(),
-            );
-        }
-        if custom_indent {
-            ctx.degrade(
-                "outline-indent",
-                DegradationAction::Skipped,
-                "outline indent is custom; the table of contents uses the default indent"
-                    .to_string(),
-            );
-        }
+    if ctx.compat.is_c1() && custom_target && entries.is_empty() {
+        ctx.degrade(
+            "outline-target",
+            DegradationAction::Skipped,
+            "outline target is not headings; entries are dropped and only the title is kept"
+                .to_string(),
+        );
     }
-    // A heading TOC field would list headings the source did not ask for;
-    // keep only the outline's own title.
-    if custom_target {
+    // A heading TOC field would list targets the source did not ask for;
+    // with no resolvable entries only the outline's own title survives.
+    if custom_target && entries.is_empty() {
         let mut para = Paragraph::new();
         para.inlines = merge_runs(lower_inlines(title, ctx));
         return vec![BlockElement::Paragraph(para)];
@@ -532,6 +532,11 @@ fn lower_outline(
         let mut entry_paras = Vec::with_capacity(entries.len());
         for entry in entries {
             let mut para = Paragraph::new();
+            let indent =
+                indent_twips_per_level.saturating_mul(u32::from(entry.level.saturating_sub(1)));
+            if indent > 0 {
+                para.left_indent = Some(indent);
+            }
             let mut body: Vec<InlineElement> = lower_inlines(&entry.title, ctx);
             body.push(InlineElement::Tab);
             if let Some(target) = &entry.target {
@@ -550,12 +555,13 @@ fn lower_outline(
         }
         out.push(BlockElement::TocBlock {
             max_depth: depth,
+            caption_id: caption_id.map(str::to_string),
             paragraphs: entry_paras,
         });
         return out;
     }
     let mut para = Paragraph::new();
-    para.add_toc(depth);
+    para.add_toc(depth, caption_id.map(str::to_string));
     out.push(BlockElement::Paragraph(para));
     out
 }

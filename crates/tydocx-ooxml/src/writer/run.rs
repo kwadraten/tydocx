@@ -90,7 +90,10 @@ pub(super) fn write_inline<W: Write>(
             write_anchored_float(writer, float, n, ctx)
         }
         InlineElement::ColumnBreak => write_column_break(writer),
-        InlineElement::FieldToc { max_depth } => write_toc_field(writer, *max_depth),
+        InlineElement::FieldToc {
+            max_depth,
+            caption_id,
+        } => write_toc_field(writer, *max_depth, caption_id.as_deref()),
         InlineElement::Tab => write_tab(writer),
         InlineElement::Citation {
             keys,
