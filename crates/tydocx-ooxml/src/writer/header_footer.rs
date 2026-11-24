@@ -6,6 +6,7 @@ use quick_xml::Writer;
 use super::fields::{write_complex_field, write_field, write_field_page};
 use super::image::write_anchored_float;
 use super::run::write_run;
+use super::shape::write_inline_shape;
 use super::{DocParts, WriteCtx};
 use crate::document::{DocumentStyle, HeaderFooter, InlineElement, Paragraph};
 
@@ -104,7 +105,7 @@ fn generate_header_footer_part(
     let has_anchors = content.paragraphs.iter().any(|para| {
         para.inlines
             .iter()
-            .any(|i| matches!(i, InlineElement::AnchoredFloat(_)))
+            .any(|i| matches!(i, InlineElement::AnchoredFloat(_) | InlineElement::Shape(_)))
     });
     let root = writer
         .create_element(root_tag)
@@ -186,6 +187,11 @@ fn write_header_footer_paragraph<W: Write>(
                     let n = ctx.shape_id_counter.get() + 1;
                     ctx.shape_id_counter.set(n);
                     write_anchored_float(w, float, n, ctx)?;
+                }
+                InlineElement::Shape(shape) => {
+                    let n = ctx.shape_id_counter.get() + 1;
+                    ctx.shape_id_counter.set(n);
+                    write_inline_shape(w, shape, n, ctx)?;
                 }
                 _ => {}
             }

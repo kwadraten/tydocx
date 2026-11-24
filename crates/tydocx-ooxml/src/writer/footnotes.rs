@@ -232,6 +232,7 @@ fn inline_has_math(inline: &InlineElement) -> bool {
             AnchoredContent::Text { blocks, .. } => blocks.iter().any(block_has_math),
             AnchoredContent::Image(_) => false,
         },
+        InlineElement::Shape(shape) => shape.blocks.iter().any(block_has_math),
         InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
             body.iter().any(inline_has_math)
         }

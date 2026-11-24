@@ -290,6 +290,138 @@ pub enum AnchoredContent {
     },
 }
 
+/// A bare shape drawn in the text flow: a `wp:inline` holding a `wps:wsp`
+/// (`wordprocessingShape`). This is the C2/C3 form of a Typst `rect`,
+/// `square`, `ellipse`, `circle`, `polygon`, `curve`, or geometric `line`
+/// — drawn at its declared or measured size, with fill, stroke, and an
+/// optional `wps:txbx` body that keeps the shape's text editable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InlineShape {
+    /// `wp:extent`/`a:ext` — the painted size in EMU (Typst's frame size
+    /// plus `outset` growth, matching what Typst draws).
+    pub width_emu: u64,
+    pub height_emu: u64,
+    /// The shape's geometry — an `a:prstGeom` preset or an `a:custGeom` path.
+    pub outline: ShapeOutline,
+    /// Solid shape fill, a 6-digit uppercase hex; `None` emits `a:noFill`
+    /// (an explicitly unfilled shape — a non-solid paint was dropped
+    /// upstream and reported).
+    pub fill_hex: Option<String>,
+    /// The resolved stroke emitted as `a:ln`; `None` draws no outline.
+    pub stroke: Option<ShapeStroke>,
+    /// `wps:bodyPr` insets (EMU) positioning the text body — the resolved
+    /// `inset` so body text lands where Typst put it.
+    pub inset_emu: ShapeInsets,
+    /// `wps:txbx` content; empty means the shape carries no text and the
+    /// `txBox`/`wps:txbx` elements are omitted entirely.
+    pub blocks: Vec<BlockElement>,
+}
+
+/// The geometry a `wps:wsp` draws: an ECMA-376 `prstGeom` preset or a
+/// `custGeom` freeform path.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShapeOutline {
+    /// `a:prstGeom prst="rect"`.
+    Rect,
+    /// `a:prstGeom prst="roundRect"` — uniform corner radius as 100000ths
+    /// of the shape's smaller side (`adj`, 0–50000).
+    RoundRect { adj: u32 },
+    /// `a:prstGeom prst="round1Rect"` — one rounded corner (the top-right in
+    /// the preset); `adj` on the same scale as `RoundRect`.
+    Round1Rect { adj: u32 },
+    /// `a:prstGeom prst="round2SameRect"` — `adj1` for the two top corners,
+    /// `adj2` for the two bottom corners.
+    Round2SameRect { adj1: u32, adj2: u32 },
+    /// `a:prstGeom prst="round2DiagRect"` — `adj1` for top-left/bottom-right,
+    /// `adj2` for top-right/bottom-left.
+    Round2DiagRect { adj1: u32, adj2: u32 },
+    /// `a:prstGeom prst="ellipse"`.
+    Ellipse,
+    /// `a:prstGeom prst="line"` — drawn corner-to-corner of the extent; the
+    /// `a:xfrm` flips pick which corners a back- or up-running segment
+    /// joins.
+    Line { flip_h: bool, flip_v: bool },
+    /// `a:custGeom` — a freeform path (polygon vertices, curve segments, or
+    /// a `#line` segment that does not start at the origin) in a path space
+    /// `path_w_emu`×`path_h_emu` starting at the drawing's top-left corner.
+    Custom {
+        path_w_emu: i64,
+        path_h_emu: i64,
+        segments: Vec<ShapePathSeg>,
+    },
+}
+
+/// One `a:path` segment inside an `a:custGeom` path space, coordinates in
+/// EMU. Mirrors Typst's `CurveItem` — `Move`/`Line`/`Cubic`/`Close` all have
+/// direct `a:moveTo`/`a:lnTo`/`a:cubicBezTo`/`a:close` equivalents.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShapePathSeg {
+    /// `a:moveTo` — lift the pen to a point.
+    MoveTo { x_emu: i64, y_emu: i64 },
+    /// `a:lnTo` — straight segment to a point.
+    LineTo { x_emu: i64, y_emu: i64 },
+    /// `a:cubicBezTo` — cubic Bézier with two control points and an end point.
+    CubicTo {
+        c1x_emu: i64,
+        c1y_emu: i64,
+        c2x_emu: i64,
+        c2y_emu: i64,
+        x_emu: i64,
+        y_emu: i64,
+    },
+    /// `a:close` — close the current subpath with a straight segment.
+    Close,
+}
+
+/// A resolved shape stroke, written as `a:ln`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeStroke {
+    /// `a:ln@w` — the stroke thickness in EMU.
+    pub width_emu: u64,
+    /// Solid stroke colour; `None` = the paint was not a solid colour and
+    /// the loss was reported upstream — the writer draws black.
+    pub color_hex: Option<String>,
+    /// `a:cap` — the stroke cap.
+    pub cap: ShapeCap,
+    /// `a:miter`/`a:round`/`a:bevel` — the line join (with the miter limit).
+    pub join: ShapeJoin,
+    /// `a:custDash` — alternating `(dash, gap)` lengths in 100000ths of the
+    /// stroke width. `None` = a solid stroke.
+    pub dash: Option<Vec<(u32, u32)>>,
+}
+
+/// `a:ln@cap` — the stroke cap style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeCap {
+    /// `cap="flat"` — Typst `butt`.
+    Flat,
+    /// `cap="rnd"` — Typst `round`.
+    Round,
+    /// `cap="sq"` — Typst `square`.
+    Square,
+}
+
+/// The `a:ln` join element.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShapeJoin {
+    /// `a:miter` — sharp join; `lim` in 100000ths (100000 = 100%, so
+    /// Typst's default `miter-limit: 4` writes `400000`).
+    Miter { lim: u32 },
+    /// `a:round` — rounded join.
+    Round,
+    /// `a:bevel` — bevelled join.
+    Bevel,
+}
+
+/// `wps:bodyPr` text insets in EMU (`lIns`/`tIns`/`rIns`/`bIns`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShapeInsets {
+    pub left_emu: u64,
+    pub top_emu: u64,
+    pub right_emu: u64,
+    pub bottom_emu: u64,
+}
+
 /// A single inline element within a paragraph.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InlineElement {
@@ -357,6 +489,10 @@ pub enum InlineElement {
     /// (`wp:anchor`); used for `#place(.., float: true)`. Its carrier
     /// paragraph holds a 1pt mark in the flow.
     AnchoredFloat(AnchoredFloat),
+    /// A bare shape drawn in the flow (`wp:inline` + `wps:wsp`); used for
+    /// `#rect`, `#square`, `#ellipse`, `#circle`, `#polygon`, `#curve`, and
+    /// geometric `#line` at C2/C3.
+    Shape(InlineShape),
     /// A column break (`w:br type="column"`) — `#colbreak()` in a multi-column page.
     ColumnBreak,
     /// A Table of Contents field code (`TOC \o "1-N" \h \z \u` for headings,
@@ -1194,6 +1330,13 @@ fn for_each_run_in_inlines_mut(inlines: &mut [InlineElement], f: &mut dyn FnMut(
                     }
                 }
             }
+            InlineElement::Shape(shape) => {
+                for element in &mut shape.blocks {
+                    for_each_paragraph_in_block_mut(element, &mut |p| {
+                        p.for_each_run_mut(f);
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -1219,6 +1362,13 @@ fn for_each_run_in_inlines(inlines: &[InlineElement], f: &mut dyn FnMut(&Run)) {
                             p.for_each_run(f);
                         });
                     }
+                }
+            }
+            InlineElement::Shape(shape) => {
+                for element in &shape.blocks {
+                    for_each_paragraph_in_block(element, &mut |p| {
+                        p.for_each_run(f);
+                    });
                 }
             }
             _ => {}
@@ -1253,6 +1403,15 @@ fn push_inline_text(inline: &InlineElement, text: &mut String) {
         | InlineElement::FieldPage { display_text, .. }
         | InlineElement::Citation { display_text, .. } => {
             text.push_str(display_text);
+        }
+        InlineElement::Shape(shape) => {
+            for element in &shape.blocks {
+                for_each_paragraph_in_block(element, &mut |p| {
+                    for inner in &p.inlines {
+                        push_inline_text(inner, text);
+                    }
+                });
+            }
         }
         _ => {}
     }

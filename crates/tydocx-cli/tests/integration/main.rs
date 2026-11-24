@@ -26,6 +26,7 @@ mod page_furniture;
 mod placement;
 mod recovery;
 mod sections;
+mod shapes;
 mod structure;
 mod tables;
 mod universe;

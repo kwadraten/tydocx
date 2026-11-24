@@ -147,19 +147,24 @@ pub fn element_classes(xml: &str) -> io::Result<BTreeSet<String>> {
 /// Field instructions (`w:instrText`) and math (`m:t`) are element content
 /// too, but they are field payloads and math runs — not paragraph text.
 ///
+/// A `w:p` nested inside another `w:p` — a `w:txbxContent` paragraph inside
+/// a shape drawing's run — is its own paragraph: accumulators stack, so the
+/// inner paragraph yields its own entry and the outer keeps the text of the
+/// runs around the drawing.
+///
 /// # Errors
 /// Returns an error if `xml` is not well-formed XML.
 pub fn paragraph_texts(xml: &str) -> io::Result<Vec<String>> {
     let mut reader = Reader::from_str(xml);
     let mut paragraphs = Vec::new();
-    let mut current: Option<String> = None;
+    let mut currents: Vec<String> = Vec::new();
     let mut stack: Vec<Vec<u8>> = Vec::new();
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = e.name().as_ref().to_vec();
                 if name == b"w:p" {
-                    current = Some(String::new());
+                    currents.push(String::new());
                 }
                 stack.push(name);
             }
@@ -171,14 +176,14 @@ pub fn paragraph_texts(xml: &str) -> io::Result<Vec<String>> {
             Ok(Event::End(e)) => {
                 stack.pop();
                 if e.name().as_ref() == b"w:p"
-                    && let Some(text) = current.take()
+                    && let Some(text) = currents.pop()
                 {
                     paragraphs.push(text);
                 }
             }
             Ok(Event::Text(e)) => {
                 if stack.last().is_some_and(|name| name == b"w:t")
-                    && let Some(text) = current.as_mut()
+                    && let Some(text) = currents.last_mut()
                 {
                     text.push_str(&e.unescape().map_err(io::Error::other)?);
                 }

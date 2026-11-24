@@ -19,6 +19,7 @@ mod numbering;
 pub(crate) mod package;
 mod paragraph;
 mod run;
+mod shape;
 mod table;
 
 use citation::{

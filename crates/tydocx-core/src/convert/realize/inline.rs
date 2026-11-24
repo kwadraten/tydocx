@@ -34,6 +34,7 @@ use typst_syntax::Source;
 use typst_syntax::Span;
 
 use super::collect::{block_body_content, shape_fill_hex, shape_parts, transparent_container_body};
+use super::shape::resolve_shape;
 use super::style::{StyleDefaults, lower_runs_match, run_from_styles};
 use super::with_fragment;
 use crate::convert::image::hash_bytes;
@@ -207,6 +208,7 @@ fn collect_shape_or_transparent(
     }
     if let Some((kind, body)) = shape_parts(content) {
         push_shape_inline(
+            content,
             kind,
             body,
             shape_fill_hex(content, styles),
@@ -356,6 +358,7 @@ fn collect_layouter_shape(
         && let Some((kind, body)) = shape_parts(&original)
     {
         push_shape_inline(
+            &original,
             kind,
             body,
             shape_fill_hex(&original, styles),
@@ -427,6 +430,7 @@ fn push_image_inline(
     reason = "the inline walk context is split by convention"
 )]
 fn push_shape_inline(
+    content: &Content,
     kind: tydocx_ir::IrShapeKind,
     body: Option<Content>,
     fill_hex: Option<String>,
@@ -442,13 +446,17 @@ fn push_shape_inline(
     } else {
         None
     };
+    let resolved = resolve_shape(content, styles, engine, locator);
     let Some(body_content) = body else {
         out.push(IrInline::Shape {
             kind,
             span,
             body: Vec::new(),
             fill_hex,
+            geometry: resolved.geometry,
+            loss: resolved.loss,
         });
+        ctx.prev_char = Some('\u{FFFC}');
         return;
     };
     match collect_inlines(&body_content, styles, engine, locator, ctx) {
@@ -458,6 +466,8 @@ fn push_shape_inline(
                 span,
                 body: body_inlines,
                 fill_hex,
+                geometry: resolved.geometry,
+                loss: resolved.loss,
             });
             ctx.prev_char = Some('\u{FFFC}');
         }

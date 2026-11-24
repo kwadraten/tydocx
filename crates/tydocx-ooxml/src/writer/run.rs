@@ -15,6 +15,7 @@ use super::image::{
 };
 use super::math::write_math_inline;
 use super::package::{write_font_triple, write_size_pair};
+use super::shape::write_inline_shape;
 use crate::document::{DocumentStyle, InlineElement, Run};
 
 /// Write one inline element with exactly the body-paragraph semantics.
@@ -88,6 +89,11 @@ pub(super) fn write_inline<W: Write>(
             let n = ctx.shape_id_counter.get() + 1;
             ctx.shape_id_counter.set(n);
             write_anchored_float(writer, float, n, ctx)
+        }
+        InlineElement::Shape(shape) => {
+            let n = ctx.shape_id_counter.get() + 1;
+            ctx.shape_id_counter.set(n);
+            write_inline_shape(writer, shape, n, ctx)
         }
         InlineElement::ColumnBreak => write_column_break(writer),
         InlineElement::FieldToc {
