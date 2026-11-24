@@ -324,6 +324,144 @@ fn issue_inside_outside_margins_c1_reports() {
 }
 
 #[test]
+fn issue_inside_outside_margins_c2_emits_flag() {
+    let package = fixture_package_with_options(
+        "issue_inside_outside_margins",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    let settings = package.part_text("word/settings.xml");
+    assert!(
+        settings.contains("<w:mirrorMargins/>"),
+        "C2 emits w:mirrorMargins, got {settings:?}"
+    );
+    let xml = package.part_text("word/document.xml");
+    assert!(
+        xml.contains(r#"w:left="1417""#) && xml.contains(r#"w:right="850""#),
+        "w:pgMar keeps left=inside (25mm), right=outside (15mm), got {xml:?}"
+    );
+    let outcome = fixture_outcome_with_options(
+        "issue_inside_outside_margins",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    assert!(
+        !constructs(&outcome).iter().any(|c| c == "mirrored-margins"),
+        "a representable mirrored document reports no degradation"
+    );
+}
+
+#[test]
+fn mirrored_margins_inside_outside_c2_emits_flag() {
+    let package = fixture_package_with_options(
+        "mirrored_margins_inside_outside",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    let settings = package.part_text("word/settings.xml");
+    assert!(
+        settings.contains("<w:mirrorMargins/>"),
+        "C2 emits w:mirrorMargins, got {settings:?}"
+    );
+    let xml = package.part_text("word/document.xml");
+    assert!(
+        xml.contains(r#"w:left="1134""#) && xml.contains(r#"w:right="567""#),
+        "w:pgMar keeps left=inside (20mm), right=outside (10mm), got {xml:?}"
+    );
+}
+
+#[test]
+fn mirrored_margins_inside_outside_c3_emits_flag() {
+    let c3 = fixture_package_with_options(
+        "mirrored_margins_inside_outside",
+        &ConvertOptions::new(CompatMode::C3),
+    );
+    assert!(
+        c3.part_text("word/settings.xml")
+            .contains("<w:mirrorMargins/>"),
+        "C3 emits w:mirrorMargins"
+    );
+    // D1: the document body is field-free, so C3 reproduces C2 exactly.
+    let c2 = fixture_package_with_options(
+        "mirrored_margins_inside_outside",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    assert_eq!(
+        c2.part_text("word/document.xml"),
+        c3.part_text("word/document.xml"),
+        "C3 reproduces the C2 document text"
+    );
+}
+
+#[test]
+fn mirrored_margins_inside_outside_c1_reports() {
+    let outcome = c1("mirrored_margins_inside_outside");
+    assert_has(&outcome, "mirrored-margins");
+    let package = fixture_package_with_options(
+        "mirrored_margins_inside_outside",
+        &ConvertOptions::new(CompatMode::C1),
+    );
+    assert!(
+        !package
+            .part_text("word/settings.xml")
+            .contains("mirrorMargins"),
+        "C1 does not emit w:mirrorMargins"
+    );
+}
+
+/// `w:mirrorMargins` is document-global: a document that mixes inside/outside
+/// margins with a one-sided asymmetric section cannot be faithful on both
+/// halves. The flag still goes out — the mirrored section needs it — and the
+/// one-sided section's even-page swap is reported.
+#[test]
+fn mirrored_margins_mixed_section_c2_flags_and_reports() {
+    let outcome = fixture_outcome_with_options(
+        "mirrored_margins_mixed",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    assert!(
+        outcome.degradations.iter().any(|d| {
+            d.construct == "mirrored-margins"
+                && d.action == tydocx_core::DegradationAction::Approximated
+        }),
+        "the one-sided section's swap is reported, got {:?}",
+        outcome.degradations
+    );
+    let package = fixture_package_with_options(
+        "mirrored_margins_mixed",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    assert!(
+        package
+            .part_text("word/settings.xml")
+            .contains("<w:mirrorMargins/>"),
+        "the flag is still emitted — the mirrored section needs it"
+    );
+}
+
+/// A one-sided section whose lateral margins are symmetric is unaffected by
+/// the document-global flag — representable, so no report.
+#[test]
+fn mirrored_margins_mixed_symmetric_c2_flags_without_report() {
+    let outcome = fixture_outcome_with_options(
+        "mirrored_margins_mixed_symmetric",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    assert!(
+        !constructs(&outcome).iter().any(|c| c == "mirrored-margins"),
+        "a symmetric one-sided section is unaffected by the flag, got {:?}",
+        outcome.degradations
+    );
+    let package = fixture_package_with_options(
+        "mirrored_margins_mixed_symmetric",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    assert!(
+        package
+            .part_text("word/settings.xml")
+            .contains("<w:mirrorMargins/>"),
+        "the flag is still emitted for the mirrored section"
+    );
+}
+
+#[test]
 fn issue_page_numbering_change_c1_reports() {
     let outcome = c1("issue_page_numbering_change");
     assert_has(&outcome, "page-numbering-change");

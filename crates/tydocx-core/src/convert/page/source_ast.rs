@@ -29,6 +29,10 @@ pub struct SourceStyleOverrides {
     pub page_numbering: Option<PageNumberingDecl>,
     pub numbering_changed: bool,
     pub margins_mirrored: bool,
+    /// A margin dict resolved left ≠ right without inside/outside — combined
+    /// with `margins_mirrored` it means the document-global `w:mirrorMargins`
+    /// also swaps that section's margins on even pages.
+    pub one_sided_asymmetric_margins: bool,
     pub page_furniture: bool,
     // Which furniture slot was declared — lets the paged-frame walk know a
     // trailing `place` tag at the page origin can only be `page(foreground:)`
@@ -126,6 +130,7 @@ impl SourceStyleOverrides {
         fill!(page_numbering);
         self.numbering_changed |= other.numbering_changed;
         self.margins_mirrored |= other.margins_mirrored;
+        self.one_sided_asymmetric_margins |= other.one_sided_asymmetric_margins;
         self.page_furniture |= other.page_furniture;
         self.page_foreground |= other.page_foreground;
         self.page_background |= other.page_background;
@@ -1340,6 +1345,9 @@ fn parse_margin_value(expr: typst_syntax::ast::Expr<'_>, ovr: &mut SourceStyleOv
             let (bottom_twips, bottom_em) = pick_margin_amount(&[rest, y, bottom]);
             let (left_twips, left_em) = pick_margin_amount(&[rest, x, left]);
             let (right_twips, right_em) = pick_margin_amount(&[rest, x, right]);
+            if left_twips != right_twips || left_em != right_em {
+                ovr.one_sided_asymmetric_margins = true;
+            }
             if top_twips.is_some() || top_em.is_some() {
                 ovr.margin_top = top_twips;
                 ovr.margin_top_em = top_em;

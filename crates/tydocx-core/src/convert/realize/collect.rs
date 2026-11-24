@@ -92,6 +92,10 @@ pub struct Collector<'a> {
     first_snapshot: Option<PageSnapshot>,
     sections: Vec<IrSection>,
     section_span: Option<Span>,
+    /// A top-level page state carried one-sided margins with left ≠ right —
+    /// combined with `margins_mirrored` it means the document-global
+    /// `w:mirrorMargins` also swaps that state's margins on even pages.
+    one_sided_asymmetric_margins: bool,
     /// The `\@` picture `document.date` renders in its kind-dependent auto
     /// format, resolved from `DocumentInfo::date` before collection.
     doc_date_picture: Option<&'static str>,
@@ -204,6 +208,7 @@ pub fn collect_document(
         first_snapshot: None,
         sections: Vec::new(),
         section_span: None,
+        one_sided_asymmetric_margins: false,
         doc_date_picture: info.date_picture,
         _marker: std::marker::PhantomData,
     };
@@ -211,7 +216,8 @@ pub fn collect_document(
     let body = collector.collect_blocks(pairs, engine, locator, true)?;
     let sections = std::mem::take(&mut collector.sections);
     let first_snapshot = collector.first_snapshot.take();
-    let chain_overrides = super::chain::chain_overrides(pairs);
+    let mut chain_overrides = super::chain::chain_overrides(pairs);
+    chain_overrides.one_sided_asymmetric_margins |= collector.one_sided_asymmetric_margins;
     let state = CollectorState {
         footnote_markers: std::mem::take(&mut collector.footnote_markers),
         footnote_bodies: std::mem::take(&mut collector.footnote_bodies),
@@ -473,6 +479,8 @@ impl Collector<'_> {
             let (content, styles) = pairs[i];
             if track_sections && content.to_packed::<PagebreakElem>().is_none() {
                 let snapshot = PageSnapshot::resolve(styles);
+                self.one_sided_asymmetric_margins |= !snapshot.two_sided
+                    && snapshot.left_pt.to_bits() != snapshot.right_pt.to_bits();
                 match &self.page_snapshot {
                     None => {
                         self.page_snapshot = Some(snapshot.clone());
@@ -4612,6 +4620,8 @@ struct PageSnapshot {
     bottom_pt: f64,
     left_pt: f64,
     right_pt: f64,
+    /// `margin.two_sided` — inside/outside margins swap on even pages.
+    two_sided: bool,
     columns: u32,
     /// `columns(gutter:)` resolved on the chain — `Some` only while the
     /// page is multi-column, so a `#set columns(gutter:)` change on a
@@ -4646,6 +4656,7 @@ impl PageSnapshot {
             bottom_pt: margin_side_resolved(custom_margin.sides.bottom, height_pt, auto_margin),
             left_pt: margin_side_resolved(custom_margin.sides.left, width_pt, auto_margin),
             right_pt: margin_side_resolved(custom_margin.sides.right, width_pt, auto_margin),
+            two_sided: custom_margin.two_sided.unwrap_or(false),
             columns,
             column_gutter: (columns > 1).then(|| styles.get(ColumnsElem::gutter).resolve(styles)),
             header_pt: styles.resolve(PageElem::header_ascent).abs.to_pt(),
@@ -4664,6 +4675,7 @@ impl PageSnapshot {
             bottom_pt: auto_margin,
             left_pt: auto_margin,
             right_pt: auto_margin,
+            two_sided: false,
             columns,
             column_gutter: (columns > 1).then(|| styles.get(ColumnsElem::gutter).resolve(styles)),
             header_pt: styles.resolve(PageElem::header_ascent).abs.to_pt(),

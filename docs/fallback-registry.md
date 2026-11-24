@@ -282,11 +282,14 @@ bodies — now comes from `StyleChain`s or element identity.
   `txbxContent`, or `w:pBdr` for stroked bands.
 
 ### `inside:`/`outside:` margins
-- **Current:** keys parse to `margins_mirrored`; C1 reports
-  `mirrored-margins`, all levels keep the resolved left/right values —
-  `w:mirrorMargins` is never emitted.
-- **C2 target:** `w:mirrorMargins` in `settings.xml`; `sectPr` `pgMar`
-  left=inside, right=outside (Word swaps on even pages).
+- **Current:** keys parse to `margins_mirrored`; C2/C3 emit
+  `w:mirrorMargins` in `settings.xml` (the `sectPr` `pgMar` already carries
+  left=inside, right=outside — the form Word reads under the flag). C1 keeps
+  report-and-no-flag: `mirrored-margins` Skipped, no setting emitted. A
+  document that mixes inside/outside with one-sided asymmetric margins
+  cannot be faithful on both halves (the flag is document-global): the flag
+  still goes out and `mirrored-margins` reports the one-sided section's
+  even-page swap as approximated.
 
 ### Decorated / multi-piece page-numbering patterns
 - **Current:** `numbering_page_format` maps arabic/lower-roman/upper-roman/

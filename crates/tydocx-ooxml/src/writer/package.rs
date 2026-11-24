@@ -283,6 +283,7 @@ pub(super) fn generate_settings(
     writer: &mut Writer<&mut Vec<u8>>,
     style: &DocumentStyle,
     even_and_odd_headers: bool,
+    mirror_margins: bool,
     update_fields: bool,
 ) -> io::Result<()> {
     writer
@@ -296,6 +297,9 @@ pub(super) fn generate_settings(
             "http://schemas.openxmlformats.org/officeDocument/2006/math",
         ))
         .write_inner_content(|w| {
+            if mirror_margins {
+                w.create_element("w:mirrorMargins").write_empty()?;
+            }
             if style.suppress_auto_hyphens {
                 w.create_element("w:suppressAutoHyphens").write_empty()?;
             }

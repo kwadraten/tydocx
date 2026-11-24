@@ -193,7 +193,7 @@ flowchart LR
 | `#set page(numbering: "…")` | `w:pgNumType w:fmt` per section; unmappable pattern → `"page-numbering-pattern"` and glyph-based detection (all levels) | same | same |
 | page number restart | `w:pgNumType w:start` when the rendered footer numbering diverges | same | same |
 | `#set page(header:/footer:)` | `w:headerReference`/`w:footerReference` (default, first, even) + `w:titlePg`/`w:evenAndOddHeaders`; bare page numbers become ` PAGE ` fields inside the generated part. C3: a zone whose whole content is a heading query (`query(selector(heading).before(here()))`, `where(level: N)` picked up) renders as ` STYLEREF "Heading N" ` with the extracted heading text cached; mixed-markup zones stay literal | page-1 zone kept as literal paragraphs + `"header-footer-variant"` | three slots; mid-document variants beyond what the slots express → `"header-footer-variant"` report |
-| `#set page(margin: (inside/outside))` two-sided | `w:mirrorMargins` is **not** emitted | + `"mirrored-margins"` | silently kept as resolved left/right |
+| `#set page(margin: (inside/outside))` two-sided | `w:mirrorMargins` in `settings.xml`; `w:pgMar` left/right are inside/outside | + `"mirrored-margins"`, no flag | flag emitted; a doc mixing inside/outside with one-sided asymmetric margins → `"mirrored-margins"` approximated (the flag is document-global) |
 | `#set page(foreground:/background:)` | `wp:anchor` (never `wp:inline`) inside the default/even/first **header** part selected by the layer's page-variation shape; `positionH`/`positionV` `relativeFrom="page"`; text editable in `wps:txbx`, images as `pic:pic`, solid rects as `a:solidFill` shapes; background units get `behindDoc="1"`, foreground `behindDoc="0"` | furniture text literalized into the header part + `"page-foreground"` | anchored; transformed/clipped groups keep their content but lose the transform + `"page-foreground"`; unrepresentable per-page variation keeps page 1's layer on `first` + `"page-foreground"` approximated |
 | `page(fill:)` solid | full-page `wp:anchor` `a:solidFill` shape, `behindDoc="1"`, in the default header part | + `"page-foreground"` literalized | non-solid fills → `"page-foreground"` skipped |
 | `#place` inside the header/footer zones | `wp:anchor` paragraph in the same header/footer part (`relativeFrom="page"`), coexisting with the zone's literal/field paragraphs | + `"placed-content"` | anchored in the zone part |
@@ -313,8 +313,10 @@ per-feature *degradation* list above is exhaustive.
   reduced/dropped at C2/C3; only C1 reports them.
 - **Custom `#footnote(numbering:)`** silently falls back to the `numFmt` in
   effect at C2/C3; only C1 reports it.
-- **Two-sided margins** keep resolved left/right at C2/C3 without emitting
-  `w:mirrorMargins`; only C1 reports it.
+- **Two-sided margins** emit `w:mirrorMargins` at C2/C3 (`w:pgMar` already
+  carries left=inside, right=outside); a document that also carries a
+  one-sided asymmetric margin reports `mirrored-margins` approximated since
+  the flag is document-global. Only C1 reports the flag's absence.
 - **`page(fill:)`/foreground/background** anchor into header parts at C2/C3
   (solid fills as a full-page shape, furniture units as `wp:anchor` drawings);
   what Word cannot carry — non-solid fills, transformed/clipped groups,

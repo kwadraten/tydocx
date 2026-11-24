@@ -435,6 +435,7 @@ fn apply_page_and_style_ir(
     world: &TydocxWorld,
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
+    compat: CompatMode,
     degradations: &mut Vec<Degradation>,
 ) {
     if let Some(paged) = paged_doc {
@@ -446,6 +447,7 @@ fn apply_page_and_style_ir(
     let mut styles = chain.clone();
     styles.merge_from(&super::source::gather_source_overrides(world));
     apply_source_overrides(&styles, doc, paged_doc.is_some(), degradations);
+    super::source::report_mixed_margin_mirroring(&styles, compat, degradations);
     // `counter(footnote).update(0)` in a page header — `CounterUpdateElem`'s
     // key is private, so the chain can't identify the counter.
     doc.style.footnote_restart_each_page = super::source::detect_footnote_restart_each_page(world);
@@ -480,6 +482,7 @@ pub fn export_ir_with_ir(
         world,
         paged_doc,
         &mut tmp,
+        options.compat,
         &mut degradations,
     );
     apply_headers_and_footers(
@@ -532,6 +535,7 @@ pub fn export_ir_with_ir(
         footer_first: tmp.footer_first.clone(),
         page_number_footers: tmp.page_number_footers.clone(),
         even_and_odd_headers: tmp.even_and_odd_headers,
+        mirror_margins: tmp.mirror_margins,
         title_page: tmp.title_page,
     };
 
