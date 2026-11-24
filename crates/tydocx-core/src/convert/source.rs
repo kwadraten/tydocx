@@ -1,7 +1,7 @@
 use super::{
     BlockElement, Document, HangingIndent, InlineElement, ParagraphStyle, TydocxWorld, page,
 };
-use crate::compat::{Degradation, DegradationAction};
+use crate::compat::{CompatMode, Degradation, DegradationAction};
 
 /// Apply authoritative values from source AST, overriding heuristic guesses.
 /// Resolve the declared first-line indent (Typst default: 0pt) onto the style.
@@ -235,6 +235,7 @@ fn apply_page_edges(ovr: &page::SourceStyleOverrides, doc: &mut Document, body_p
     if let Some(em) = ovr.margin_right_em {
         doc.page_settings.margin_right = page::pt_to_twips(em * body_pt);
     }
+    doc.mirror_margins = ovr.margins_mirrored;
     if let Some(v) = ovr.header_twips {
         doc.page_settings.header_twips = Some(v);
     }
@@ -273,6 +274,28 @@ fn apply_footnote_entry(ovr: &page::SourceStyleOverrides, doc: &mut Document, bo
         doc.style.footnote_entry.separator_stroke_eighths = Some(eighths);
     }
     doc.style.footnote_entry.justify = ovr.footnote_par_justify;
+}
+
+/// `w:mirrorMargins` is document-global: a document that mixes inside/outside
+/// margins with a one-sided asymmetric margin cannot be faithfully split —
+/// the flag still goes out (the mirrored part needs it) and the one-sided
+/// part's even-page swap is reported. C1 keeps its report-and-no-flag
+/// contract, so this fires at C2/C3 only.
+pub(super) fn report_mixed_margin_mirroring(
+    ovr: &page::SourceStyleOverrides,
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
+) {
+    if compat != CompatMode::C1 && ovr.margins_mirrored && ovr.one_sided_asymmetric_margins {
+        degradations.push(Degradation::new(
+            None,
+            "mirrored-margins",
+            DegradationAction::Approximated,
+            "page margins mix inside/outside and one-sided asymmetric values; \
+             w:mirrorMargins is document-global, so the one-sided section's \
+             margins also swap on even pages",
+        ));
+    }
 }
 
 pub(super) fn apply_source_overrides(

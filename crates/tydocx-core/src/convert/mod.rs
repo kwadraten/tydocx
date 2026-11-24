@@ -195,7 +195,13 @@ pub fn export(
     let mut doc = Document::new();
 
     // 2. Apply page settings and document style.
-    apply_page_and_style(world, paged_doc, &mut doc, &mut degradations);
+    apply_page_and_style(
+        world,
+        paged_doc,
+        &mut doc,
+        options.compat,
+        &mut degradations,
+    );
 
     // 3. Walk the HTML body.
     walk_body(
@@ -252,6 +258,7 @@ fn apply_page_and_style(
     world: &TydocxWorld,
     paged_doc: Option<&PagedDocument>,
     doc: &mut Document,
+    compat: CompatMode,
     degradations: &mut Vec<Degradation>,
 ) {
     // Extract page settings and document style from PagedDocument (heuristic).
@@ -263,6 +270,7 @@ fn apply_page_and_style(
     // Override with authoritative values from source AST.
     let source_overrides = gather_source_overrides(world);
     apply_source_overrides(&source_overrides, doc, paged_doc.is_some(), degradations);
+    source::report_mixed_margin_mirroring(&source_overrides, compat, degradations);
 
     // Footnote numbering restarts per page only when the source resets the
     // footnote counter in a page header; Typst's default is continuous.
@@ -897,6 +905,9 @@ fn run_post_passes(
     // Size-only section breaks stay in all modes (spec-ecma376 §Page-level).
     append_transform_bodies(world, doc);
     if compat == CompatMode::C1 {
+        // Report-and-no-flag: `mirrored-margins` is reported instead of
+        // emitted; the flag is a C2/C3 setting.
+        doc.mirror_margins = false;
         c1_source_degradations(world, degradations);
     }
 

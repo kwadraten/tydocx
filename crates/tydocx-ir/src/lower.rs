@@ -137,6 +137,8 @@ pub fn lower(
     doc.page_number_start = geometry.page_number_start;
     doc.page_number_footers = geometry.page_number_footers.clone();
     doc.even_and_odd_headers = geometry.even_and_odd_headers;
+    // C1 keeps the report-and-no-flag contract for inside/outside margins.
+    doc.mirror_margins = geometry.mirror_margins && !compat.is_c1();
     doc.title_page = geometry.title_page;
     doc.update_fields = compat.is_c3();
 

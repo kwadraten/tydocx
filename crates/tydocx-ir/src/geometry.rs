@@ -19,6 +19,8 @@ pub struct GeometryInput {
     pub page_number_footers: PageNumberFooters,
     /// `w:evenAndOddHeaders` — odd/even margin-zone content differed.
     pub even_and_odd_headers: bool,
+    /// `w:mirrorMargins` — inside/outside page margins swap on even pages.
+    pub mirror_margins: bool,
     /// `w:titlePg` — page 1's margin-zone content differed from the rest.
     pub title_page: bool,
 }

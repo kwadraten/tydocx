@@ -1662,6 +1662,10 @@ pub struct ListNumInstance {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the model mirrors settings.xml flags 1:1; each bool is a distinct Word setting"
+)]
 pub struct Document {
     pub body: Body,
     pub page_settings: PageSettings,
@@ -1701,6 +1705,10 @@ pub struct Document {
     /// `w:evenAndOddHeaders` in settings.xml — Typst's header/footer rendered
     /// different content on odd vs even pages.
     pub even_and_odd_headers: bool,
+    /// `w:mirrorMargins` in settings.xml — Typst's `margin: (inside:/outside:)`
+    /// swapped left/right on even pages. `w:pgMar` already carries
+    /// left=inside, right=outside, which is the form Word reads under the flag.
+    pub mirror_margins: bool,
     /// `w:titlePg` on the section that contains page 1 — Typst's header/footer
     /// differed on the first page (e.g. a `page(header:)` suppressed there).
     pub title_page: bool,
@@ -1753,6 +1761,7 @@ impl Default for Document {
             page_number_start: None,
             page_number_footers: PageNumberFooters::default(),
             even_and_odd_headers: false,
+            mirror_margins: false,
             title_page: false,
             next_list_id: 4,
             list_num_instances: Vec::new(),
