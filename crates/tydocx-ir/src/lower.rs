@@ -64,6 +64,9 @@ pub struct LowerCtx {
     /// Labels attached to the document's footnotes — the set a `NOTEREF`
     /// field may target (only labelled footnotes get a bookmark).
     pub footnote_labels: std::collections::HashSet<String>,
+    /// `SEQ` identifiers for literal enums are document-global (`enum-1`,
+    /// `enum-2`, …) — allocated in lowering order.
+    pub next_enum_seq: u32,
 }
 
 #[derive(Debug, Default)]
@@ -163,6 +166,7 @@ pub fn lower(
             .iter()
             .filter_map(|f| f.label.clone())
             .collect(),
+        next_enum_seq: 0,
     };
 
     for footnote in &ir.footnotes {
@@ -713,11 +717,22 @@ fn field_instruction(kind: &IrField) -> String {
         IrField::NoteRef { label } => {
             format!(" NOTEREF {} \\h ", truncate_bookmark_name(label))
         }
-        IrField::Date => " DATE ".to_string(),
+        IrField::Date { picture } => date_instruction("DATE", picture.as_deref()),
         IrField::Time => " TIME ".to_string(),
         IrField::StyleRef { level } => format!(" STYLEREF \"Heading {level}\" "),
-        IrField::DocProperty { name } => format!(" DOCPROPERTY {name} "),
+        IrField::DocProperty { name, picture } => {
+            date_instruction(&format!("DOCPROPERTY {name}"), picture.as_deref())
+        }
         IrField::Seq { identifier, system } => seq_instruction(identifier, *system),
+    }
+}
+
+/// ` FIELD \@ "picture" ` for a date/time field — the picture is already a
+/// Word date/time picture; a bare field is emitted when it is absent.
+fn date_instruction(code: &str, picture: Option<&str>) -> String {
+    match picture {
+        Some(picture) => format!(" {code} \\@ \"{picture}\" "),
+        None => format!(" {code} "),
     }
 }
 
@@ -1329,6 +1344,7 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                 target_label,
                 display_text,
                 page_ref,
+                ..
             } => {
                 if *page_ref {
                     out.push(InlineElement::FieldPageRef {
@@ -1347,7 +1363,9 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                 rendered,
                 target,
             } => out.push(lower_cite(keys, rendered, target.as_ref(), ctx)),
-            IrInline::Field { kind, body, span } => {
+            IrInline::Field {
+                kind, body, span, ..
+            } => {
                 out.extend(lower_field(kind, body, *span, ctx));
             }
             IrInline::FootnoteMarker { ordinal, rendered } => {
@@ -1371,7 +1389,7 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
             IrInline::PageBreak => out.push(InlineElement::PageBreak),
             IrInline::ColumnBreak => out.push(InlineElement::ColumnBreak),
             IrInline::Tab => out.push(InlineElement::Tab),
-            IrInline::PageField { display_text } => {
+            IrInline::PageField { display_text, .. } => {
                 out.push(InlineElement::FieldPage {
                     display_text: display_text.clone(),
                     bold: false,
@@ -1556,6 +1574,7 @@ fn splice_caption_seq(inlines: &mut Vec<IrInline>, seq: &IrCaptionSeq) {
                 },
                 body: vec![IrInline::Text(numeral_run)],
                 span: None,
+                location: None,
             });
             if !after.is_empty() {
                 let mut run = run.clone();
@@ -1631,7 +1650,7 @@ fn lower_field(
             DegradationAction::Literalized,
             "footnote-counter reference kept as literal text (NOTEREF is a C3 field)".to_string(),
         ),
-        IrField::Date
+        IrField::Date { .. }
         | IrField::Time
         | IrField::StyleRef { .. }
         | IrField::DocProperty { .. }
@@ -1669,7 +1688,7 @@ fn inline_to_runs(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<Run> {
                 rendered: display_text,
                 ..
             }
-            | IrInline::PageField { display_text } => {
+            | IrInline::PageField { display_text, .. } => {
                 runs.push(Run::new(display_text));
             }
             IrInline::FootnoteMarker { rendered, .. } => runs.push(Run::new(rendered)),
@@ -2068,7 +2087,7 @@ fn lower_enum(
     {
         return lower_enum_literal(enumer, doc, ctx);
     }
-    if ctx.compat.is_c1() && enumer.reversed {
+    if enumer.reversed {
         ctx.degrade(
             "enum-reversed",
             DegradationAction::Literalized,
@@ -2094,11 +2113,46 @@ fn lower_enum(
     out
 }
 
+/// A literal-numbered enum (function numbering, unmappable pattern): the
+/// numeral is literal text. At C3 a *flat* enum's numeral is spliced into a
+/// `SEQ enum-N` field — prefix/suffix stay literal, the numeral is the
+/// field's cached result. Items that can't carry a SEQ (a `number:`
+/// override, a numeral with no arabic digit run, a nested enum) stay
+/// literal and report.
 fn lower_enum_literal(
     enumer: &IrEnum,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> Vec<BlockElement> {
+    if enumer.reversed {
+        ctx.degrade(
+            "enum-reversed",
+            DegradationAction::Literalized,
+            "reversed enum is not representable; items are numbered in order".to_string(),
+        );
+    }
+    let nested = enumer.depth > 0;
+    let seq = ctx.compat.is_c3() && !enumer.reversed && !nested;
+    let seq_id = seq.then(|| {
+        ctx.next_enum_seq += 1;
+        format!("enum-{}", ctx.next_enum_seq)
+    });
+    if nested && ctx.compat.is_c3() {
+        ctx.degrade(
+            "enum-seq-nested",
+            DegradationAction::Approximated,
+            "a nested literal-numbered enum cannot be expressed by a SEQ field; \
+             the numerals stay literal"
+                .to_string(),
+        );
+    }
+    // `expected` is the numeral the next SEQ should display: a plain
+    // `{ SEQ id }` shows the previous SEQ + 1. `None` means the sequence is
+    // broken (a literal item) and the next SEQ must reset with `\r` to its
+    // own numeral. `emitted` tracks the first SEQ — a `start` other than 1
+    // needs `\r` there too.
+    let mut expected = Some(u64::from(enumer.start));
+    let mut emitted = false;
     let mut out = Vec::new();
     for item in &enumer.items {
         let mut item_blocks = Vec::new();
@@ -2106,10 +2160,54 @@ fn lower_enum_literal(
             item_blocks.extend(lower_block(block, doc, ctx));
         }
         if let Some(number) = &item.number_text {
+            let mut inlines = enum_number_inlines(number);
+            let mut reason = None;
+            let mut fielded = false;
+            if let (Some(id), Some((prefix, numeral, suffix))) =
+                (seq_id.as_ref(), enum_seq_split(number))
+            {
+                if item.number_override {
+                    reason = Some("enum-seq-override");
+                } else if expected.is_some_and(|e| e != numeral) {
+                    reason = Some("enum-seq-numeral");
+                } else {
+                    let reset = if expected.is_none() || (!emitted && enumer.start != 1) {
+                        format!("\\r {numeral} ")
+                    } else {
+                        String::new()
+                    };
+                    inlines = Vec::new();
+                    if !prefix.is_empty() {
+                        inlines.push(InlineElement::Text(Run::new(prefix)));
+                    }
+                    inlines.push(InlineElement::Field {
+                        instruction: format!(" SEQ {id} {reset}"),
+                        result: vec![Run::new(numeral.to_string())],
+                    });
+                    if !suffix.is_empty() {
+                        inlines.push(InlineElement::Text(Run::new(format!("{suffix} "))));
+                    }
+                    expected = Some(numeral + 1);
+                    emitted = true;
+                    fielded = true;
+                }
+            } else if seq_id.is_some() {
+                reason = Some("enum-seq-numeral");
+            }
+            if let Some(reason) = reason {
+                ctx.degrade(
+                    reason,
+                    DegradationAction::Approximated,
+                    format!("enum numeral {number:?} stays literal"),
+                );
+            }
+            if !fielded {
+                // A literal item breaks the SEQ sequence.
+                expected = None;
+            }
             for element in &mut item_blocks {
                 if let BlockElement::Paragraph(para) = element {
-                    para.inlines
-                        .insert(0, InlineElement::Text(Run::new(format!("{number} "))));
+                    para.inlines.splice(0..0, inlines);
                     break;
                 }
             }
@@ -2117,6 +2215,34 @@ fn lower_enum_literal(
         out.extend(item_blocks);
     }
     out
+}
+
+/// `number_text + " "` as a literal run — the C2 form of a literal numeral.
+fn enum_number_inlines(number: &str) -> Vec<InlineElement> {
+    vec![InlineElement::Text(Run::new(format!("{number} ")))]
+}
+
+/// Split a rendered literal numeral (`§1.`) at its arabic digit run —
+/// `Some((prefix, numeral, suffix))` when exactly one contiguous ASCII-digit
+/// run exists and it re-renders a `u64` identically (no leading zeros, which
+/// a SEQ field could not reproduce). Anything else can't be a SEQ numeral.
+fn enum_seq_split(number: &str) -> Option<(String, u64, String)> {
+    let start = number.find(|c: char| c.is_ascii_digit())?;
+    let rest = &number[start..];
+    let len = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    let numeral: u64 = rest[..len].parse().ok()?;
+    if numeral.to_string() != rest[..len]
+        || number[start + len..].contains(|c: char| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((
+        number[..start].to_string(),
+        numeral,
+        number[start + len..].to_string(),
+    ))
 }
 
 /// Typst `list(indent:, body-indent:)` → `(w:left, w:hanging)`: the body text
@@ -2431,6 +2557,26 @@ mod tests {
     }
 
     #[test]
+    fn enum_seq_split_accepts_only_a_single_arabic_numeral() {
+        assert_eq!(
+            enum_seq_split("§1."),
+            Some(("§".to_owned(), 1, ".".to_owned()))
+        );
+        assert_eq!(
+            enum_seq_split("(12)"),
+            Some(("(".to_owned(), 12, ")".to_owned()))
+        );
+        assert_eq!(enum_seq_split("3"), Some((String::new(), 3, String::new())));
+        for unexpressible in ["§①", "§I.", "1.2", "§06", "no digits"] {
+            assert_eq!(
+                enum_seq_split(unexpressible),
+                None,
+                "{unexpressible} can't be a SEQ numeral"
+            );
+        }
+    }
+
+    #[test]
     fn heading_number_and_bookmark() {
         let mut ir = empty_doc();
         ir.body.push(IrBlock::Heading {
@@ -2557,6 +2703,7 @@ mod tests {
         ir.body.push(IrBlock::Enum(IrEnum {
             items: vec![IrEnumItem {
                 number_text: Some("1.".to_owned()),
+                number_override: false,
                 body: vec![IrBlock::Paragraph(text_para("one"))],
             }],
             numbering: pattern(&[("", IrNumeralSystem::Arabic)], ".", false),
@@ -2577,6 +2724,7 @@ mod tests {
         let nested = IrBlock::Enum(IrEnum {
             items: vec![IrEnumItem {
                 number_text: Some("a)".to_owned()),
+                number_override: false,
                 body: vec![IrBlock::Paragraph(text_para("nested"))],
             }],
             numbering: pattern(
@@ -2599,10 +2747,12 @@ mod tests {
             items: vec![
                 IrEnumItem {
                     number_text: Some("1)".to_owned()),
+                    number_override: false,
                     body: vec![IrBlock::Paragraph(text_para("one")), nested],
                 },
                 IrEnumItem {
                     number_text: Some("2)".to_owned()),
+                    number_override: false,
                     body: vec![IrBlock::Paragraph(text_para("two"))],
                 },
             ],
@@ -2638,6 +2788,7 @@ mod tests {
         ir.body.push(IrBlock::Enum(IrEnum {
             items: vec![IrEnumItem {
                 number_text: None,
+                number_override: false,
                 body: vec![IrBlock::Paragraph(text_para("one"))],
             }],
             numbering: IrNumberingPattern {
@@ -2784,11 +2935,13 @@ mod tests {
             target_label: "tab".to_owned(),
             display_text: "Table 1".to_owned(),
             page_ref: false,
+            page_target: None,
         });
         para.inlines.push(IrInline::Ref {
             target_label: "tab".to_owned(),
             display_text: "1".to_owned(),
             page_ref: true,
+            page_target: None,
         });
         ir.body.push(IrBlock::Paragraph(para));
         let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
@@ -2989,6 +3142,7 @@ mod tests {
         ir.body.push(IrBlock::Enum(IrEnum {
             items: vec![IrEnumItem {
                 number_text: Some("1.".to_owned()),
+                number_override: false,
                 body: vec![IrBlock::Paragraph(text_para("item"))],
             }],
             numbering: pattern(&[("", IrNumeralSystem::Arabic)], ".", false),

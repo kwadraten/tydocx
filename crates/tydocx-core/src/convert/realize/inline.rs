@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use crate::convert::footnote::parse_circled_number;
 use crate::convert::page::{
-    CounterUse, DateTimeUse, classify_counter_use, counter_footnote_label, counter_page_label,
-    datetime_use, docproperty_use,
+    CounterUse, DatePattern, DateTimeUse, classify_counter_use, counter_footnote_label,
+    counter_page_label, date_display_pattern, datetime_use, docproperty_use, typst_pattern_to_word,
 };
 use tydocx_ir::{
     Degradation, DegradationAction, HangingIndent, IrField, IrFirstLineIndent, IrImage, IrInline,
-    IrParStyle, IrParagraph,
+    IrPageTarget, IrParStyle, IrParagraph,
 };
 use tydocx_ooxml::document::Alignment;
 use typst_library::diag::SourceResult;
@@ -68,6 +68,10 @@ pub struct InlineCtx<'a> {
     /// the chain a set rule scoped inside a show-rule body lands on, whether
     /// or not a `ParElem` pair materializes. `None` for an empty fragment.
     pub scoped_par: Option<IrParStyle>,
+    /// The `\@` picture `document.date` renders in its kind-dependent auto
+    /// format — `None` when the `document(date:)` value has no datetime
+    /// (`none` or unrecoverable).
+    pub doc_date_picture: Option<&'static str>,
 }
 
 pub fn smart_quotes_for(styles: StyleChain<'_>) -> (Lang, Option<Region>) {
@@ -591,9 +595,14 @@ fn handle_tag_start(
             let display = marker_text_in(&pairs[i + 1..end]);
             ctx.prev_char = display.chars().next_back().or(ctx.prev_char);
             out.push(IrInline::Ref {
-                target_label: label,
+                target_label: label.clone(),
                 display_text: display,
                 page_ref: true,
+                page_target: label_location(ctx.label_map, &label).map(|loc| IrPageTarget {
+                    location: loc.hash(),
+                    numbered: false,
+                    span: Some(inner.span()),
+                }),
             });
             return end + 1;
         }
@@ -606,6 +615,8 @@ fn handle_tag_start(
                 ctx.prev_char = display.chars().next_back().or(ctx.prev_char);
                 out.push(IrInline::PageField {
                     display_text: display,
+                    location: Some(location.hash()),
+                    span: Some(inner.span()),
                 });
                 return end + 1;
             }
@@ -661,15 +672,39 @@ fn handle_tag_start(
             CounterUse::Other => {
                 let field = ctx
                     .source
-                    .and_then(|source| datetime_use(source, inner.span()))
-                    .map(|use_| match use_ {
-                        DateTimeUse::Date => IrField::Date,
-                        DateTimeUse::Time => IrField::Time,
+                    .and_then(|source| {
+                        datetime_use(source, inner.span()).map(|use_| {
+                            let pattern = date_display_pattern(source, inner.span());
+                            match use_ {
+                                DateTimeUse::Date => IrField::Date {
+                                    picture: date_picture(
+                                        pattern,
+                                        Some("yyyy-MM-dd"),
+                                        inner.span(),
+                                        ctx.degradations,
+                                    ),
+                                },
+                                DateTimeUse::Time => IrField::Time,
+                            }
+                        })
                     })
                     .or_else(|| {
                         ctx.source.and_then(|source| {
-                            docproperty_use(source, inner.span()).map(|name| IrField::DocProperty {
-                                name: name.to_string(),
+                            docproperty_use(source, inner.span()).map(|name| {
+                                let picture = if name == "CreateDate" {
+                                    date_picture(
+                                        date_display_pattern(source, inner.span()),
+                                        ctx.doc_date_picture,
+                                        inner.span(),
+                                        ctx.degradations,
+                                    )
+                                } else {
+                                    None
+                                };
+                                IrField::DocProperty {
+                                    name: name.to_string(),
+                                    picture,
+                                }
                             })
                         })
                     });
@@ -728,6 +763,7 @@ fn handle_tag_start(
             footnote_circled: &mut *ctx.footnote_circled,
             layouter_index: ctx.layouter_index,
             scoped_par: None,
+            doc_date_picture: ctx.doc_date_picture,
         };
         if let FootnoteBody::Content(body) = &fn_elem.body {
             // Split on parbreak children so a multi-paragraph footnote body
@@ -812,10 +848,20 @@ fn handle_tag_start(
         }
         let display_text = next_marker_text(pairs, i + 1).unwrap_or_default();
         ctx.prev_char = display_text.chars().next_back().or(ctx.prev_char);
+        let page_ref = reference.form.get(styles) == RefForm::Page;
         out.push(IrInline::Ref {
-            target_label,
+            target_label: target_label.clone(),
             display_text,
-            page_ref: reference.form.get(styles) == RefForm::Page,
+            page_ref,
+            page_target: page_ref
+                .then(|| {
+                    label_location(ctx.label_map, &target_label).map(|loc| IrPageTarget {
+                        location: loc.hash(),
+                        numbered: true,
+                        span: None,
+                    })
+                })
+                .flatten(),
         });
         return skip_to_end(pairs, i + 1, location);
     }
@@ -883,6 +929,54 @@ fn handle_tag_start(
     i + 1
 }
 
+/// The `\@` picture a date/time field emits: the translated literal pattern,
+/// or `auto` for the kind-dependent auto format. An unmappable component or
+/// a computed pattern emits a bare field plus a `date-format-switch`
+/// degradation naming what was dropped.
+fn date_picture(
+    pattern: DatePattern,
+    auto: Option<&'static str>,
+    span: Span,
+    degradations: &mut Vec<Degradation>,
+) -> Option<String> {
+    let degrade = |degradations: &mut Vec<Degradation>, message: String| {
+        degradations.push(Degradation {
+            span: Some(span),
+            construct: "date-format-switch",
+            action: DegradationAction::Approximated,
+            message,
+        });
+        None
+    };
+    match pattern {
+        DatePattern::Auto => match auto {
+            Some(picture) => Some(picture.to_string()),
+            None => degrade(
+                degradations,
+                "the datetime kind cannot be recovered, so no `\\@` picture switch \
+                 is emitted"
+                    .to_string(),
+            ),
+        },
+        DatePattern::Literal(pattern) => match typst_pattern_to_word(&pattern) {
+            Ok(picture) => Some(picture),
+            Err(component) => degrade(
+                degradations,
+                format!(
+                    "the `{component}` component in the display pattern has no Word `\\@` \
+                     equivalent; the field is emitted without a picture switch"
+                ),
+            ),
+        },
+        DatePattern::Computed => degrade(
+            degradations,
+            "the display pattern is computed, not a string literal; the field is emitted \
+             without a `\\@` picture switch"
+                .to_string(),
+        ),
+    }
+}
+
 /// Consume a `context` tag group's rendered inlines into a generic C3 field:
 /// the group's own realization is the cached result (the C2 literal text),
 /// and `kind` is the field instruction Word recomputes on update.
@@ -905,8 +999,17 @@ fn push_context_field(
         kind,
         body,
         span: Some(span),
+        location: Some(location.hash()),
     });
     end + 1
+}
+
+/// The `Location` of the element carrying `label` — the map is keyed
+/// location → name, so a page-target lookup scans it.
+fn label_location(map: &HashMap<Location, String>, label: &str) -> Option<Location> {
+    map.iter()
+        .find(|(_, name)| name.as_str() == label)
+        .map(|(loc, _)| *loc)
 }
 
 /// The last rendered character a run of inlines contributes — for the
