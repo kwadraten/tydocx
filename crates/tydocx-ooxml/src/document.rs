@@ -1727,6 +1727,11 @@ pub struct Document {
     /// Emit `<w:updateFields w:val="true"/>` in settings.xml (C3: Word
     /// refreshes every field on open).
     pub update_fields: bool,
+    /// `w:type` on the body-final `w:sectPr` — how the last section starts.
+    /// `None` emits no `w:type` (OOXML's `nextPage` default); set to
+    /// `Continuous` when a `#columns` block's trailing section carries on
+    /// mid-page.
+    pub final_section_type: Option<SectionBreakType>,
 }
 
 impl Default for Document {
@@ -1756,6 +1761,7 @@ impl Default for Document {
             bibliography_style: None,
             bibliography_style_xsl: None,
             update_fields: false,
+            final_section_type: None,
         }
     }
 }

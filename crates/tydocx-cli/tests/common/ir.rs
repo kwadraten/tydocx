@@ -152,7 +152,10 @@ fn block_texts<'a>(
                     generated.insert(number.display.clone());
                 }
             }
-            IrBlock::Quote { body } | IrBlock::Place { body, .. } | IrBlock::Shape { body, .. } => {
+            IrBlock::Quote { body }
+            | IrBlock::Place { body, .. }
+            | IrBlock::Shape { body, .. }
+            | IrBlock::Columns { body, .. } => {
                 block_texts(&mut body.iter(), paragraphs, generated, out_of_band);
             }
             IrBlock::Raw(raw) => {
@@ -260,6 +263,7 @@ fn variant_walk(doc: &IrDocument) -> (BTreeSet<&'static str>, BTreeSet<&'static 
             IrBlock::Place { .. } => "Place",
             IrBlock::PageBreak { .. } => "PageBreak",
             IrBlock::Shape { .. } => "Shape",
+            IrBlock::Columns { .. } => "Columns",
         });
         match block {
             IrBlock::Table(t) => stack.extend(
@@ -277,7 +281,8 @@ fn variant_walk(doc: &IrDocument) -> (BTreeSet<&'static str>, BTreeSet<&'static 
             IrBlock::Figure { body, .. }
             | IrBlock::Quote { body }
             | IrBlock::Place { body, .. }
-            | IrBlock::Shape { body, .. } => stack.extend(body.iter()),
+            | IrBlock::Shape { body, .. }
+            | IrBlock::Columns { body, .. } => stack.extend(body.iter()),
             IrBlock::List(list) => stack.extend(item_blocks(&list.items)),
             IrBlock::Enum(enumer) => stack.extend(enum_item_blocks(&enumer.items)),
             IrBlock::Outline { title, entries, .. } => {

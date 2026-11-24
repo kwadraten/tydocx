@@ -105,9 +105,10 @@ fn ir_has_overline(doc: &IrDocument) -> bool {
             IrBlock::Figure { body, caption, .. } => blocks_have(body) || inlines_have(caption),
             IrBlock::List(list) => list.items.iter().any(|item| blocks_have(&item.body)),
             IrBlock::Enum(enumer) => enumer.items.iter().any(|item| blocks_have(&item.body)),
-            IrBlock::Quote { body } | IrBlock::Place { body, .. } | IrBlock::Shape { body, .. } => {
-                blocks_have(body)
-            }
+            IrBlock::Quote { body }
+            | IrBlock::Place { body, .. }
+            | IrBlock::Shape { body, .. }
+            | IrBlock::Columns { body, .. } => blocks_have(body),
             IrBlock::Bibliography { entries } => {
                 entries.iter().any(|entry| inlines_have(&entry.body))
             }
@@ -278,7 +279,10 @@ fn patch_overlines_in_blocks(blocks: &mut [IrBlock], state: &mut PatchState<'_>)
                     patch_overlines_in_blocks(&mut item.body, state);
                 }
             }
-            IrBlock::Quote { body } | IrBlock::Place { body, .. } | IrBlock::Shape { body, .. } => {
+            IrBlock::Quote { body }
+            | IrBlock::Place { body, .. }
+            | IrBlock::Shape { body, .. }
+            | IrBlock::Columns { body, .. } => {
                 patch_overlines_in_blocks(body, state);
             }
             IrBlock::Bibliography { entries } => {

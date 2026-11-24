@@ -4,9 +4,9 @@ use std::fmt::Write;
 use tydocx_ooxml::document::{
     AnchorWrap, AnchoredContent, AnchoredFloat, BlockElement, CellBorders, CellContent, Document,
     EquationNumber, FirstLineIndent, FootnoteBookmark, ImageData, ImageFormat, InlineElement,
-    LevelOverride, ListInfo, Paragraph, RelFrom, SectionBreak, SectionBreakType, Table,
-    TableBorders, TableCell, TableCellMargins, TableFloat, TableRow, VMerge,
-    truncate_bookmark_name,
+    LevelOverride, ListInfo, PageNumberFormat, PageSettings, Paragraph, RelFrom, SectionBreak,
+    SectionBreakType, Table, TableBorders, TableCell, TableCellMargins, TableFloat, TableRow,
+    VMerge, truncate_bookmark_name,
 };
 
 use crate::degradation::{Degradation, DegradationAction};
@@ -224,36 +224,70 @@ pub fn lower(
 
 /// Sections after the first end the previous section with a `w:sectPr` on
 /// its last paragraph; the final section's settings close the body.
+///
+/// A `w:sectPr` describes the section that *ends* at it: its `w:type`
+/// records how that section started. `lower_body` therefore tracks
+/// `current_section_start` — the start type of the section currently
+/// collecting paragraphs — and stamps it on the break that ends the
+/// section. `IrSection` boundaries always open on a fresh page; a
+/// `#columns` block instead opens and closes `continuous` sections
+/// mid-page, so the ambient section that follows it starts `continuous`
+/// too.
 fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx: &mut LowerCtx) {
     let mut sections = ir.sections.iter().peekable();
-    let mut current_settings = ir.page.clone();
-    let mut current_numbering = if ir.sections.is_empty() {
-        geometry.page_numbering
-    } else {
-        ir.first_numbering.or(geometry.page_numbering)
+    let mut state = SectionState {
+        settings: ir.page.clone(),
+        numbering: if ir.sections.is_empty() {
+            geometry.page_numbering
+        } else {
+            ir.first_numbering.or(geometry.page_numbering)
+        },
+        numbering_start: geometry.page_number_start,
+        start_type: SectionBreakType::NextPage,
     };
-    let mut current_start = geometry.page_number_start;
     let mut first_break_emitted = false;
+    // Once a columns block has run, `state.settings` is the ambient
+    // section restored after it — assign the tracked values even when no
+    // `IrSection` exists.
+    let mut columns_lowered = false;
     let mut page = FreshPage::Armed;
     for (index, block) in ir.body.iter().enumerate() {
         while let Some(next) = sections.next_if(|s| s.start_block == index) {
             if !doc.body.elements.is_empty() {
                 attach_section_break(
                     &mut doc.body.elements,
-                    SectionBreak {
-                        break_type: SectionBreakType::NextPage,
-                        page_settings: Some(current_settings.clone()),
-                        title_page: !first_break_emitted && geometry.title_page,
-                        page_numbering: current_numbering,
-                        page_number_start: current_start,
-                    },
+                    state.ending_break(!first_break_emitted && geometry.title_page),
+                    true,
                 );
                 first_break_emitted = true;
                 page = FreshPage::Unarmed;
             }
-            current_settings = next.settings.clone();
-            current_numbering = next.numbering.or(current_numbering);
-            current_start = next.numbering_start;
+            state.settings = next.settings.clone();
+            state.numbering = next.numbering.or(state.numbering);
+            state.numbering_start = next.numbering_start;
+            state.start_type = SectionBreakType::NextPage;
+        }
+        if let IrBlock::Columns {
+            count,
+            gutter_twips,
+            body,
+            ..
+        } = block
+        {
+            let title_page = !first_break_emitted && geometry.title_page;
+            lower_columns_block(
+                *count,
+                *gutter_twips,
+                body,
+                &mut state,
+                title_page,
+                doc,
+                ctx,
+            );
+            first_break_emitted = true;
+            columns_lowered = true;
+            page = FreshPage::No;
+            continue;
         }
         if let IrBlock::PageBreak { weak, to } = block {
             let next_transition = match ir.body.get(index + 1) {
@@ -269,11 +303,123 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
         }
         doc.body.elements.extend(lowered);
     }
-    if !ir.sections.is_empty() {
-        doc.page_settings = current_settings;
-        doc.page_numbering = current_numbering;
-        doc.page_number_start = current_start;
+    if !ir.sections.is_empty() || columns_lowered {
+        doc.page_settings = state.settings;
+        doc.page_numbering = state.numbering;
+        doc.page_number_start = state.numbering_start;
     }
+    if columns_lowered {
+        // `nextPage` is OOXML's default — only a continuous start needs a
+        // `w:type` on the body-final sectPr.
+        doc.final_section_type =
+            (state.start_type != SectionBreakType::NextPage).then_some(state.start_type);
+    }
+}
+
+/// The section currently collecting paragraphs in `lower_body` — the
+/// page settings and numbering a closing `w:sectPr` stamps, plus how the
+/// section started (a `nextPage` or `continuous` `w:type`).
+struct SectionState {
+    settings: PageSettings,
+    numbering: Option<PageNumberFormat>,
+    numbering_start: Option<u32>,
+    /// How this section opened — the `w:type` written on the break that
+    /// ends it.
+    start_type: SectionBreakType,
+}
+
+impl SectionState {
+    /// The `w:sectPr` ending this section.
+    fn ending_break(&self, title_page: bool) -> SectionBreak {
+        SectionBreak {
+            break_type: self.start_type,
+            page_settings: Some(self.settings.clone()),
+            title_page,
+            page_numbering: self.numbering,
+            page_number_start: self.numbering_start,
+        }
+    }
+}
+
+/// Lower a top-level `#columns` block as a `continuous` section pair: a
+/// break ending the ambient section, the block body under a section that
+/// carries `w:cols`, then a break ending the columns section. The ambient
+/// section resumes afterwards and starts `continuous`, so `state` tracks
+/// that for whatever break eventually ends it. A document-final ambient
+/// section never emits a break — its settings and `w:type` close the body.
+fn lower_columns_block(
+    count: u32,
+    gutter_twips: u32,
+    body: &[IrBlock],
+    state: &mut SectionState,
+    title_page: bool,
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) {
+    // When the block opens the document there is no earlier section to
+    // close; `title_page` then belongs to the columns section, which the
+    // outgoing break ends.
+    let mut pending_title_page = title_page;
+    if !doc.body.elements.is_empty() {
+        // A page-setting boundary or a previous block's out-break already
+        // stamped a `w:sectPr` on the last paragraph — a paragraph carries
+        // one, so the empty ambient stretch gets a marker rather than
+        // overwriting it. An unstamped odd/even `pagebreak(to:)` keeps
+        // merging normally.
+        let ambient_is_empty = matches!(
+            doc.body.elements.last(),
+            Some(BlockElement::Paragraph(p))
+                if p.section_break.as_ref().is_some_and(|b| {
+                    matches!(
+                        b.break_type,
+                        SectionBreakType::NextPage | SectionBreakType::Continuous
+                    )
+                })
+        );
+        if ambient_is_empty {
+            let mut marker = Paragraph::new();
+            marker.mark_size_half_pt = Some(2);
+            marker.spacing_before = Some(0);
+            marker.spacing_after = Some(0);
+            doc.body.elements.push(BlockElement::Paragraph(marker));
+        }
+        attach_section_break(
+            &mut doc.body.elements,
+            state.ending_break(title_page),
+            false,
+        );
+        pending_title_page = false;
+    }
+    let mut col_settings = state.settings.clone();
+    col_settings.columns = Some(count);
+    col_settings.column_spacing = Some(gutter_twips);
+    // Fixed-layout grids inside the block fill one column, not the text
+    // column — narrow `fr` resolution to the per-column width.
+    let column_width_twips = state
+        .settings
+        .width_twips
+        .saturating_sub(state.settings.margin_left + state.settings.margin_right)
+        .saturating_sub(gutter_twips.saturating_mul(count.saturating_sub(1)))
+        / count;
+    let saved_content_width = ctx.content_width_twips;
+    ctx.content_width_twips = Some(column_width_twips);
+    for inner in body {
+        let lowered = lower_block(inner, doc, ctx);
+        doc.body.elements.extend(lowered);
+    }
+    ctx.content_width_twips = saved_content_width;
+    attach_section_break(
+        &mut doc.body.elements,
+        SectionBreak {
+            break_type: SectionBreakType::Continuous,
+            page_settings: Some(col_settings),
+            title_page: pending_title_page,
+            page_numbering: state.numbering,
+            page_number_start: state.numbering_start,
+        },
+        false,
+    );
+    state.start_type = SectionBreakType::Continuous;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -308,10 +454,19 @@ fn lower_body_break(
 /// element emitted so far. A trailing paragraph takes the break in its
 /// `w:pPr`; any other trailing element (table, image) leaves the section
 /// boundary itself unmarked, so an empty marker paragraph carries it.
-fn attach_section_break(elements: &mut Vec<BlockElement>, section: SectionBreak) {
+/// `pop_page_breaks` clears trailing `w:br` page breaks the boundary
+/// subsumes — a `nextPage` transition replaces them; a `continuous`
+/// columns boundary does not, so a `#pagebreak()` beside it is kept.
+fn attach_section_break(
+    elements: &mut Vec<BlockElement>,
+    section: SectionBreak,
+    pop_page_breaks: bool,
+) {
     if let Some(BlockElement::Paragraph(para)) = elements.last_mut() {
-        while matches!(para.inlines.last(), Some(InlineElement::PageBreak)) {
-            para.inlines.pop();
+        if pop_page_breaks {
+            while matches!(para.inlines.last(), Some(InlineElement::PageBreak)) {
+                para.inlines.pop();
+            }
         }
         if let Some(existing) = &mut para.section_break
             && matches!(
@@ -388,42 +543,7 @@ fn lower_block_in(
                 lower_grid(grid, doc, ctx)
             }
         }
-        IrBlock::Figure {
-            body,
-            caption,
-            caption_alignment,
-            caption_par,
-            caption_seq,
-            kind: _,
-            supplement: _,
-            label,
-            caption_first,
-            custom_placement,
-            gap_twips,
-            location_hash: _,
-        } => {
-            if ctx.compat.is_c1() && *custom_placement {
-                ctx.degrade(
-                    "figure-placement",
-                    DegradationAction::Skipped,
-                    "figure placement is custom; placed as a normal block figure".to_string(),
-                );
-            }
-            lower_figure(
-                &FigureSpec {
-                    body,
-                    caption,
-                    caption_alignment: *caption_alignment,
-                    caption_par: *caption_par,
-                    caption_seq: caption_seq.as_ref(),
-                    label: label.as_ref(),
-                    caption_first: *caption_first,
-                    gap_twips: *gap_twips,
-                },
-                doc,
-                ctx,
-            )
-        }
+        IrBlock::Figure { .. } => lower_figure_block(block, doc, ctx),
         IrBlock::List(list) => lower_list(list, doc, ctx, inherited),
         IrBlock::Enum(enumer) => lower_enum(enumer, doc, ctx, inherited),
         IrBlock::Equation(eq) => lower_equation(eq, ctx),
@@ -471,7 +591,77 @@ fn lower_block_in(
             body,
             fill_hex,
         } => lower_shape_block(*kind, *span, body, fill_hex.as_deref(), doc, ctx),
+        // Nested bodies only — `lower_body` intercepts top-level blocks.
+        IrBlock::Columns { body, span, .. } => lower_nested_columns(body, *span, doc, ctx),
     }
+}
+
+fn lower_figure_block(
+    block: &IrBlock,
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) -> Vec<BlockElement> {
+    let IrBlock::Figure {
+        body,
+        caption,
+        caption_alignment,
+        caption_par,
+        caption_seq,
+        kind: _,
+        supplement: _,
+        label,
+        caption_first,
+        custom_placement,
+        gap_twips,
+        location_hash: _,
+    } = block
+    else {
+        return Vec::new();
+    };
+    if ctx.compat.is_c1() && *custom_placement {
+        ctx.degrade(
+            "figure-placement",
+            DegradationAction::Skipped,
+            "figure placement is custom; placed as a normal block figure".to_string(),
+        );
+    }
+    lower_figure(
+        &FigureSpec {
+            body,
+            caption,
+            caption_alignment: *caption_alignment,
+            caption_par: *caption_par,
+            caption_seq: caption_seq.as_ref(),
+            label: label.as_ref(),
+            caption_first: *caption_first,
+            gap_twips: *gap_twips,
+        },
+        doc,
+        ctx,
+    )
+}
+
+/// OOXML sections cannot scope inside a table cell, figure, quote, … — a
+/// nested `#columns` block keeps its content in single-column flow.
+fn lower_nested_columns(
+    body: &[IrBlock],
+    span: Option<typst_syntax::Span>,
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) -> Vec<BlockElement> {
+    ctx.degrade_at(
+        span,
+        "column-block",
+        DegradationAction::Skipped,
+        "a columns block nested inside another element is not representable; \
+         its content is kept single-column"
+            .to_string(),
+    );
+    let mut out = Vec::new();
+    for inner in body {
+        out.extend(lower_block(inner, doc, ctx));
+    }
+    out
 }
 
 fn lower_shape_block(

@@ -190,6 +190,22 @@ fn apply_page_chrome(ovr: &page::SourceStyleOverrides, doc: &mut Document, body_
     if let Some(em) = ovr.column_gutter_em {
         doc.page_settings.column_spacing = Some(page::pt_to_twips(em * body_pt));
     }
+    // Typst's `columns(gutter:)` default is a 4% ratio against the text
+    // width, not the writer's 720-twip fallback — resolve it against the
+    // margins this document actually emits. Declared gutters above win.
+    if doc.page_settings.column_spacing.is_none()
+        && doc.page_settings.columns.is_some_and(|c| c > 1)
+    {
+        let text_width_pt = f64::from(
+            doc.page_settings
+                .width_twips
+                .saturating_sub(doc.page_settings.margin_left + doc.page_settings.margin_right),
+        ) / 20.0;
+        doc.page_settings.column_spacing = Some(page::columns_gutter_twips(
+            page::DEFAULT_COLUMNS_GUTTER,
+            text_width_pt,
+        ));
+    }
 }
 
 /// Page margins and header/footer edge distances — em values resolve against

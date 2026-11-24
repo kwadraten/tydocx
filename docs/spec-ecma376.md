@@ -210,7 +210,7 @@ flowchart LR
 | `#pagebreak(to: odd/even)` | `w:sectPr w:type` `oddPage`/`evenPage` (emitted at **all** levels — it is an authored break, not a style change) | same | same |
 | `#linebreak` | `w:br`; a paragraph whose breaks are all plain (unjustified) pins `w:jc="left"` — Word stretches `w:br`-terminated lines under an inherited `both`; `linebreak(justify: true)` keeps the paragraph stretchable | same | same |
 | `#colbreak` | `w:br w:type="column"` | same | same |
-| `#columns(n)[…]` block | body kept flat + `"column-block"` (all levels) | same | same |
+| `#columns(n)[…]` block | a `continuous` `w:sectPr` pair around the block carrying `w:cols w:num` + `w:space` (gutter resolved against the text width); nested inside a table cell, figure, quote, … the body is kept flat + `"column-block"` | same | same |
 | `#place(float: true)` | `wp:anchor` `w:drawing` with measured page-absolute position; `wrapTopAndBottom` or `wrapSquare`, `distT`/`distB` from `clearance:`, `behindDoc="0"`; a lone-table body → `w:tblpPr` floating table instead | body kept in flow + `"placed-content"` report | anchored float / `w:tblpPr`; unmeasured → flow fallback + `"placed-content"` |
 | `#place` non-float | `wp:anchor` at the measured extent (no page-edge expansion): `wp:wrapNone`, `behindDoc` from paint order (behind when the page paints more content after the place); text in editable `wps:txbx` (`w:jc` pinned, `bodyPr wrap="none"` + `a:noAutofit`), images as `pic:pic`, a filled `rect` as `a:solidFill`; an unfilled text box fills with the colour painting under it (latest covering placed `rect`, else solid `page(fill:)`, else paper) so it covers its underlay; a lone-table body → `w:tblpPr`; a box fully inside a side margin anchors `relativeFrom="margin"` | + `"placed-content"` | anchored overlay / `w:tblpPr`; unmeasured → flow fallback + `"placed-content"` |
 | `float(dx:/dy:)` offsets | included in the anchor position | n/a | same |
@@ -274,7 +274,7 @@ text mode prints them after the output path. Collector-raised constructs
 (`hidden-content`, `moved-content`, `text-edge-metrics`, `highlight-geometry`,
 `h-fr-space`, `context-content`, `page-counter-value`, `footnote-counter-reference`,
 `unresolved-link`, `bibliography-entries`, `footnote-entry-not-found`,
-`grid-column-split`, `table-grid-unresolved`, `box-*`, `column-block`,
+`grid-column-split`, `table-grid-unresolved`, `box-*`,
 `unoutlined-heading`, `placed-content` for non-float placement, …) fire at
 every level; the C1-specific gate adds `grid-layout`, `vector-image`,
 `image-fit`, `image-alt`, `list-marker`, `enum-numbering`, `enum-reversed`,

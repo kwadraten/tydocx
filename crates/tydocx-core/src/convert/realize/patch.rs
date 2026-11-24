@@ -423,7 +423,10 @@ fn patch_page_blocks(blocks: &mut [IrBlock], patch: &mut PagePatch<'_>) {
                     patch_page_blocks(&mut item.body, patch);
                 }
             }
-            IrBlock::Quote { body } | IrBlock::Place { body, .. } => {
+            IrBlock::Quote { body }
+            | IrBlock::Place { body, .. }
+            | IrBlock::Shape { body, .. }
+            | IrBlock::Columns { body, .. } => {
                 patch_page_blocks(body, patch);
             }
             IrBlock::Bibliography { entries } => {
@@ -437,7 +440,6 @@ fn patch_page_blocks(blocks: &mut [IrBlock], patch: &mut PagePatch<'_>) {
                     patch_page_inlines(&mut entry.title, patch);
                 }
             }
-            IrBlock::Shape { body, .. } => patch_page_blocks(body, patch),
             IrBlock::Equation(_) | IrBlock::Raw(_) | IrBlock::PageBreak { .. } => {}
         }
     }
@@ -701,7 +703,10 @@ fn patch_block_images(blocks: &mut [IrBlock], sizes: &HashMap<u64, ImagePlacemen
                     patch_block_images(&mut item.body, sizes);
                 }
             }
-            IrBlock::Quote { body } | IrBlock::Place { body, .. } => {
+            IrBlock::Quote { body }
+            | IrBlock::Place { body, .. }
+            | IrBlock::Shape { body, .. }
+            | IrBlock::Columns { body, .. } => {
                 patch_block_images(body, sizes);
             }
             IrBlock::Bibliography { entries } => {
@@ -715,7 +720,6 @@ fn patch_block_images(blocks: &mut [IrBlock], sizes: &HashMap<u64, ImagePlacemen
                     patch_inline_images(&mut entry.title, sizes);
                 }
             }
-            IrBlock::Shape { body, .. } => patch_block_images(body, sizes),
             IrBlock::Equation(_) | IrBlock::Raw(_) | IrBlock::PageBreak { .. } => {}
         }
     }
@@ -781,7 +785,10 @@ fn attach_figure_canvases(
                     attach_figure_canvases(&mut item.body, canvases);
                 }
             }
-            IrBlock::Quote { body } | IrBlock::Place { body, .. } | IrBlock::Shape { body, .. } => {
+            IrBlock::Quote { body }
+            | IrBlock::Place { body, .. }
+            | IrBlock::Shape { body, .. }
+            | IrBlock::Columns { body, .. } => {
                 attach_figure_canvases(body, canvases);
             }
             _ => {}

@@ -10,6 +10,7 @@ use super::table::write_table;
 use super::{DocParts, RelKind, WriteCtx};
 use crate::document::{
     BlockElement, Document, DocumentStyle, PageNumberFormat, PageSettings, SectionBreak,
+    SectionBreakType,
 };
 
 /// Write `w:headerReference`/`w:footerReference` for every header/footer part
@@ -152,9 +153,12 @@ pub(super) fn generate_document_xml(
                 &doc.page_settings,
                 &doc.style,
                 ctx.parts,
-                doc.page_numbering.as_ref(),
-                doc.page_number_start,
-                doc.title_page && is_single_section,
+                &SectionTail {
+                    page_numbering: doc.page_numbering.as_ref(),
+                    page_number_start: doc.page_number_start,
+                    title_page: doc.title_page && is_single_section,
+                    section_type: doc.final_section_type,
+                },
             )?;
             Ok(())
         })?;
@@ -163,20 +167,34 @@ pub(super) fn generate_document_xml(
     Ok(())
 }
 
+/// The body-final `w:sectPr`'s section descriptor — everything past the
+/// page settings.
+struct SectionTail<'a> {
+    page_numbering: Option<&'a PageNumberFormat>,
+    page_number_start: Option<u32>,
+    title_page: bool,
+    section_type: Option<SectionBreakType>,
+}
+
 fn write_section_properties<W: Write>(
     writer: &mut Writer<W>,
     settings: &PageSettings,
     style: &DocumentStyle,
     parts: &DocParts,
-    page_numbering: Option<&PageNumberFormat>,
-    page_number_start: Option<u32>,
-    title_page: bool,
+    tail: &SectionTail<'_>,
 ) -> io::Result<()> {
     writer.create_element("w:sectPr").write_inner_content(|w| {
-        write_header_footer_refs(w, parts, title_page)?;
+        write_header_footer_refs(w, parts, tail.title_page)?;
         write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
-        write_section_page_settings(w, settings, page_numbering, page_number_start)?;
-        if title_page {
+        // CT_SectPr orders w:type between footnotePr and pgSz; omitted
+        // means nextPage.
+        if let Some(section_type) = tail.section_type {
+            w.create_element("w:type")
+                .with_attribute(("w:val", section_type.ooxml_value()))
+                .write_empty()?;
+        }
+        write_section_page_settings(w, settings, tail.page_numbering, tail.page_number_start)?;
+        if tail.title_page {
             w.create_element("w:titlePg").write_empty()?;
         }
         Ok(())

@@ -223,6 +223,22 @@ pub enum IrBlock {
         body: Vec<IrBlock>,
         fill_hex: Option<String>,
     },
+    /// A `#columns(n, gutter:)[…]` block. At the top level the lowerer
+    /// wraps it in a pair of `continuous` section breaks — the outgoing
+    /// break's `w:sectPr` carries `w:cols` (it ends the block's section),
+    /// and the ambient section resumes after it. Inside a nested body
+    /// (table cell, figure, …) OOXML offers no column scoping, so it
+    /// degrades to a flattened `column-block` instead.
+    Columns {
+        /// `w:cols w:num` — the column count.
+        count: u32,
+        /// `w:cols w:space` in twips — the gutter resolved on the element's
+        /// `StyleChain` against the ambient text width (Typst's default is
+        /// a `4%` ratio, not a length).
+        gutter_twips: u32,
+        body: Vec<IrBlock>,
+        span: Option<typst_syntax::Span>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

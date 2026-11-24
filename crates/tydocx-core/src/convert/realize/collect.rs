@@ -15,7 +15,7 @@ use typst_library::World;
 use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
 use typst_library::foundations::{
-    Content, ContextElem, Datetime, Element, LocatableSelector, NativeElement, Packed,
+    Content, ContextElem, Datetime, Element, LocatableSelector, NativeElement, Packed, Resolve,
     SequenceElem, Smart, StyleChain, StyledElem, Styles, Value,
 };
 use typst_library::introspection::{Counter, Location, SplitLocator, Tag, TagElem};
@@ -622,6 +622,9 @@ impl Collector<'_> {
                 self.collect_place(place, inner, styles, engine, locator)?,
             ]);
         }
+        if let Some(columns) = inner.to_packed::<ColumnsElem>() {
+            return self.collect_columns_block(columns, inner, styles, engine, locator);
+        }
         if let Some(image) = inner.to_packed::<ImageElem>() {
             return Ok(self.image_paragraph(image, styles, engine));
         }
@@ -633,22 +636,8 @@ impl Collector<'_> {
             let para = collect_paragraph(&par.body, styles, engine, locator, &mut ctx)?;
             return Ok(vec![IrBlock::Paragraph(para)]);
         }
-        if let Some((kind, shape_body)) = shape_parts(inner) {
-            let body = match shape_body {
-                Some(shape_content) => {
-                    self.collect_content_blocks(&shape_content, styles, engine, locator)?
-                }
-                None => Vec::new(),
-            };
-            return Ok(vec![IrBlock::Shape {
-                kind,
-                span: {
-                    let span = inner.span();
-                    span.id().map(|_| span)
-                },
-                body,
-                fill_hex: shape_fill_hex(inner, styles),
-            }]);
+        if let Some(shape) = self.collect_shape(inner, styles, engine, locator)? {
+            return Ok(vec![shape]);
         }
         self.collect_blocks(group, engine, locator, false)
     }
@@ -786,6 +775,9 @@ impl Collector<'_> {
         if let Some(align) = content.to_packed::<AlignElem>() {
             return self.collect_align_blocks(align, &ListCtx::default(), styles, engine, locator);
         }
+        if let Some(columns) = content.to_packed::<ColumnsElem>() {
+            return self.collect_columns_block(columns, content, styles, engine, locator);
+        }
         if let Some((construct, transparent)) = transparent_container_body(content) {
             self.degradations.push(Degradation {
                 span: Some(content.span()),
@@ -833,22 +825,8 @@ impl Collector<'_> {
             para.inlines.push(IrInline::Text(run));
             return Ok(vec![IrBlock::Paragraph(para)]);
         }
-        if let Some((kind, shape_body)) = shape_parts(content) {
-            let body = match shape_body {
-                Some(shape_content) => {
-                    self.collect_content_blocks(&shape_content, styles, engine, locator)?
-                }
-                None => Vec::new(),
-            };
-            return Ok(vec![IrBlock::Shape {
-                kind,
-                span: {
-                    let span = content.span();
-                    span.id().map(|_| span)
-                },
-                body,
-                fill_hex: shape_fill_hex(content, styles),
-            }]);
+        if let Some(shape) = self.collect_shape(content, styles, engine, locator)? {
+            return Ok(vec![shape]);
         }
         if let Some(line) = content.to_packed::<LineElem>() {
             return Ok(line_blocks(line, styles, content.span()));
@@ -889,28 +867,15 @@ impl Collector<'_> {
             apply_pad_insets(&mut blocks, pad, styles);
             return Ok(blocks);
         }
-        if let Some((kind, shape_body)) = shape_parts(&original) {
-            let body = match shape_body {
-                Some(shape_content) => {
-                    self.collect_content_blocks(&shape_content, styles, engine, locator)?
-                }
-                None => Vec::new(),
-            };
-            return Ok(vec![IrBlock::Shape {
-                kind,
-                span: {
-                    let span = original.span();
-                    span.id().map(|_| span)
-                },
-                body,
-                fill_hex: shape_fill_hex(&original, styles),
-            }]);
+        if let Some(shape) = self.collect_shape(&original, styles, engine, locator)? {
+            return Ok(vec![shape]);
         }
         if is_block_element(&original) {
             return self.collect_content_element(&original, styles, engine, locator);
         }
-        // `is_block_element` claims `ColumnsElem`, so the "column-block" arm of
-        // `transparent_container_body` is unreachable at this site by design.
+        // `is_block_element` claims `ColumnsElem`, so it never reaches the
+        // transparent-container arm here — `collect_content_element`
+        // routes it to `collect_columns_block`.
         if let Some((construct, transparent)) = transparent_container_body(&original) {
             self.degradations.push(Degradation {
                 span: Some(content.span()),
@@ -930,6 +895,33 @@ impl Collector<'_> {
                 .to_string(),
         });
         Ok(Vec::new())
+    }
+
+    /// `#columns(n, gutter:)[…]` — an `IrBlock::Columns` carrying the
+    /// resolved column count and gutter. The gutter is a `Rel<Length>`
+    /// whose ratio part is a share of the enclosing region's width; at
+    /// page level that region is the text column, so the basis is the
+    /// page's text width (typst-layout resolves it against
+    /// `regions.base().x`). Nested placements degrade at lowering.
+    fn collect_columns_block(
+        &mut self,
+        columns: &ColumnsElem,
+        content: &Content,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrBlock>> {
+        let body = self.collect_content_blocks(&columns.body, styles, engine, locator)?;
+        let span = content.span();
+        Ok(vec![IrBlock::Columns {
+            count: u32::try_from(columns.count.get(styles).get()).unwrap_or(u32::MAX),
+            gutter_twips: page::columns_gutter_twips(
+                columns.gutter.resolve(styles),
+                page_content_width_pt(styles),
+            ),
+            body,
+            span: span.id().map(|_| span),
+        }])
     }
 
     fn collect_content_blocks(
@@ -1456,6 +1448,9 @@ impl Collector<'_> {
         }
         if let Some(align) = child.to_packed::<AlignElem>() {
             return self.collect_align_blocks(align, &ListCtx::default(), styles, engine, locator);
+        }
+        if let Some(columns) = child.to_packed::<ColumnsElem>() {
+            return self.collect_columns_block(columns, child, styles, engine, locator);
         }
         if let Some((construct, transparent)) = transparent_container_body(child) {
             self.degradations.push(Degradation {
@@ -3849,7 +3844,7 @@ fn line_blocks(line: &Packed<LineElem>, styles: StyleChain<'_>, span: Span) -> V
 }
 
 /// Container elements whose own chrome is dropped but whose body still
-/// converts (`#move`/`#rotate`/`#scale`/`#skew`/`#columns`). The first tuple
+/// converts (`#move`/`#rotate`/`#scale`/`#skew`). The first tuple
 /// element is the degradation construct to report.
 pub(super) fn transparent_container_body(content: &Content) -> Option<(&'static str, &Content)> {
     if let Some(elem) = content.to_packed::<MoveElem>() {
@@ -3863,9 +3858,6 @@ pub(super) fn transparent_container_body(content: &Content) -> Option<(&'static 
     }
     if let Some(elem) = content.to_packed::<SkewElem>() {
         return Some(("skewed-content", &elem.body));
-    }
-    if let Some(elem) = content.to_packed::<ColumnsElem>() {
-        return Some(("column-block", &elem.body));
     }
     None
 }
@@ -4567,7 +4559,9 @@ fn enum_func_number_text(
     }
 }
 
-fn page_content_width_pt(styles: StyleChain<'_>) -> f64 {
+/// Text width in pt (page width minus the resolved left/right margins) —
+/// the region base `columns` gutters resolve against.
+pub(super) fn page_content_width_pt(styles: StyleChain<'_>) -> f64 {
     let width_pt = match styles.get(PageElem::width) {
         Smart::Custom(length) => length.at(Abs::pt(11.0)).to_pt(),
         Smart::Auto => 595.28,
@@ -4619,6 +4613,10 @@ struct PageSnapshot {
     left_pt: f64,
     right_pt: f64,
     columns: u32,
+    /// `columns(gutter:)` resolved on the chain — `Some` only while the
+    /// page is multi-column, so a `#set columns(gutter:)` change on a
+    /// single-column page does not spawn a spurious section.
+    column_gutter: Option<Rel<Abs>>,
     header_pt: f64,
     footer_pt: f64,
     flipped: bool,
@@ -4640,6 +4638,7 @@ impl PageSnapshot {
         let Smart::Custom(custom_margin) = &margin else {
             return Self::fixed(width_pt, height_pt, auto_margin, styles);
         };
+        let columns = u32::try_from(styles.get(PageElem::columns).get()).unwrap_or(u32::MAX);
         Self {
             width_pt,
             height_pt,
@@ -4647,7 +4646,8 @@ impl PageSnapshot {
             bottom_pt: margin_side_resolved(custom_margin.sides.bottom, height_pt, auto_margin),
             left_pt: margin_side_resolved(custom_margin.sides.left, width_pt, auto_margin),
             right_pt: margin_side_resolved(custom_margin.sides.right, width_pt, auto_margin),
-            columns: u32::try_from(styles.get(PageElem::columns).get()).unwrap_or(u32::MAX),
+            columns,
+            column_gutter: (columns > 1).then(|| styles.get(ColumnsElem::gutter).resolve(styles)),
             header_pt: styles.resolve(PageElem::header_ascent).abs.to_pt(),
             footer_pt: styles.resolve(PageElem::footer_descent).abs.to_pt(),
             flipped: styles.get(PageElem::flipped),
@@ -4656,6 +4656,7 @@ impl PageSnapshot {
     }
 
     fn fixed(width_pt: f64, height_pt: f64, auto_margin: f64, styles: StyleChain<'_>) -> Self {
+        let columns = u32::try_from(styles.get(PageElem::columns).get()).unwrap_or(u32::MAX);
         Self {
             width_pt,
             height_pt,
@@ -4663,7 +4664,8 @@ impl PageSnapshot {
             bottom_pt: auto_margin,
             left_pt: auto_margin,
             right_pt: auto_margin,
-            columns: u32::try_from(styles.get(PageElem::columns).get()).unwrap_or(u32::MAX),
+            columns,
+            column_gutter: (columns > 1).then(|| styles.get(ColumnsElem::gutter).resolve(styles)),
             header_pt: styles.resolve(PageElem::header_ascent).abs.to_pt(),
             footer_pt: styles.resolve(PageElem::footer_descent).abs.to_pt(),
             flipped: styles.get(PageElem::flipped),
@@ -4685,6 +4687,9 @@ impl PageSnapshot {
             margin_left: page::pt_to_twips(self.left_pt),
             margin_right: page::pt_to_twips(self.right_pt),
             columns: (self.columns > 1).then_some(self.columns),
+            column_spacing: self.column_gutter.map(|gutter| {
+                page::columns_gutter_twips(gutter, width_pt - self.left_pt - self.right_pt)
+            }),
             header_twips: Some(page::pt_to_twips(self.header_pt)),
             footer_twips: Some(page::pt_to_twips(self.footer_pt)),
             ..PageSettings::default()
