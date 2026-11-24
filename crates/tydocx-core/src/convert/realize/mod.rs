@@ -4,6 +4,7 @@ mod inline;
 mod overline;
 mod patch;
 pub(crate) mod place;
+mod shape;
 mod style;
 
 use std::collections::HashMap;

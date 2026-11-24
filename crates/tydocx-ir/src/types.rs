@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 pub use tydocx_ooxml::document::{
     Alignment, AnchoredLine, CitationSource, DocumentStyle, FootnoteFormat, HangingIndent,
-    PageNumberFormat, PageSettings, ParagraphStyle, Run, SrcRect, TableBorders, TableCellMargins,
+    InlineShape, PageNumberFormat, PageSettings, ParagraphStyle, Run, ShapeCap, ShapeInsets,
+    ShapeJoin, ShapeOutline, ShapePathSeg, ShapeStroke, SrcRect, TableBorders, TableCellMargins,
     VerticalAlign,
 };
 
@@ -125,6 +126,24 @@ impl std::fmt::Display for IrShapeKind {
     }
 }
 
+/// The resolved `DrawingML` payload of a bare shape — the geometry an
+/// [`IrBlock::Shape`] or [`IrInline::Shape`] draws as a `wp:inline` +
+/// `wps:wsp` at C2/C3. This is [`InlineShape`] minus the text body: the
+/// lowerer pairs it with the shape's lowered body (the `wps:txbx` content)
+/// and `fill_hex` to build the drawing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrShapeGeometry {
+    /// `wp:extent`/`a:ext` — the painted size in EMU.
+    pub width_emu: u64,
+    pub height_emu: u64,
+    /// `a:prstGeom`/`a:custGeom` — the shape's geometry.
+    pub outline: ShapeOutline,
+    /// `a:ln` — the resolved uniform stroke; `None` = no stroke.
+    pub stroke: Option<ShapeStroke>,
+    /// `wps:bodyPr` insets in EMU positioning the shape's text body.
+    pub inset_emu: ShapeInsets,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrBlock {
     Paragraph(IrParagraph),
@@ -222,6 +241,17 @@ pub enum IrBlock {
         span: Option<typst_syntax::Span>,
         body: Vec<IrBlock>,
         fill_hex: Option<String>,
+        /// The `DrawingML` payload the collector resolved, or `None` when the
+        /// size or path could not be resolved — the lowerer then keeps the
+        /// C2 shaded-text fallback (and reports `loss`).
+        geometry: Option<IrShapeGeometry>,
+        /// Paint or geometry detail the resolver could not carry (per-side
+        /// strokes, non-solid paint, even-odd fill, dash phase, …); the
+        /// lowerer reports it as a `shape` degradation at C2/C3.
+        loss: Option<String>,
+        /// `align(..)` folded around the shape — the `w:jc` on the carrier
+        /// paragraph.
+        alignment: Option<Alignment>,
     },
     /// A `#columns(n, gutter:)[…]` block. At the top level the lowerer
     /// wraps it in a pair of `continuous` section breaks — the outgoing
@@ -422,6 +452,11 @@ pub enum IrInline {
         span: Option<typst_syntax::Span>,
         body: Vec<IrInline>,
         fill_hex: Option<String>,
+        /// Same payload contract as [`IrBlock::Shape`]: `None` falls back to
+        /// the C2 shaded-text form (with `loss` reported).
+        geometry: Option<IrShapeGeometry>,
+        /// Geometry/paint detail dropped on the way; reported at C2/C3.
+        loss: Option<String>,
     },
     /// A measured overline: a floating line shape above this position in the
     /// text, geometry taken from Typst's own rendered deco line. Inserted by

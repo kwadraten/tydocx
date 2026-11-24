@@ -14,11 +14,11 @@ use crate::geometry::GeometryInput;
 use crate::grid_plan::{MAX_COLUMNS, PlannedCell, PlannedCellKind, PlannedTable, plan_grid};
 use crate::mode::CompatMode;
 use crate::types::{
-    Alignment, HangingIndent, IrAnchor, IrBibEntry, IrBlock, IrCaptionSeq, IrCellBorderFlags,
-    IrCellBorders, IrDocument, IrEnum, IrEquation, IrField, IrFootnote, IrGrid, IrHeadingNumbering,
-    IrImage, IrInline, IrLevelDef, IrList, IrNumberingPattern, IrOutlineEntry, IrParStyle,
-    IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType, IrShapeKind, IrTable, IrTableCell,
-    IrTableRow, IrVMerge, ParagraphStyle, Run,
+    Alignment, HangingIndent, InlineShape, IrAnchor, IrBibEntry, IrBlock, IrCaptionSeq,
+    IrCellBorderFlags, IrCellBorders, IrDocument, IrEnum, IrEquation, IrField, IrFootnote, IrGrid,
+    IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList, IrNumberingPattern, IrOutlineEntry,
+    IrParStyle, IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType, IrShapeGeometry, IrShapeKind,
+    IrTable, IrTableCell, IrTableRow, IrVMerge, ParagraphStyle, Run,
 };
 
 #[derive(Debug, Default)]
@@ -592,7 +592,22 @@ fn lower_block_in(
             span,
             body,
             fill_hex,
-        } => lower_shape_block(*kind, *span, body, fill_hex.as_deref(), doc, ctx),
+            geometry,
+            loss,
+            alignment,
+        } => lower_shape_block(
+            &ShapeSpec {
+                kind: *kind,
+                span: *span,
+                body,
+                fill_hex: fill_hex.as_deref(),
+                geometry: geometry.as_ref(),
+                loss: loss.as_deref(),
+                alignment: *alignment,
+            },
+            doc,
+            ctx,
+        ),
         // Nested bodies only — `lower_body` intercepts top-level blocks.
         IrBlock::Columns { body, span, .. } => lower_nested_columns(body, *span, doc, ctx),
     }
@@ -666,28 +681,68 @@ fn lower_nested_columns(
     out
 }
 
-fn lower_shape_block(
+struct ShapeSpec<'a> {
     kind: IrShapeKind,
     span: Option<typst_syntax::Span>,
-    body: &[IrBlock],
-    fill_hex: Option<&str>,
+    body: &'a [IrBlock],
+    fill_hex: Option<&'a str>,
+    geometry: Option<&'a IrShapeGeometry>,
+    loss: Option<&'a str>,
+    alignment: Option<Alignment>,
+}
+
+/// A bare shape at C2/C3: resolved geometry becomes a `wp:inline` +
+/// `wps:wsp` drawing whose `wps:txbx` carries the lowered body, in a
+/// carrier paragraph that takes the shape's alignment. An unresolved or
+/// partially-lost shape reports `loss` as `shape` Approximated and keeps
+/// the shaded-body fallback; C1 reports Skipped and keeps the body, both
+/// unchanged contracts.
+fn lower_shape_block(
+    spec: &ShapeSpec<'_>,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> Vec<BlockElement> {
     if ctx.compat.is_c1() {
         ctx.degrade_at(
-            span,
+            spec.span,
             "shape",
             DegradationAction::Skipped,
-            format!("{kind} dropped"),
+            format!("{} dropped", spec.kind),
+        );
+    } else if let Some(loss) = spec.loss {
+        ctx.degrade_at(
+            spec.span,
+            "shape",
+            DegradationAction::Approximated,
+            format!("{}: {loss}", spec.kind),
         );
     }
+    if !ctx.compat.is_c1()
+        && let Some(geometry) = spec.geometry
+    {
+        let mut blocks = Vec::new();
+        for inner in spec.body {
+            blocks.extend(lower_block(inner, doc, ctx));
+        }
+        let mut para = Paragraph::new();
+        para.alignment = spec.alignment;
+        para.inlines.push(InlineElement::Shape(InlineShape {
+            width_emu: geometry.width_emu,
+            height_emu: geometry.height_emu,
+            outline: geometry.outline.clone(),
+            fill_hex: spec.fill_hex.map(str::to_string),
+            stroke: geometry.stroke.clone(),
+            inset_emu: geometry.inset_emu,
+            blocks,
+        }));
+        return vec![BlockElement::Paragraph(para)];
+    }
     let mut out = Vec::new();
-    for inner in body {
+    for inner in spec.body {
         out.extend(lower_block(inner, doc, ctx));
     }
     if !ctx.compat.is_c1()
-        && let Some(hex) = fill_hex
+        && let Some(hex) = spec.fill_hex
     {
         shade_shape_block(&mut out, hex);
     }
@@ -1593,11 +1648,15 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                 span,
                 body,
                 fill_hex,
+                geometry,
+                loss,
             } => out.extend(lower_shape_inlines(
                 *kind,
                 *span,
                 body,
                 fill_hex.as_deref(),
+                geometry.as_ref(),
+                loss.as_deref(),
                 ctx,
             )),
             IrInline::Overline(line) => out.push(InlineElement::AnchoredLine(line.clone())),
@@ -1633,11 +1692,17 @@ fn lower_link_body(body: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement> 
     out
 }
 
+/// An inline bare shape at C2/C3: the same `wp:inline` drawing as the
+/// block form, inside the run. The `wps:txbx` body is a single paragraph
+/// of the lowered inlines. Unresolved geometry keeps the shaded-run
+/// fallback; `loss` reports `shape` Approximated; C1 reports Skipped.
 fn lower_shape_inlines(
     kind: IrShapeKind,
     span: Option<typst_syntax::Span>,
     body: &[IrInline],
     fill_hex: Option<&str>,
+    geometry: Option<&IrShapeGeometry>,
+    loss: Option<&str>,
     ctx: &mut LowerCtx,
 ) -> Vec<InlineElement> {
     if ctx.compat.is_c1() {
@@ -1647,8 +1712,35 @@ fn lower_shape_inlines(
             DegradationAction::Skipped,
             format!("{kind} dropped"),
         );
+    } else if let Some(loss) = loss {
+        ctx.degrade_at(
+            span,
+            "shape",
+            DegradationAction::Approximated,
+            format!("{kind}: {loss}"),
+        );
     }
     let mut inner = lower_inlines(body, ctx);
+    if !ctx.compat.is_c1()
+        && let Some(geometry) = geometry
+    {
+        let blocks = if inner.is_empty() {
+            Vec::new()
+        } else {
+            let mut para = Paragraph::new();
+            para.inlines = inner;
+            vec![BlockElement::Paragraph(para)]
+        };
+        return vec![InlineElement::Shape(InlineShape {
+            width_emu: geometry.width_emu,
+            height_emu: geometry.height_emu,
+            outline: geometry.outline.clone(),
+            fill_hex: fill_hex.map(str::to_string),
+            stroke: geometry.stroke.clone(),
+            inset_emu: geometry.inset_emu,
+            blocks,
+        })];
+    }
     if !ctx.compat.is_c1()
         && let Some(hex) = fill_hex
     {
@@ -3223,6 +3315,9 @@ mod tests {
             span: None,
             body: vec![IrBlock::Paragraph(text_para("inside"))],
             fill_hex: None,
+            geometry: None,
+            loss: None,
+            alignment: None,
         });
         let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
         assert!(
@@ -3245,6 +3340,9 @@ mod tests {
             span: None,
             body: vec![IrBlock::Paragraph(text_para("inside"))],
             fill_hex: None,
+            geometry: None,
+            loss: None,
+            alignment: None,
         });
         let (_, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C1);
         assert!(
@@ -3262,6 +3360,9 @@ mod tests {
             span: None,
             body: vec![IrBlock::Paragraph(text_para("inside"))],
             fill_hex: None,
+            geometry: None,
+            loss: None,
+            alignment: None,
         });
         let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         assert!(degradations.is_empty());

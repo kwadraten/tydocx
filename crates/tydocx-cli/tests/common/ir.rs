@@ -23,11 +23,16 @@ pub struct IrText {
     pub out_of_band: Vec<String>,
 }
 
-fn inline_text(inlines: &[IrInline], out: &mut String, generated: &mut BTreeSet<String>) {
+fn inline_text(
+    inlines: &[IrInline],
+    out: &mut String,
+    generated: &mut BTreeSet<String>,
+    paragraphs: &mut Vec<String>,
+) {
     for inline in inlines {
         match inline {
             IrInline::Text(run) => out.push_str(&run.text),
-            IrInline::Link { body, .. } => inline_text(body, out, generated),
+            IrInline::Link { body, .. } => inline_text(body, out, generated, paragraphs),
             IrInline::Ref { display_text, .. }
             | IrInline::Cite {
                 rendered: display_text,
@@ -38,9 +43,19 @@ fn inline_text(inlines: &[IrInline], out: &mut String, generated: &mut BTreeSet<
                 generated.insert(rendered.clone());
             }
             IrInline::Space => out.push(' '),
-            IrInline::Shape { body, .. } | IrInline::Field { body, .. } => {
-                inline_text(body, out, generated)
+            IrInline::Shape { body, geometry, .. } => {
+                // A drawn shape's body lands in a `wps:txbx` — its own
+                // `w:p`, a separate output paragraph. An unresolved shape
+                // flattens the body into the parent run (shaded text).
+                if geometry.is_some() && !body.is_empty() {
+                    let mut text = String::new();
+                    inline_text(body, &mut text, generated, paragraphs);
+                    paragraphs.push(text);
+                } else {
+                    inline_text(body, out, generated, paragraphs);
+                }
             }
+            IrInline::Field { body, .. } => inline_text(body, out, generated, paragraphs),
             IrInline::LineBreak { .. }
             | IrInline::Tab
             | IrInline::PageBreak
@@ -50,9 +65,13 @@ fn inline_text(inlines: &[IrInline], out: &mut String, generated: &mut BTreeSet<
     }
 }
 
-fn paragraph_text(para: &IrParagraph, generated: &mut BTreeSet<String>) -> String {
+fn paragraph_text(
+    para: &IrParagraph,
+    generated: &mut BTreeSet<String>,
+    paragraphs: &mut Vec<String>,
+) -> String {
     let mut text = String::new();
-    inline_text(&para.inlines, &mut text, generated);
+    inline_text(&para.inlines, &mut text, generated, paragraphs);
     text
 }
 
@@ -72,14 +91,17 @@ fn block_texts<'a>(
 ) {
     for block in blocks {
         match block {
-            IrBlock::Paragraph(para) => paragraphs.push(paragraph_text(para, generated)),
+            IrBlock::Paragraph(para) => {
+                let text = paragraph_text(para, generated, paragraphs);
+                paragraphs.push(text);
+            }
             IrBlock::Heading {
                 body,
                 numbering_text,
                 ..
             } => {
                 let mut text = String::new();
-                inline_text(body, &mut text, generated);
+                inline_text(body, &mut text, generated, paragraphs);
                 paragraphs.push(text);
                 if let Some(number) = numbering_text {
                     generated.insert(format!("{number} "));
@@ -113,7 +135,7 @@ fn block_texts<'a>(
             } => {
                 block_texts(&mut body.iter(), paragraphs, generated, out_of_band);
                 let mut caption_text = String::new();
-                inline_text(caption, &mut caption_text, generated);
+                inline_text(caption, &mut caption_text, generated, paragraphs);
                 if !caption_text.trim().is_empty() {
                     if let Some(supplement) = supplement {
                         generated.insert(format!("{supplement} "));
@@ -171,13 +193,13 @@ fn block_texts<'a>(
                 generated
                     .insert("Right-click and update field to see table of contents.".to_owned());
                 let mut title_text = String::new();
-                inline_text(title, &mut title_text, generated);
+                inline_text(title, &mut title_text, generated, paragraphs);
                 if !title_text.trim().is_empty() {
                     paragraphs.push(title_text);
                 }
                 for entry in entries {
                     let mut text = String::new();
-                    inline_text(&entry.title, &mut text, generated);
+                    inline_text(&entry.title, &mut text, generated, paragraphs);
                     generated.insert(text);
                     if let Some(page) = &entry.page_number {
                         generated.insert(page.clone());
@@ -190,7 +212,7 @@ fn block_texts<'a>(
                         generated.insert(format!("{marker} "));
                     }
                     let mut text = String::new();
-                    inline_text(&entry.body, &mut text, generated);
+                    inline_text(&entry.body, &mut text, generated, paragraphs);
                     if !text.trim().is_empty() {
                         out_of_band.push(text);
                     }
@@ -224,7 +246,7 @@ pub fn ir_texts(doc: &IrDocument) -> IrText {
 fn generated_from_footnote(footnote: &tydocx_ir::IrFootnote, texts: &mut IrText) {
     texts.generated.insert(footnote.rendered.clone());
     for para in &footnote.body {
-        let text = paragraph_text(para, &mut texts.generated);
+        let text = paragraph_text(para, &mut texts.generated, &mut texts.paragraphs);
         texts.paragraphs.push(text);
     }
 }

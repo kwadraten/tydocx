@@ -99,6 +99,9 @@ fn collect_images_from_inlines<'a>(inlines: &'a [InlineElement], images: &mut Ve
                     collect_images_from_blocks(blocks, images);
                 }
             },
+            InlineElement::Shape(shape) => {
+                collect_images_from_blocks(&shape.blocks, images);
+            }
             InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
                 collect_images_from_inlines(body, images);
             }
@@ -158,7 +161,8 @@ fn inline_is_drawing(inline: &InlineElement) -> bool {
     match inline {
         InlineElement::Image(_)
         | InlineElement::AnchoredLine(_)
-        | InlineElement::AnchoredFloat(_) => true,
+        | InlineElement::AnchoredFloat(_)
+        | InlineElement::Shape(_) => true,
         InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
             body.iter().any(inline_is_drawing)
         }

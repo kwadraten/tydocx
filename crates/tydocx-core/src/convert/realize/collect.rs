@@ -48,6 +48,7 @@ use super::inline::{
     image_inline, par_style_from_styles, smart_quotes_for, spacing_twips,
 };
 use super::page;
+use super::shape::resolve_shape;
 use super::style::{StyleDefaults, defaults_from_root, monospace_families, run_from_styles};
 use super::with_fragment;
 use crate::convert::table_align::paint_to_shd_hex;
@@ -836,9 +837,6 @@ impl Collector<'_> {
         if let Some(shape) = self.collect_shape(content, styles, engine, locator)? {
             return Ok(vec![shape]);
         }
-        if let Some(line) = content.to_packed::<LineElem>() {
-            return Ok(line_blocks(line, styles, content.span()));
-        }
         Ok(Vec::new())
     }
 
@@ -1045,10 +1043,6 @@ impl Collector<'_> {
             } else if let Some(shape) = self.collect_shape(child, styles, engine, locator)? {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
                 out.push(shape);
-                i += 1;
-            } else if let Some(line) = child.to_packed::<LineElem>() {
-                flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
-                out.extend(line_blocks(line, styles, child.span()));
                 i += 1;
             } else if let Some(v) = child.to_packed::<VElem>() {
                 if let Some(twips) = spacing_twips(&v.amount, styles) {
@@ -1323,16 +1317,33 @@ impl Collector<'_> {
         let Some((kind, shape_body)) = shape_parts(child) else {
             return Ok(None);
         };
+        // A `#line` with only `length` is a paragraph rule, not a drawing —
+        // keep it on the `horizontal_rule` path (`line_blocks` folded here
+        // when `shape_parts` learned `LineElem`).
+        if kind == IrShapeKind::Line
+            && let Some(line) = child.to_packed::<LineElem>()
+            && line.end.get(styles).is_none()
+            && line.angle.get(styles) == Angle::zero()
+        {
+            return Ok(Some(IrBlock::Paragraph(IrParagraph {
+                horizontal_rule: true,
+                ..IrParagraph::default()
+            })));
+        }
         let body = match shape_body {
             Some(content) => self.collect_content_blocks(&content, styles, engine, locator)?,
             None => Vec::new(),
         };
         let span = child.span();
+        let resolved = resolve_shape(child, styles, engine, locator);
         Ok(Some(IrBlock::Shape {
             kind,
             span: span.id().map(|_| span),
             body,
             fill_hex: shape_fill_hex(child, styles),
+            geometry: resolved.geometry,
+            loss: resolved.loss,
+            alignment: alignment_from_styles(styles),
         }))
     }
 
@@ -1429,9 +1440,6 @@ impl Collector<'_> {
         }
         if let Some(shape) = self.collect_shape(child, styles, engine, locator)? {
             return Ok(vec![shape]);
-        }
-        if let Some(line) = child.to_packed::<LineElem>() {
-            return Ok(line_blocks(line, styles, child.span()));
         }
         self.collect_container_element(child, styles, engine, locator)
     }
@@ -3545,6 +3553,9 @@ pub(super) fn shape_parts(content: &Content) -> Option<(IrShapeKind, Option<Cont
     if content.to_packed::<PolygonElem>().is_some() || content.to_packed::<CurveElem>().is_some() {
         return Some((IrShapeKind::Curve, None));
     }
+    if content.to_packed::<LineElem>().is_some() {
+        return Some((IrShapeKind::Line, None));
+    }
     None
 }
 
@@ -3557,6 +3568,10 @@ pub(super) fn shape_fill_hex(content: &Content, styles: StyleChain<'_>) -> Optio
         ellipse.fill.get_cloned(styles)
     } else if let Some(circle) = content.to_packed::<CircleElem>() {
         circle.fill.get_cloned(styles)
+    } else if let Some(polygon) = content.to_packed::<PolygonElem>() {
+        polygon.fill.get_cloned(styles)
+    } else if let Some(curve) = content.to_packed::<CurveElem>() {
+        curve.fill.get_cloned(styles)
     } else {
         None
     };
@@ -3831,24 +3846,6 @@ fn spacing_rel_twips(spacing: Smart<Spacing>, em_pt: f64) -> Option<u32> {
         }
         _ => None,
     }
-}
-
-/// `#line()` with only a length (no `end`, no angle) is a horizontal rule;
-/// a geometric line keeps degrading as a shape.
-fn line_blocks(line: &Packed<LineElem>, styles: StyleChain<'_>, span: Span) -> Vec<IrBlock> {
-    let horizontal = line.end.get(styles).is_none() && line.angle.get(styles) == Angle::zero();
-    if horizontal {
-        return vec![IrBlock::Paragraph(IrParagraph {
-            horizontal_rule: true,
-            ..IrParagraph::default()
-        })];
-    }
-    vec![IrBlock::Shape {
-        kind: IrShapeKind::Line,
-        span: Some(span),
-        body: Vec::new(),
-        fill_hex: None,
-    }]
 }
 
 /// Container elements whose own chrome is dropped but whose body still
@@ -5134,7 +5131,7 @@ pub(crate) fn location_hash64(location: Location) -> u64 {
     hash
 }
 
-fn page_content_height_pt(styles: StyleChain<'_>) -> f64 {
+pub(super) fn page_content_height_pt(styles: StyleChain<'_>) -> f64 {
     let snapshot = PageSnapshot::resolve(styles);
     let height_pt = if snapshot.flipped {
         snapshot.width_pt

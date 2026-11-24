@@ -271,15 +271,30 @@ bodies — now comes from `StyleChain`s or element identity.
   float the Paged patch cannot measure keeps the flow fallback and
   reports `placed-content` (same path at C1).
 
-### `#rect` and other shapes beyond the fill
-- **Current:** block-level shapes keep their body text; at C2/C3 a solid
-  fill becomes `w:shd` paragraph shading (block) or run shading (inline),
-  and a *placed* filled `rect` draws as `a:solidFill` on its anchored
-  text-box shape. Stroke, corner radius, and the geometry itself are
-  dropped at every level; bare shapes (no text) emit nothing silently at
-  C2/C3; C1 reports `shape`.
-- **C2 target:** a real DrawingML/VML shape with the body in
-  `txbxContent`, or `w:pBdr` for stroked bands.
+### `#rect` and other shapes
+- **Current:** `realize/shape.rs` re-runs Typst's own layout math
+  (`layout_shape`/`layout_line`/`layout_polygon`/`layout_curve` mirrored
+  against a region of page text-area size) to resolve every bare shape to
+  DrawingML geometry: `wp:inline` + `wps:wsp` with `prstGeom`
+  (`rect`/`roundRect`/`round1Rect`/`round2SameRect`/`round2DiagRect`/
+  `ellipse`/`line` with `a:xfrm` flips) or `a:custGeom` for
+  polygons/curves/non-corner lines, `a:solidFill`/`a:noFill`, `a:ln`
+  (thickness/cap/join/miter/solid colour/`custDash`), and the body in an
+  editable `wps:txbx` (`bodyPr` carries the resolved inset). At C1 shapes
+  still report `shape` Skipped and the body flattens into the flow.
+  A `#line` with only `length` (no `end`, zero `angle`) stays a paragraph
+  `w:pBdr` rule at every level.
+- **Losses reported as `shape` Approximated at C2/C3** (the shape still
+  draws): a non-solid fill or stroke paint (gradient/tiling/pattern) —
+  the shape draws unfilled / the stroke draws black — a per-side stroke
+  (the shape takes the top side's stroke), a non-zero dash `phase`, an
+  `evenodd` fill rule (drawn non-zero), and a non-zero `outset` (Word's
+  inline extent cannot paint outside itself). A shape whose size or path
+  cannot be resolved at all keeps the old shaded-body flatten with the
+  same `shape` Approximated report.
+- **Deviation:** the legacy `HtmlDocument` path never sees shapes —
+  typst-html registers no show rules for shape elements, so they never
+  appear in the DOM — and shares no collector with the realize path.
 
 ### `inside:`/`outside:` margins
 - **Current:** keys parse to `margins_mirrored`; C2/C3 emit

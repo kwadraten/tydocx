@@ -219,10 +219,9 @@ flowchart LR
 
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
-| `#rect`/`#square`/`#ellipse`/`#circle`/`#polygon`/`#curve`/`#path` with text | body text kept; fill → `w:shd` on the paragraph (block) or `w:shd` on runs (inline) | body text + `"shape"` report | shaded text; stroke/radius/geometry dropped silently |
-| bare shapes (no text) | nothing | + `"shape"` | silently nothing |
-| `#line` horizontal | paragraph `w:pBdr` bottom border | same | same |
-| `#line` angled/vertical | treated as a shape — geometry dropped | + `"shape"` | silently dropped |
+| `#rect`/`#square`/`#ellipse`/`#circle`/`#polygon`/`#curve`/`#path` | `wp:inline` + `wps:wsp` drawing: `prstGeom` (`rect`/`roundRect`/`round1Rect`/`round2SameRect`/`round2DiagRect`/`ellipse`) or `a:custGeom` (polygon/curve paths, quads → cubics), solid fill → `a:solidFill`, stroke → `a:ln` (width/cap/join/`custDash`), body in editable `wps:txbx` | body text + `"shape"` report | drawn; unrepresentable pieces report `"shape"` Approximated; unresolvable geometry falls back to `w:shd`-shaded body |
+| `#line` horizontal (only `length`) | paragraph `w:pBdr` bottom border | same | same |
+| `#line` angled/vertical | `wp:inline` + `wps:wsp` — corner-to-corner → `prstGeom prst="line"` + `a:xfrm` flips, otherwise a two-point `a:custGeom` | + `"shape"` | drawn |
 | `#move`/`#rotate`/`#scale`/`#skew` | content kept, transform dropped + `"moved-content"` / `"rotated-content"` / `"scaled-content"` / `"skewed-content"` (all levels) | same | same |
 | `#hide` | content and its space dropped + `"hidden-content"` (all levels) | same | same |
 | `#box`/`#block` width/baseline/fill/stroke | `"box-width"`/`"box-baseline"`/`"box-decoration"`/`"block-width"`/`"block-decoration"` (all levels); body kept | same | same |
@@ -322,7 +321,11 @@ per-feature *degradation* list above is exhaustive.
   what Word cannot carry — non-solid fills, transformed/clipped groups,
   unsupported item kinds, per-physical-page variation — is reported as
   `page-foreground`. C1 keeps its literalized-text contract.
-- **Bare/angled shapes** are silently dropped at C2/C3; only C1 reports them.
+- **Bare/angled shapes** draw as `wp:inline` + `wps:wsp` DrawingML at
+  C2/C3 (preset geometry or `a:custGeom` paths); losses Word cannot carry
+  (non-solid paints, per-side strokes, dash phase, even-odd fill,
+  non-zero outset, unresolvable geometry) report `shape` Approximated.
+  Only C1 still drops them with a `shape` report.
 - **Dual `CompatMode`/`Degradation` definitions** in `tydocx-core` and
   `tydocx-ir` remain to be unified.
 - **Image `alt:`** is never emitted (`wp:docPr descr` is a backlog item at
