@@ -264,6 +264,66 @@ fn page_counter_fields_cache_the_paged_values() {
     );
 }
 
+/// A page-number restart makes `counter(page).final()` the last *logical*
+/// page number, but ` NUMPAGES ` refreshes to the *physical* page count —
+/// the field keeps the correct cached value and reports the mismatch.
+#[test]
+fn numpages_field_after_restart_reports_final_mismatch() {
+    let c3 = part(
+        "issue_page_counter_final_restart",
+        CompatMode::C3,
+        "word/document.xml",
+    );
+    assert!(c3.contains(" NUMPAGES "), "C3 still emits the field: {c3}");
+    assert!(
+        c3.contains(">(7,)<"),
+        "the cached result keeps the last logical number: {c3}"
+    );
+    let outcome = fixture_outcome_with_options(
+        "issue_page_counter_final_restart",
+        &ConvertOptions::new(CompatMode::C3),
+    );
+    assert!(
+        outcome.degradations.iter().any(|d| {
+            d.construct == "page-counter-final"
+                && d.action == tydocx_core::DegradationAction::Approximated
+                && d.message.contains("7")
+                && d.message.contains("2")
+        }),
+        "the restart mismatch is reported with both numbers: {:?}",
+        outcome.degradations
+    );
+    // C2 emits no field, so the literal stays under `page-counter-value`.
+    let c2_constructs: Vec<String> = fixture_outcome_with_options(
+        "issue_page_counter_final_restart",
+        &ConvertOptions::new(CompatMode::C2),
+    )
+    .degradations
+    .iter()
+    .map(|d| d.construct.to_string())
+    .collect();
+    assert!(
+        !c2_constructs.iter().any(|c| c == "page-counter-final"),
+        "C2 reports only the literalized counter: {c2_constructs:?}"
+    );
+}
+
+/// With no restart the last logical number equals the physical count, so
+/// ` NUMPAGES ` refreshes to the same value — no mismatch report.
+#[test]
+fn numpages_field_without_restart_reports_no_mismatch() {
+    let outcome =
+        fixture_outcome_with_options("fields_page_counters", &ConvertOptions::new(CompatMode::C3));
+    assert!(
+        !outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "page-counter-final"),
+        "final == physical count; no report: {:?}",
+        outcome.degradations
+    );
+}
+
 #[test]
 fn heading_query_header_emits_styleref() {
     let header = part("fields_styleref", CompatMode::C3, "word/header1.xml");

@@ -390,6 +390,11 @@ fn lower_columns_block(
             state.ending_break(title_page),
             false,
         );
+        // The restart belongs to the OOXML section that began it — the one
+        // the in-break just ended. The columns section and the resumed
+        // ambient section continue numbering, so they must not re-stamp
+        // `w:start` and re-initiate the restart.
+        state.numbering_start = None;
         pending_title_page = false;
     }
     let mut col_settings = state.settings.clone();
@@ -417,7 +422,10 @@ fn lower_columns_block(
             page_settings: Some(col_settings),
             title_page: pending_title_page,
             page_numbering: state.numbering,
-            page_number_start: state.numbering_start,
+            // `take()` — a columns block opening the document has no
+            // in-break, so its section carries the initial restart itself;
+            // either way the value is consumed by the first sectPr emitted.
+            page_number_start: state.numbering_start.take(),
         },
         false,
     );

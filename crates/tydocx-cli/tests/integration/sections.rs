@@ -436,6 +436,72 @@ fn mirrored_margins_mixed_section_c2_flags_and_reports() {
     );
 }
 
+/// Margins declared through a `#let` variable reach the `StyleChain` but not
+/// the source-AST read — `w:mirrorMargins` accumulates any section's
+/// `two_sided`, so a later one-sided section cannot mask it.
+#[test]
+fn mirrored_margins_variable_c2_flags_and_reports() {
+    let package = fixture_package_with_options(
+        "mirrored_margins_variable",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    assert!(
+        package
+            .part_text("word/settings.xml")
+            .contains("<w:mirrorMargins/>"),
+        "C2 emits w:mirrorMargins when any section uses inside/outside margins"
+    );
+    let outcome = fixture_outcome_with_options(
+        "mirrored_margins_variable",
+        &ConvertOptions::new(CompatMode::C2),
+    );
+    assert!(
+        outcome.degradations.iter().any(|d| {
+            d.construct == "mirrored-margins"
+                && d.action == tydocx_core::DegradationAction::Approximated
+        }),
+        "the one-sided section's swap is reported: {:?}",
+        outcome.degradations
+    );
+}
+
+#[test]
+fn mirrored_margins_variable_c3_emits_flag() {
+    let package = fixture_package_with_options(
+        "mirrored_margins_variable",
+        &ConvertOptions::new(CompatMode::C3),
+    );
+    assert!(
+        package
+            .part_text("word/settings.xml")
+            .contains("<w:mirrorMargins/>"),
+        "C3 emits w:mirrorMargins"
+    );
+}
+
+/// Pin for the pre-existing C1 quirk: `margins_mirrored` reads the chain's
+/// last-wins value, so a document ending on a one-sided margin reports only
+/// the merged section — not `mirrored-margins` — and emits no flag.
+#[test]
+fn mirrored_margins_variable_c1_reports_section_break_only() {
+    let outcome = c1("mirrored_margins_variable");
+    assert_has(&outcome, "section-break");
+    assert!(
+        !constructs(&outcome).iter().any(|c| c == "mirrored-margins"),
+        "C1 keeps the chain's last-wins read — the mirrored section is not reported"
+    );
+    let package = fixture_package_with_options(
+        "mirrored_margins_variable",
+        &ConvertOptions::new(CompatMode::C1),
+    );
+    assert!(
+        !package
+            .part_text("word/settings.xml")
+            .contains("mirrorMargins"),
+        "C1 does not emit w:mirrorMargins"
+    );
+}
+
 /// A one-sided section whose lateral margins are symmetric is unaffected by
 /// the document-global flag — representable, so no report.
 #[test]
@@ -656,6 +722,61 @@ fn columns_block_after_pagebreak_keeps_break() {
         xml.contains(r#"<w:cols w:num="2""#),
         "the columns section still forms: {xml}"
     );
+}
+
+/// `w:start` belongs to the OOXML section that began the restart: the
+/// continuous breaks a `#columns` block inserts *inside* that section keep
+/// the numbering format but must not re-initiate the restart.
+#[test]
+fn columns_inside_restart_section_stamps_start_once() {
+    for mode in [CompatMode::C2, CompatMode::C3] {
+        let xml = fixture_package_with_options(
+            "issue_columns_numbering_restart",
+            &ConvertOptions::new(mode),
+        )
+        .part_text("word/document.xml")
+        .to_owned();
+        assert_eq!(
+            xml.matches(r#"w:start="7""#).count(),
+            1,
+            "{mode:?}: the restart stamps once, on the section that began it: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<w:pgNumType w:fmt="lowerRoman" w:start="7"/>"#),
+            "{mode:?}: the restarted section keeps its format and start: {xml}"
+        );
+        assert_eq!(
+            xml.matches(r#"<w:pgNumType w:fmt="lowerRoman"/>"#).count(),
+            2,
+            "{mode:?}: the columns section and the resumed ambient section \
+             keep the format without re-initiating the restart: {xml}"
+        );
+    }
+}
+
+/// A `#pagebreak()` right before the block is real content the continuous
+/// in-break keeps; the restart still stamps exactly once, on the section
+/// boundary that began it.
+#[test]
+fn columns_after_pagebreak_in_restart_section_stamps_start_once() {
+    for mode in [CompatMode::C2, CompatMode::C3] {
+        let xml = fixture_package_with_options(
+            "issue_columns_restart_pagebreak",
+            &ConvertOptions::new(mode),
+        )
+        .part_text("word/document.xml")
+        .to_owned();
+        assert_eq!(
+            xml.matches(r#"w:start="7""#).count(),
+            1,
+            "{mode:?}: the restart stamps once at the real section boundary: {xml}"
+        );
+        assert_eq!(
+            xml.matches(r#"<w:br w:type="page"/>"#).count(),
+            1,
+            "{mode:?}: the explicit page break beside the columns boundary is kept: {xml}"
+        );
+    }
 }
 
 /// Representable top-level blocks never report `column-block` — at any

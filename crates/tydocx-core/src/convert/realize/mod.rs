@@ -84,6 +84,9 @@ pub struct DocxDocument {
     footnote_circled: bool,
     degradations: Vec<IrDegradation>,
     chain_overrides: page::SourceStyleOverrides,
+    /// Any section declared inside/outside margins — see
+    /// `CollectorState::two_sided_margins`.
+    two_sided_margins: bool,
     section_span: Option<Span>,
     introspector: ElementIntrospector<DocxPosition>,
 }
@@ -130,6 +133,7 @@ impl Output for DocxDocument {
             footnote_circled: state.footnote_circled,
             degradations: state.degradations,
             chain_overrides: state.chain_overrides,
+            two_sided_margins: state.two_sided_margins,
             section_span: state.section_span,
             introspector,
         })
@@ -478,8 +482,16 @@ pub fn export_ir_with_ir(
         docx_doc.degradations.iter().map(core_degradation).collect();
 
     let mut tmp = Document::new();
+    // `w:mirrorMargins` is document-global: it reflects *any* section's
+    // inside/outside margins, accumulated across page states the same way
+    // `one_sided_asymmetric_margins` is — the chain read of
+    // `margins_mirrored` is last-wins and masks an earlier mirrored
+    // section. `chain_overrides` itself keeps the chain value so C1's
+    // report contract is unchanged.
+    let mut chain = docx_doc.chain_overrides.clone();
+    chain.margins_mirrored |= docx_doc.two_sided_margins;
     apply_page_and_style_ir(
-        &docx_doc.chain_overrides,
+        &chain,
         world,
         paged_doc,
         &mut tmp,
@@ -550,6 +562,7 @@ pub fn export_ir_with_ir(
             paged,
             &style,
             Some(world.main_source()),
+            options.compat,
         );
         degradations.extend(patch_degradations.iter().map(core_degradation));
         if options.compat != CompatMode::C1 {

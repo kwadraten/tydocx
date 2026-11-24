@@ -297,20 +297,29 @@ bodies — now comes from `StyleChain`s or element identity.
   appear in the DOM — and shares no collector with the realize path.
 
 ### `inside:`/`outside:` margins
-- **Current:** keys parse to `margins_mirrored`; C2/C3 emit
-  `w:mirrorMargins` in `settings.xml` (the `sectPr` `pgMar` already carries
-  left=inside, right=outside — the form Word reads under the flag). C1 keeps
-  report-and-no-flag: `mirrored-margins` Skipped, no setting emitted. A
-  document that mixes inside/outside with one-sided asymmetric margins
-  cannot be faithful on both halves (the flag is document-global): the flag
-  still goes out and `mirrored-margins` reports the one-sided section's
+- **Current:** `margin.two_sided` is accumulated over every top-level page
+  state the way `one_sided_asymmetric_margins` is — the flag is
+  document-global, so any mirrored section sets it even when a later
+  section re-declares margins one-sided (the chain's `margins_mirrored`
+  read is last-wins and would mask it). C2/C3 emit `w:mirrorMargins` in
+  `settings.xml` (the `sectPr` `pgMar` already carries left=inside,
+  right=outside — the form Word reads under the flag). C1 keeps
+  report-and-no-flag: `mirrored-margins` Skipped, no setting emitted — and
+  it keeps the chain's last-wins read, so a document *ending* on a
+  one-sided margin under-reports there (pinned quirk). A document that
+  mixes inside/outside with one-sided asymmetric margins cannot be
+  faithful on both halves (the flag is document-global): the flag still
+  goes out and `mirrored-margins` reports the one-sided section's
   even-page swap as approximated.
 
 ### Decorated / multi-piece page-numbering patterns
 - **Current:** `numbering_page_format` maps arabic/lower-roman/upper-roman/
   lower-latin/upper-latin patterns to `w:pgNumType w:fmt` per section;
   `assign_numbering_starts` emits `w:start` only when the rendered counter
-  actually restarted. Decorated patterns and function numberings still
+  actually restarted. The restart stamps once — on the first `w:sectPr`
+  the restarted section ends with; the `continuous` breaks a `#columns`
+  block inserts inside that section keep `w:fmt` but do not re-initiate
+  `w:start`. Decorated patterns and function numberings still
   return `None` (no `w:fmt`); C1 reports `page-numbering-change`, and
   `page-numbering-pattern` reports the unmappable declared form at every
   level.
@@ -432,6 +441,11 @@ bodies — now comes from `StyleChain`s or element identity.
   (D1); a field body the cache cannot carry losslessly falls back to the
   literal runs.
 - **Registered remainder:**
+  - ` NUMPAGES ` after a page-number restart — the field refreshes to the
+    *physical* page count while `counter(page).final()` is the last page's
+    *logical* number. When they differ the cached result stays the Typst
+    value and `page-counter-final` reports the mismatch (C3 only — C1/C2
+    emit no field and stay literal under `page-counter-value`).
   - `SECTIONPAGES` — Typst has no per-section total-page construct
     (`counter(page).final()` is always whole-document), so there is no
     source expression to feed it.

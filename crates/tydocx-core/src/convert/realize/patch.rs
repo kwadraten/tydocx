@@ -18,6 +18,7 @@ use typst_utils::PicoStr;
 use super::collect::location_hash64;
 use super::inline::FootnoteMarker;
 use super::style::{contains_cjk, lower_runs_match};
+use crate::compat::CompatMode;
 use crate::convert::image::{
     ImagePlacement, collect_image_sizes, extract_figure_rasters, hash_bytes,
 };
@@ -33,6 +34,7 @@ pub fn patch_document(
     paged: &PagedDocument,
     style: &DocumentStyle,
     source: Option<&Source>,
+    compat: CompatMode,
 ) -> Vec<Degradation> {
     let mut degradations = Vec::new();
 
@@ -89,7 +91,7 @@ pub fn patch_document(
     }
     doc.footnotes = footnotes;
 
-    patch_page_counters(doc, paged, source, &mut degradations);
+    patch_page_counters(doc, paged, source, compat, &mut degradations);
 
     let sizes = collect_image_sizes(paged);
     patch_block_images(&mut doc.body, &sizes);
@@ -119,6 +121,7 @@ fn patch_page_counters(
     doc: &mut IrDocument,
     paged: &PagedDocument,
     source: Option<&Source>,
+    compat: CompatMode,
     degradations: &mut Vec<Degradation>,
 ) {
     let mut patch = PagePatch {
@@ -126,6 +129,8 @@ fn patch_page_counters(
         source,
         misplaced: false,
         unrenderable: false,
+        numpages_mismatch: false,
+        numpages_span: None,
     };
     patch_page_blocks(&mut doc.body, &mut patch);
     for footnote in &mut doc.footnotes {
@@ -155,6 +160,27 @@ fn patch_page_counters(
             });
         }
     }
+    // `counter(page).final()` maps to ` NUMPAGES `, which refreshes to the
+    // *physical* page count — a restart makes the last page's *logical*
+    // number differ, so the field would replace the (correct) cached value
+    // on update. Only C3 emits the field, so only C3 reports the mismatch.
+    if compat == CompatMode::C3
+        && patch.numpages_mismatch
+        && let Some(logical) = final_number(paged)
+    {
+        let physical = paged.pages().len();
+        degradations.push(Degradation {
+            span: patch.numpages_span,
+            construct: "page-counter-final",
+            action: DegradationAction::Approximated,
+            message: format!(
+                "a page-number restart makes counter(page).final() the last logical \
+                 page number ({logical}), not the physical page count ({physical}); \
+                 the NUMPAGES field refreshes to the physical count on update, so \
+                 the cached result keeps the Typst value"
+            ),
+        });
+    }
 }
 
 struct PagePatch<'a> {
@@ -164,6 +190,11 @@ struct PagePatch<'a> {
     misplaced: bool,
     /// A numbering/display shape the patch cannot re-render.
     unrenderable: bool,
+    /// A `counter(page).final()` field whose cached result ` NUMPAGES `
+    /// cannot refresh to.
+    numpages_mismatch: bool,
+    /// The first such field's span (a field may carry none).
+    numpages_span: Option<typst_syntax::Span>,
 }
 
 /// The logical page number (`counter(page)` value) at `location`.
@@ -310,6 +341,13 @@ fn patch_page_inlines(inlines: &mut [IrInline], patch: &mut PagePatch<'_>) {
                 let Some(final_number) = final_number(patch.paged) else {
                     continue;
                 };
+                // ` NUMPAGES ` refreshes to the physical page count — a
+                // final logical number that differs (a restart) means the
+                // field would not keep the cache it carries.
+                if final_number != patch.paged.pages().len() as u64 && !patch.numpages_mismatch {
+                    patch.numpages_mismatch = true;
+                    patch.numpages_span = *span;
+                }
                 let old = cached_text(body);
                 let render = counter_render(patch.source, *span);
                 let text = match (&render, location.map(Location::new)) {

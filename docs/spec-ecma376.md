@@ -176,7 +176,7 @@ flowchart LR
 | `@label` with `supplement: auto`/`Page` | ` PAGEREF <label> \h ` | same | same |
 | unresolved label/link target | literal text + `"unresolved-link"` (all levels) | same | same |
 | `context counter(page)` in body text | ` PAGE ` field with cached display text | same | same |
-| `context counter(page).final()` | C3: ` NUMPAGES ` field with the rendered total cached | literal + `"page-counter-value"` | C3 emits the field |
+| `context counter(page).final()` | C3: ` NUMPAGES ` field with the rendered total cached; after a page-number restart the final logical number differs from the physical count ` NUMPAGES ` refreshes to — the cache stays the Typst value + `"page-counter-final"` | literal + `"page-counter-value"` | C3 emits the field |
 | arithmetic on `counter(page)` | literal + `"page-counter-value"` (all levels) | same | same |
 | `counter(footnote)` references | literal + `"footnote-counter-reference"` (C1/C2). C3: ` NOTEREF <label> \h ` with the rendered marker cached; the labelled `FootnoteElem` carries a `w:bookmarkStart`/`w:bookmarkEnd` of the label's name — a reference whose label never lands on a footnote stays literal + the same report | same | C3 emits the field |
 | labels on headings/figures/equations | `w:bookmarkStart`/`w:bookmarkEnd` | same | same |
@@ -191,9 +191,9 @@ flowchart LR
 | `#set page(header-ascent/footer-descent)` | `w:header`/`w:footer` in `w:pgMar` | same | same |
 | `#set align(horizon/bottom)` page | `w:vAlign` in `w:sectPr` | same | same |
 | `#set page(numbering: "…")` | `w:pgNumType w:fmt` per section; unmappable pattern → `"page-numbering-pattern"` and glyph-based detection (all levels) | same | same |
-| page number restart | `w:pgNumType w:start` when the rendered footer numbering diverges | same | same |
+| page number restart | `w:pgNumType w:start` when the rendered footer numbering diverges, stamped once on the section that began the restart — `continuous` breaks inside it (`#columns`) keep `w:fmt` without re-initiating `w:start` | same | same |
 | `#set page(header:/footer:)` | `w:headerReference`/`w:footerReference` (default, first, even) + `w:titlePg`/`w:evenAndOddHeaders`; bare page numbers become ` PAGE ` fields inside the generated part. C3: a zone whose whole content is a heading query (`query(selector(heading).before(here()))`, `where(level: N)` picked up) renders as ` STYLEREF "Heading N" ` with the extracted heading text cached; mixed-markup zones stay literal | page-1 zone kept as literal paragraphs + `"header-footer-variant"` | three slots; mid-document variants beyond what the slots express → `"header-footer-variant"` report |
-| `#set page(margin: (inside/outside))` two-sided | `w:mirrorMargins` in `settings.xml`; `w:pgMar` left/right are inside/outside | + `"mirrored-margins"`, no flag | flag emitted; a doc mixing inside/outside with one-sided asymmetric margins → `"mirrored-margins"` approximated (the flag is document-global) |
+| `#set page(margin: (inside/outside))` two-sided | `w:mirrorMargins` in `settings.xml` when any section declares inside/outside (`two_sided` accumulates over sections); `w:pgMar` left/right are inside/outside | + `"mirrored-margins"`, no flag | flag emitted; a doc mixing inside/outside with one-sided asymmetric margins → `"mirrored-margins"` approximated (the flag is document-global) |
 | `#set page(foreground:/background:)` | `wp:anchor` (never `wp:inline`) inside the default/even/first **header** part selected by the layer's page-variation shape; `positionH`/`positionV` `relativeFrom="page"`; text editable in `wps:txbx`, images as `pic:pic`, solid rects as `a:solidFill` shapes; background units get `behindDoc="1"`, foreground `behindDoc="0"` | furniture text literalized into the header part + `"page-foreground"` | anchored; transformed/clipped groups keep their content but lose the transform + `"page-foreground"`; unrepresentable per-page variation keeps page 1's layer on `first` + `"page-foreground"` approximated |
 | `page(fill:)` solid | full-page `wp:anchor` `a:solidFill` shape, `behindDoc="1"`, in the default header part | + `"page-foreground"` literalized | non-solid fills → `"page-foreground"` skipped |
 | `#place` inside the header/footer zones | `wp:anchor` paragraph in the same header/footer part (`relativeFrom="page"`), coexisting with the zone's literal/field paragraphs | + `"placed-content"` | anchored in the zone part |
@@ -281,7 +281,9 @@ every level; the C1-specific gate adds `grid-layout`, `vector-image`,
 `section-break`, `header-footer-variant`, `mirrored-margins`,
 `page-numbering-change`, `footnote-numbering`, `outline-target`,
 `outline-indent`, `figure-placement`, `show-*-rule` and the
-source-AST-set-rule reports.
+source-AST-set-rule reports. The C3 field layer adds
+`page-counter-final` — a ` NUMPAGES ` cached result the field cannot
+refresh to (physical page count vs final logical number after a restart).
 
 ## Open items
 
