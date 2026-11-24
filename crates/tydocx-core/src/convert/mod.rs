@@ -240,7 +240,10 @@ fn compile_both_targets(
     };
 
     let paged_result = typst::compile::<PagedDocument>(world);
-    let paged_doc = paged_result.output.ok();
+    let paged_doc = match paged_result.output {
+        Ok(doc) => Some(doc),
+        Err(errors) => return Err(errors.into_iter().collect()),
+    };
 
     Ok((html_doc, paged_doc))
 }
@@ -360,10 +363,10 @@ fn apply_headers_and_footers(
         let zones = zone_heading_levels(world, compat);
         // A pure heading-query header is exactly the case `extract_zone_parts`
         // calls unrepresentable — the STYLEREF field makes it representable.
-        let header_styleref = zones.header.is_some_and(|level| {
-            styleref_zone(&mut top.default, level)
-                | styleref_zone(&mut top.even, level)
-                | styleref_zone(&mut top.first, level)
+        let header_styleref = zones.header.as_ref().is_some_and(|zref| {
+            styleref_zone(&mut top.default, zref, "header", degradations)
+                | styleref_zone(&mut top.even, zref, "header", degradations)
+                | styleref_zone(&mut top.first, zref, "header", degradations)
         });
         let header_first_differs = top.title_page;
         let header_even_differs = top.even_and_odd;
@@ -392,13 +395,20 @@ fn apply_headers_and_footers(
         // Read before the closure below captures `doc` mutably.
         let footer_absent = doc.footer.is_none();
         let mut extract_bottom = |bottom_slot: &mut Option<page::ZoneParts>| {
-            let parts =
+            let mut parts =
                 page::extract_zone_parts(paged, page::MarginZone::Bottom, margins, declared, maps);
+            let footer_styleref = zones.footer.as_ref().is_some_and(|zref| {
+                styleref_zone(&mut parts.default, zref, "footer", degradations)
+                    | styleref_zone(&mut parts.even, zref, "footer", degradations)
+                    | styleref_zone(&mut parts.first, zref, "footer", degradations)
+            });
             footer_first_differs = parts.title_page;
             footer_even_differs = parts.even_and_odd;
             doc.even_and_odd_headers |= parts.even_and_odd;
             doc.title_page |= parts.title_page;
-            report_zone_unrepresentable(&parts, "footer", compat, degradations);
+            if !footer_styleref {
+                report_zone_unrepresentable(&parts, "footer", compat, degradations);
+            }
             doc.footer.clone_from(&parts.default);
             doc.footer_even.clone_from(&parts.even);
             doc.footer_first.clone_from(&parts.first);
@@ -408,7 +418,10 @@ fn apply_headers_and_footers(
             if declared.is_none() {
                 doc.page_numbering = Some(fmt);
             }
-            if footer_has_places {
+            // A heading-query footer is not a page number — it must be
+            // extracted for the STYLEREF splice, not replaced by the
+            // generated PAGE-field footer.
+            if footer_has_places || zones.footer.is_some() {
                 if footer_absent {
                     extract_bottom(&mut bottom);
                 }
@@ -569,22 +582,56 @@ fn zone_heading_levels(world: &TydocxWorld, compat: CompatMode) -> page::PageZon
     page::page_zone_heading_levels(main.text(), &template_names)
 }
 
-/// Replace a zone part's paragraphs with a `STYLEREF "Heading N"` field —
-/// each paragraph must be plain text runs (a mixed-content paragraph would
-/// lose literal text on field update and is left alone). Returns whether any
-/// paragraph was wrapped.
-fn styleref_zone(part: &mut Option<HeaderFooter>, level: u8) -> bool {
+/// Wrap each paragraph's heading-query result in a `STYLEREF "Heading N"`
+/// field. Pure-query zones wrap the whole paragraph; mixed zones isolate the
+/// query-result span by consuming the zone's literal prefix/suffix pieces
+/// (`[Report — #q]` renders `Report — Intro` → only `Intro` is wrapped, so a
+/// Word field update keeps the literal). Paragraphs the span can't be
+/// isolated for — a rendered literal with an empty query result, an
+/// ambiguous match, non-text content, or a zone with several queries — stay
+/// literal and report `styleref-mixed`. Returns whether any paragraph was
+/// wrapped.
+fn styleref_zone(
+    part: &mut Option<HeaderFooter>,
+    zref: &page::ZoneStyleref,
+    zone_name: &str,
+    degradations: &mut Vec<Degradation>,
+) -> bool {
     let Some(part) = part else {
         return false;
     };
     let mut wrapped = false;
-    for para in &mut part.paragraphs {
-        if para.inlines.is_empty()
-            || !para
-                .inlines
-                .iter()
-                .all(|i| matches!(i, InlineElement::Text(_)))
+    let mut report = |reason: &str| {
+        let message =
+            format!("{zone_name}: {reason}; paragraph kept literal instead of a STYLEREF field");
+        if !degradations
+            .iter()
+            .any(|d| d.construct == "styleref-mixed" && d.message == message)
         {
+            degradations.push(Degradation::new(
+                None,
+                "styleref-mixed",
+                DegradationAction::Approximated,
+                message,
+            ));
+        }
+    };
+    if zref.multiple_queries {
+        report("more than one heading query in the zone");
+        return false;
+    }
+    for para in &mut part.paragraphs {
+        if para.inlines.is_empty() {
+            continue;
+        }
+        if !para
+            .inlines
+            .iter()
+            .all(|i| matches!(i, InlineElement::Text(_)))
+        {
+            if !zref.literals.is_empty() {
+                report("non-text content alongside the heading query");
+            }
             continue;
         }
         let runs: Vec<Run> = para
@@ -595,13 +642,73 @@ fn styleref_zone(part: &mut Option<HeaderFooter>, level: u8) -> bool {
                 _ => None,
             })
             .collect();
-        para.inlines = vec![InlineElement::Field {
-            instruction: format!(" STYLEREF \"Heading {level}\" "),
-            result: runs,
-        }];
+        let text: String = runs.iter().map(|r| r.text.as_str()).collect();
+        let span = if zref.literals.is_empty() {
+            Some((0, text.len()))
+        } else {
+            query_result_span(&text, &zref.literals).or_else(|| {
+                report("heading-query result could not be isolated from literal text");
+                None
+            })
+        };
+        let Some((start, end)) = span else { continue };
+        let mut prefix = splice_runs(&runs, 0, start);
+        let mut suffix = splice_runs(&runs, end, text.len());
+        prefix.retain(|r| !r.text.is_empty());
+        suffix.retain(|r| !r.text.is_empty());
+        let field_runs = splice_runs(&runs, start, end);
+        para.inlines = prefix
+            .into_iter()
+            .map(InlineElement::Text)
+            .chain(std::iter::once(InlineElement::Field {
+                instruction: format!(" STYLEREF \"Heading {}\" ", zref.level),
+                result: field_runs,
+            }))
+            .chain(suffix.into_iter().map(InlineElement::Text))
+            .collect();
         wrapped = true;
     }
     wrapped
+}
+
+/// Locate the heading-query result span inside a rendered mixed-zone
+/// paragraph by consuming the zone's literal pieces as prefix/suffix in
+/// source order. `None` when the span can't be isolated — the rendered text
+/// is itself one of the literals (empty query result on that page), no
+/// literal matches, or the match leaves nothing.
+fn query_result_span(text: &str, literals: &[String]) -> Option<(usize, usize)> {
+    if literals.iter().any(|lit| text == *lit) {
+        return None;
+    }
+    let (mut start, mut end) = (0usize, text.len());
+    for lit in literals.iter().filter(|l| !l.is_empty()) {
+        let rest = &text[start..end];
+        if rest.starts_with(lit.as_str()) && start + lit.len() < end {
+            start += lit.len();
+        } else if rest.ends_with(lit.as_str()) && end - lit.len() > start {
+            end -= lit.len();
+        }
+    }
+    (start < end && (start > 0 || end < text.len())).then_some((start, end))
+}
+
+/// The runs covering byte span `start..end` of the concatenated run texts —
+/// a run straddling a boundary is split.
+fn splice_runs(runs: &[Run], start: usize, end: usize) -> Vec<Run> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    for run in runs {
+        let run_end = pos + run.text.len();
+        let s = start.max(pos);
+        let e = end.min(run_end);
+        if s < e {
+            let mut piece = run.clone();
+            piece.text = run.text[s - pos..e - pos].to_string();
+            out.push(piece);
+        }
+        pos = run_end;
+    }
+    out
 }
 
 /// In C2/C3 a first-page or odd/even zone variant is representable, so only a

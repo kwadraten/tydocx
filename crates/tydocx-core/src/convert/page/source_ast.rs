@@ -310,22 +310,35 @@ fn markup_text(node: &typst_syntax::SyntaxNode) -> String {
     text
 }
 
-/// Heading level a `page(header:)`/`page(footer:)` content references, for
+/// A heading query detected in a `page(header:)`/`page(footer:)` zone, for
 /// the C3 `STYLEREF` field.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PageZoneHeadings {
-    /// `Some(level)` when the header zone's whole content is a heading
-    /// query; `None` for static text or mixed markup.
-    pub header: Option<u8>,
-    /// Same for the footer zone.
-    pub footer: Option<u8>,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ZoneStyleref {
+    /// Queried heading level (`where(level: N)`, default 1).
+    pub level: u8,
+    /// Literal text runs collected from the zone's markup in source order —
+    /// used to isolate the query-result span inside a rendered zone
+    /// paragraph (`[Report — #q]` → `["Report — "]`).
+    pub literals: Vec<String>,
+    /// More than one heading query — the result span can't be isolated.
+    pub multiple_queries: bool,
 }
 
-/// The heading level each page zone's content queries — document-global
+/// Heading queries found in the page zones.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageZoneHeadings {
+    /// `Some` when the header zone contains a heading query; `None` for
+    /// static text or no query.
+    pub header: Option<ZoneStyleref>,
+    /// Same for the footer zone.
+    pub footer: Option<ZoneStyleref>,
+}
+
+/// The heading query each page zone's content makes — document-global
 /// `set page(header:/footer:)` rules (same scoping as
-/// [`footnote_counter_reset_in_page_header`]). `Some(level)` is only
-/// returned when the zone content is *purely* the heading query — literal
-/// markup mixed into the zone would be dropped by a `STYLEREF` on update.
+/// [`footnote_counter_reset_in_page_header`]). The zone may mix the query
+/// with literal markup; [`ZoneStyleref::literals`] lets the wrapper isolate
+/// the query-result span.
 #[must_use]
 pub fn page_zone_heading_levels(source: &str, template_names: &[String]) -> PageZoneHeadings {
     let root = typst_syntax::parse(source);
@@ -386,7 +399,7 @@ fn collect_zone_headings(
                         "footer" => &mut out.footer,
                         _ => continue,
                     };
-                    *slot = zone_heading_level(&named.expr()).or(*slot);
+                    *slot = zone_styleref(&named.expr()).or_else(|| slot.take());
                 }
             }
         }
@@ -397,27 +410,61 @@ fn collect_zone_headings(
     }
 }
 
-/// `Some(level)` when the zone content is purely a heading query.
-fn zone_heading_level(expr: &typst_syntax::ast::Expr<'_>) -> Option<u8> {
-    use typst_syntax::ast::{self, AstNode};
-    // Literal markup in a content block would be dropped by the STYLEREF
-    // field on update, so only pure code counts.
-    if let ast::Expr::ContentBlock(block) = expr
-        && !markup_text(block.to_untyped()).trim().is_empty()
-    {
-        return None;
+/// `Some` when the zone content contains a heading query, with the literal
+/// text runs recoverable from the zone's markup.
+fn zone_styleref(expr: &typst_syntax::ast::Expr<'_>) -> Option<ZoneStyleref> {
+    use typst_syntax::ast::AstNode;
+    let (level, queries) = heading_query_level(expr.to_untyped())?;
+    let mut literals = Vec::new();
+    collect_literal_pieces(expr.to_untyped(), &mut literals);
+    Some(ZoneStyleref {
+        level,
+        literals,
+        multiple_queries: queries > 1,
+    })
+}
+
+/// Collect each maximal run of markup text (`Text`/`Space`) in source
+/// order — every code node between literals is a piece boundary. Blank
+/// pieces (whitespace between code tokens) are dropped.
+fn collect_literal_pieces(node: &typst_syntax::SyntaxNode, pieces: &mut Vec<String>) {
+    use typst_syntax::SyntaxKind;
+
+    fn flush(current: &mut String, pieces: &mut Vec<String>) {
+        if !current.trim().is_empty() && !pieces.contains(current) {
+            pieces.push(std::mem::take(current));
+        } else {
+            current.clear();
+        }
     }
-    heading_query_level(expr.to_untyped())
+    fn walk(node: &typst_syntax::SyntaxNode, current: &mut String, pieces: &mut Vec<String>) {
+        for child in node.children() {
+            match child.kind() {
+                SyntaxKind::Text => current.push_str(child.leaf_text()),
+                SyntaxKind::Space => current.push(' '),
+                _ => {
+                    flush(current, pieces);
+                    walk(child, current, pieces);
+                }
+            }
+        }
+    }
+
+    let mut current = String::new();
+    walk(node, &mut current, pieces);
+    flush(&mut current, pieces);
 }
 
 /// Walk the subtree for `heading` referenced inside a query/context
-/// expression, picking up `where(level: N)` along the way.
-fn heading_query_level(node: &typst_syntax::SyntaxNode) -> Option<u8> {
+/// expression, picking up `where(level: N)` along the way. Returns the
+/// level and the number of heading queries found.
+fn heading_query_level(node: &typst_syntax::SyntaxNode) -> Option<(u8, usize)> {
     use typst_syntax::SyntaxKind;
     use typst_syntax::ast;
 
     let mut has_heading = false;
     let mut has_queryish = false;
+    let mut queries = 0usize;
     let mut level = None;
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
@@ -435,6 +482,14 @@ fn heading_query_level(node: &typst_syntax::SyntaxNode) -> Option<u8> {
                     )
                 {
                     has_queryish = true;
+                    if matches!(
+                        call.callee(),
+                        ast::Expr::Ident(i)
+                            if matches!(i.get().as_str(), "query" | "locate" | "counter")
+                    ) && has_ident(n, "heading")
+                    {
+                        queries += 1;
+                    }
                 }
             }
             _ => {}
@@ -452,7 +507,21 @@ fn heading_query_level(node: &typst_syntax::SyntaxNode) -> Option<u8> {
         }
         stack.extend(n.children());
     }
-    (has_heading && has_queryish).then_some(level.unwrap_or(1))
+    (has_heading && has_queryish).then_some((level.unwrap_or(1), queries))
+}
+
+/// Whether the subtree contains the identifier `name`.
+fn has_ident(node: &typst_syntax::SyntaxNode, name: &str) -> bool {
+    let mut stack = vec![node.clone()];
+    while let Some(n) = stack.pop() {
+        if let Some(ident) = n.cast::<typst_syntax::ast::Ident<'_>>()
+            && ident.get().as_str() == name
+        {
+            return true;
+        }
+        stack.extend(n.children().cloned());
+    }
+    false
 }
 
 /// Whether the source resets the footnote counter inside a page header

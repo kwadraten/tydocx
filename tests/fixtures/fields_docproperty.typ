@@ -15,3 +15,5 @@
 #context document.description
 
 #context document.date.display("[year]")
+
+#context document.date.display()

@@ -288,8 +288,11 @@ pub fn convert_ir(
         Err(errors) => return Err(errors.into_iter().collect()),
     };
     let paged_result = typst::compile::<PagedDocument>(world);
-    let paged_doc = paged_result.output.ok();
-    Ok(export_ir(&docx_doc, paged_doc.as_ref(), world, options))
+    let paged_doc = match paged_result.output {
+        Ok(doc) => doc,
+        Err(errors) => return Err(errors.into_iter().collect()),
+    };
+    Ok(export_ir(&docx_doc, Some(&paged_doc), world, options))
 }
 
 fn measure_heading_sizes_from_ir(ir: &mut IrDocument) {
@@ -540,6 +543,7 @@ pub fn export_ir_with_ir(
             &docx_doc.footnote_bodies,
             paged,
             &style,
+            Some(world.main_source()),
         );
         degradations.extend(patch_degradations.iter().map(core_degradation));
         if options.compat != CompatMode::C1 {

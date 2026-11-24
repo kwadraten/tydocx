@@ -105,10 +105,17 @@ fn conformance_fingerprint_is_deterministic_and_id_agnostic() {
 }
 
 /// Entries the corpus walk finds but cannot convert as a root document:
-/// `compile_error_span` fails Typst compilation on purpose, and
-/// `issue_import_parent_dir/d` is an import module that escapes the sandbox
-/// root when compiled standalone — each excluded by name, not silently.
-const EXPECTED_COMPILE_ERRORS: &[&str] = &["compile_error_span", "issue_import_parent_dir/d"];
+/// `compile_error_span` fails Typst compilation on purpose, `paged_compile_failure`
+/// and `fields_time_error` fail it as their tests' subject (the surfaced
+/// diagnostic is the assertion), and `issue_import_parent_dir/d` is an import
+/// module that escapes the sandbox root when compiled standalone — each
+/// excluded by name, not silently.
+const EXPECTED_COMPILE_ERRORS: &[&str] = &[
+    "compile_error_span",
+    "fields_time_error",
+    "issue_import_parent_dir/d",
+    "paged_compile_failure",
+];
 
 /// REACH census over the fixture corpus: every IR paragraph's text appears
 /// in the output, and every output paragraph's text traces to IR content or

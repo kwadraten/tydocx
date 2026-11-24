@@ -290,9 +290,14 @@ Recorded here so future C3 work and known gaps have one permanent home; the
 per-feature *degradation* list above is exhaustive.
 
 - **C3 field layer — remainder.** The layer landed: `w:updateFields`,
-  `NUMPAGES`, `NOTEREF` + footnote bookmark, `DATE`, `DOCPROPERTY`, `SEQ`
-  (figure/table/equation captions), `STYLEREF` for pure heading-query page
-  zones, `CITATION` + the pre-existing `customXml` sources part, and the
+  `NUMPAGES`/`PAGE`/`PAGEREF` with paged-compile cached values, `NOTEREF` +
+  footnote bookmark, `DATE`/`DOCPROPERTY` with `\@` picture switches
+  (unmappable or computed patterns emit bare fields +
+  `date-format-switch`), `SEQ` (figure/table/equation captions — the guard
+  is the rendered numeral's arity — and flat literal enums as `SEQ enum-N`),
+  `STYLEREF` for heading-query page zones (the query-result span is spliced
+  out of zones mixing the query with literal markup, in headers and
+  footers), `CITATION` + the pre-existing `customXml` sources part, and the
   `HYPERLINK` field form (`w:fldSimple`, already emitted at every level).
   What it deliberately does not cover:
   - `SECTIONPAGES` — Typst has no per-section total-page construct;
@@ -300,13 +305,10 @@ per-feature *degradation* list above is exhaustive.
     only faithful mapping.
   - `TIME` — `datetime.now()` does not exist in Typst 0.15, so no source
     expression can feed it; the mapping lands if Typst adds one.
-  - `SEQ` for enums — C2 never emits literal enum numbering (unmapped
-    numeral systems fall back to `w:numPr` decimal, so there is no literal
-    to cache); native `w:numPr` numbering is left alone by design.
-  - `DATE \@ `/`DOCPROPERTY` format switches, and `STYLEREF` for zones
-    mixing the heading query with literal markup.
-- **`enum(reversed:)`** is silently forward-numbered at C2/C3; only C1
-  reports it.
+  - `SEQ` for nested or reversed literal enums, per-item `number:`
+    overrides, and rendered numerals with genuinely multiple pieces —
+    stays literal + `enum-seq-nested`/`enum-seq-override`/
+    `enum-seq-numeral`/`enum-reversed`/`seq-multi-piece`.
 - **`outline(target:)`** non-heading and custom `outline(indent:)` are silently
   reduced/dropped at C2/C3; only C1 reports them.
 - **Custom `#footnote(numbering:)`** silently falls back to the `numFmt` in

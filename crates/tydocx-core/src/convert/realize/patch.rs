@@ -1,14 +1,19 @@
 use std::collections::HashMap;
 
 use tydocx_ir::{
-    Degradation, DegradationAction, IrBlock, IrDocument, IrFootnote, IrImage, IrInline, IrParagraph,
+    Degradation, DegradationAction, IrBlock, IrDocument, IrField, IrFootnote, IrImage, IrInline,
+    IrParagraph,
 };
 use tydocx_ooxml::document::{DocumentStyle, Run};
 use typst_layout::PagedDocument;
-use typst_library::introspection::{Location, Tag};
+use typst_library::foundations::{Content, Label};
+use typst_library::introspection::{Introspector, Location, Tag};
 use typst_library::layout::{Frame, FrameItem};
+use typst_library::model::Numbering;
 use typst_library::text::{FontStyle, TextItem};
 use typst_library::visualize::ImageKind;
+use typst_syntax::Source;
+use typst_utils::PicoStr;
 
 use super::collect::location_hash64;
 use super::inline::FootnoteMarker;
@@ -16,7 +21,10 @@ use super::style::{contains_cjk, lower_runs_match};
 use crate::convert::image::{
     ImagePlacement, collect_image_sizes, extract_figure_rasters, hash_bytes,
 };
-use crate::convert::page::{effective_style, effective_weight, extract_non_black_color};
+use crate::convert::page::{
+    PageCounterRender, effective_style, effective_weight, extract_non_black_color,
+    page_counter_render,
+};
 
 pub fn patch_document(
     doc: &mut IrDocument,
@@ -24,6 +32,7 @@ pub fn patch_document(
     collected_bodies: &HashMap<Location, Vec<IrParagraph>>,
     paged: &PagedDocument,
     style: &DocumentStyle,
+    source: Option<&Source>,
 ) -> Vec<Degradation> {
     let mut degradations = Vec::new();
 
@@ -80,6 +89,8 @@ pub fn patch_document(
     }
     doc.footnotes = footnotes;
 
+    patch_page_counters(doc, paged, source, &mut degradations);
+
     let sizes = collect_image_sizes(paged);
     patch_block_images(&mut doc.body, &sizes);
     for footnote in &mut doc.footnotes {
@@ -96,6 +107,340 @@ pub fn patch_document(
     attach_figure_canvases(&mut doc.body, &mut canvases);
 
     degradations
+}
+
+/// Re-render the cached page-counter literals the realize path could not
+/// know — its introspector has no pages, so every `counter(page)` expression
+/// collected page 1 values. `PageField` inlines (` PAGE `),
+/// `IrField::NumPages` field bodies (` NUMPAGES `), and `PAGEREF`-shaped
+/// `Ref` inlines are rewritten from the `PagedDocument`'s logical page
+/// numbers; locations are content hashes stable across the two compiles.
+fn patch_page_counters(
+    doc: &mut IrDocument,
+    paged: &PagedDocument,
+    source: Option<&Source>,
+    degradations: &mut Vec<Degradation>,
+) {
+    let mut patch = PagePatch {
+        paged,
+        source,
+        misplaced: false,
+        unrenderable: false,
+    };
+    patch_page_blocks(&mut doc.body, &mut patch);
+    for footnote in &mut doc.footnotes {
+        for para in &mut footnote.body {
+            patch_page_inlines(&mut para.inlines, &mut patch);
+        }
+    }
+    for (construct, message) in [
+        (
+            patch.misplaced.then_some("page-counter-location"),
+            "a page-counter expression has no position in the paged document; \
+             its cached field result keeps the realize-time value",
+        ),
+        (
+            patch.unrenderable.then_some("page-counter-render"),
+            "a page numbering or display shape the patch cannot re-render \
+             (a numbering function or unparseable pattern); the cached field \
+             result falls back to decimal digits",
+        ),
+    ] {
+        if let Some(construct) = construct {
+            degradations.push(Degradation {
+                span: None,
+                construct,
+                action: DegradationAction::Approximated,
+                message: message.to_string(),
+            });
+        }
+    }
+}
+
+struct PagePatch<'a> {
+    paged: &'a PagedDocument,
+    source: Option<&'a Source>,
+    /// A read location the paged introspector could not place.
+    misplaced: bool,
+    /// A numbering/display shape the patch cannot re-render.
+    unrenderable: bool,
+}
+
+/// The logical page number (`counter(page)` value) at `location`.
+fn logical_number(paged: &PagedDocument, location: Location) -> Option<u64> {
+    let index = paged.introspector().page(location)?.get() - 1;
+    paged.pages().get(index).map(|page| page.number)
+}
+
+/// The last page's logical number — `counter(page).final()`.
+fn final_number(paged: &PagedDocument) -> Option<u64> {
+    paged.pages().last().map(|page| page.number)
+}
+
+fn label_location(paged: &PagedDocument, label: &str) -> Option<Location> {
+    paged
+        .introspector()
+        .query_label(Label::new(PicoStr::intern(label))?)
+        .ok()
+        .and_then(Content::location)
+}
+
+/// The number to render at a `display`-shape read: the counter value at the
+/// resolved location, or the final value for `final()` reads.
+fn render_at(
+    patch: &mut PagePatch<'_>,
+    render: &PageCounterRender,
+    location: Location,
+    current: u64,
+    old_text: &str,
+) -> String {
+    match render {
+        PageCounterRender::Raw => render_raw(current, old_text),
+        PageCounterRender::Unrenderable => {
+            patch.unrenderable = true;
+            current.to_string()
+        }
+        PageCounterRender::Display {
+            numbering,
+            both,
+            at_label,
+        } => {
+            let (location, current) = if let Some(label) = at_label.as_deref() {
+                if let Some(resolved) = label_location(patch.paged, label)
+                    .and_then(|loc| logical_number(patch.paged, loc).map(|n| (loc, n)))
+                {
+                    resolved
+                } else {
+                    patch.unrenderable = true;
+                    return current.to_string();
+                }
+            } else {
+                (location, current)
+            };
+            let mut numbers = vec![current];
+            if *both {
+                numbers.push(final_number(patch.paged).unwrap_or(current));
+            }
+            let numbering = numbering
+                .clone()
+                .or_else(|| patch.paged.introspector().page_numbering(location).cloned());
+            render_numbered(
+                numbering.as_ref(),
+                &numbers,
+                current,
+                &mut patch.unrenderable,
+            )
+        }
+    }
+}
+
+/// The raw `CounterState` text shape: `(n,)` for a bare read, `n` for an
+/// indexed one — taken from the realized literal's own wrapper.
+fn render_raw(number: u64, old_text: &str) -> String {
+    if old_text.trim_start().starts_with('(') {
+        format!("({number},)")
+    } else {
+        number.to_string()
+    }
+}
+
+/// Apply a `Numbering` to a counter state — pattern numberings render
+/// without an engine; functions cannot be re-rendered after compilation
+/// and fall back to decimal digits.
+fn render_numbered(
+    numbering: Option<&Numbering>,
+    numbers: &[u64],
+    fallback: u64,
+    unrenderable: &mut bool,
+) -> String {
+    match numbering {
+        Some(Numbering::Pattern(pattern)) => {
+            if let Ok(text) = pattern.apply(None, numbers) {
+                text.to_string()
+            } else {
+                *unrenderable = true;
+                fallback.to_string()
+            }
+        }
+        Some(Numbering::Func(_)) => {
+            *unrenderable = true;
+            fallback.to_string()
+        }
+        // `counter(page).display()`'s default pattern renders the state with
+        // "1.1" — period-separated decimal numbers.
+        None => numbers
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join("."),
+    }
+}
+
+/// The display shape of one page-counter expression: re-parsed from source
+/// when the span survives, defaulting to the raw state shape.
+fn counter_render(source: Option<&Source>, span: Option<typst_syntax::Span>) -> PageCounterRender {
+    span.and_then(|span| source.map(|source| page_counter_render(source, span)))
+        .unwrap_or(PageCounterRender::Raw)
+}
+
+fn patch_page_inlines(inlines: &mut [IrInline], patch: &mut PagePatch<'_>) {
+    for inline in inlines {
+        match inline {
+            IrInline::PageField {
+                display_text,
+                location,
+                span,
+            } => {
+                let Some(location) = location.map(Location::new) else {
+                    continue;
+                };
+                let render = counter_render(patch.source, *span);
+                let Some(current) = logical_number(patch.paged, location) else {
+                    patch.misplaced = true;
+                    continue;
+                };
+                *display_text = render_at(patch, &render, location, current, display_text);
+            }
+            IrInline::Field {
+                kind: IrField::NumPages,
+                body,
+                span,
+                location,
+            } => {
+                let Some(final_number) = final_number(patch.paged) else {
+                    continue;
+                };
+                let old = cached_text(body);
+                let render = counter_render(patch.source, *span);
+                let text = match (&render, location.map(Location::new)) {
+                    (PageCounterRender::Display { .. }, Some(location)) => {
+                        render_at(patch, &render, location, final_number, &old)
+                    }
+                    _ => render_raw(final_number, &old),
+                };
+                set_cached_text(body, text);
+            }
+            IrInline::Ref {
+                target_label,
+                display_text,
+                page_ref: true,
+                page_target,
+            } => {
+                let (location, numbered, span) = if let Some(target) = page_target {
+                    (Location::new(target.location), target.numbered, target.span)
+                } else if let Some(location) = label_location(patch.paged, target_label) {
+                    (location, false, None)
+                } else {
+                    patch.misplaced = true;
+                    continue;
+                };
+                let Some(current) = logical_number(patch.paged, location) else {
+                    patch.misplaced = true;
+                    continue;
+                };
+                let render = span
+                    .and_then(|span| patch.source.map(|source| page_counter_render(source, span)))
+                    .unwrap_or(if numbered {
+                        PageCounterRender::Display {
+                            numbering: None,
+                            both: false,
+                            at_label: None,
+                        }
+                    } else {
+                        PageCounterRender::Raw
+                    });
+                *display_text = render_at(patch, &render, location, current, display_text);
+            }
+            IrInline::Link { body, .. }
+            | IrInline::Shape { body, .. }
+            | IrInline::Field { body, .. } => patch_page_inlines(body, patch),
+            _ => {}
+        }
+    }
+}
+
+/// The flattened text of a field's cached body.
+fn cached_text(inlines: &[IrInline]) -> String {
+    let mut out = String::new();
+    for inline in inlines {
+        match inline {
+            IrInline::Text(run) => out.push_str(&run.text),
+            IrInline::Space => out.push(' '),
+            IrInline::Link { body, .. }
+            | IrInline::Shape { body, .. }
+            | IrInline::Field { body, .. } => out.push_str(&cached_text(body)),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Rewrite a field's cached body to a corrected literal — the first run's
+/// style is kept; page-counter bodies are a single plain text run.
+fn set_cached_text(inlines: &mut Vec<IrInline>, text: String) {
+    let mut run = inlines
+        .iter()
+        .find_map(|inline| match inline {
+            IrInline::Text(run) => Some(run.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| Run::new(String::new()));
+    run.text = text;
+    inlines.clear();
+    inlines.push(IrInline::Text(run));
+}
+
+fn patch_page_blocks(blocks: &mut [IrBlock], patch: &mut PagePatch<'_>) {
+    for block in blocks {
+        match block {
+            IrBlock::Paragraph(para) => patch_page_inlines(&mut para.inlines, patch),
+            IrBlock::Heading { body, .. } => patch_page_inlines(body, patch),
+            IrBlock::Table(table) => {
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        patch_page_blocks(&mut cell.body, patch);
+                    }
+                }
+            }
+            IrBlock::Grid(grid) => {
+                for row in &mut grid.rows {
+                    for cell in &mut row.cells {
+                        patch_page_blocks(&mut cell.body, patch);
+                    }
+                }
+            }
+            IrBlock::Figure { body, caption, .. } => {
+                patch_page_blocks(body, patch);
+                patch_page_inlines(caption, patch);
+            }
+            IrBlock::List(list) => {
+                for item in &mut list.items {
+                    patch_page_blocks(&mut item.body, patch);
+                }
+            }
+            IrBlock::Enum(enumer) => {
+                for item in &mut enumer.items {
+                    patch_page_blocks(&mut item.body, patch);
+                }
+            }
+            IrBlock::Quote { body } | IrBlock::Place { body, .. } => {
+                patch_page_blocks(body, patch);
+            }
+            IrBlock::Bibliography { entries } => {
+                for entry in entries {
+                    patch_page_inlines(&mut entry.body, patch);
+                }
+            }
+            IrBlock::Outline { title, entries, .. } => {
+                patch_page_inlines(title, patch);
+                for entry in entries {
+                    patch_page_inlines(&mut entry.title, patch);
+                }
+            }
+            IrBlock::Shape { body, .. } => patch_page_blocks(body, patch),
+            IrBlock::Equation(_) | IrBlock::Raw(_) | IrBlock::PageBreak { .. } => {}
+        }
+    }
 }
 
 struct EntryBody {

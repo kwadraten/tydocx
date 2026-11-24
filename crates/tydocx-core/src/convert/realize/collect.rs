@@ -92,6 +92,9 @@ pub struct Collector<'a> {
     first_snapshot: Option<PageSnapshot>,
     sections: Vec<IrSection>,
     section_span: Option<Span>,
+    /// The `\@` picture `document.date` renders in its kind-dependent auto
+    /// format, resolved from `DocumentInfo::date` before collection.
+    doc_date_picture: Option<&'static str>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -153,6 +156,20 @@ fn defaults_from_pairs(pairs: &[Pair<'_>], root_styles: StyleChain<'_>) -> Style
     }
 }
 
+/// The `\@` picture `document.date` renders in Typst's kind-dependent auto
+/// format — `date` → ISO date, `datetime` → ISO date + time, `time` → ISO
+/// time; `auto` resolves to `world.today()`, a date. `None` when the set
+/// value is `none` (no datetime to format).
+fn doc_date_picture(info: &typst_library::model::DocumentInfo) -> Option<&'static str> {
+    use typst_library::foundations::Datetime;
+    match &info.date {
+        Smart::Auto | Smart::Custom(Some(Datetime::Date(_))) => Some("yyyy-MM-dd"),
+        Smart::Custom(Some(Datetime::Datetime(_))) => Some("yyyy-MM-dd HH:mm:ss"),
+        Smart::Custom(Some(Datetime::Time(_))) => Some("HH:mm:ss"),
+        Smart::Custom(None) => None,
+    }
+}
+
 pub fn collect_document(
     pairs: &[Pair<'_>],
     engine: &mut Engine,
@@ -187,6 +204,7 @@ pub fn collect_document(
         first_snapshot: None,
         sections: Vec::new(),
         section_span: None,
+        doc_date_picture: info.date_picture,
         _marker: std::marker::PhantomData,
     };
     collector.pass_one(pairs, engine, locator)?;
@@ -262,6 +280,7 @@ pub fn document_info(
             Smart::Custom(Some(date)) => datetime_iso(date),
             _ => None,
         },
+        date_picture: doc_date_picture(info),
     }
 }
 
@@ -436,6 +455,7 @@ impl Collector<'_> {
             footnote_circled: &mut self.footnote_circled,
             layouter_index: &self.layouter_index,
             scoped_par: None,
+            doc_date_picture: self.doc_date_picture,
         }
     }
 
@@ -1217,18 +1237,47 @@ impl Collector<'_> {
             Smart::Custom(n) => u32::try_from(n).unwrap_or(1).max(1),
             Smart::Auto => 1,
         };
+        let reversed = styles.get(EnumElem::reversed);
+        let numbering_fn = styles.get_cloned(EnumElem::numbering);
         let mut items = Vec::new();
         let mut number = u64::from(start);
+        let total = u64::try_from(
+            run.iter()
+                .filter(|c| c.to_packed::<EnumItem>().is_some())
+                .count(),
+        )
+        .unwrap_or(0);
+        let mut index = 0u64;
         for child in run {
             let Some(item) = child.to_packed::<EnumItem>() else {
                 continue;
             };
-            let item_number = match item.number.get(styles) {
-                Smart::Custom(n) => n,
-                Smart::Auto => number,
+            let auto_number = if reversed {
+                u64::from(start) + total.saturating_sub(index + 1)
+            } else {
+                number
             };
-            number = item_number + 1;
-            let number_text = enum_number_text(&pattern, origin, depth, item_number);
+            index += 1;
+            let (item_number, number_override) = match item.number.get(styles) {
+                Smart::Custom(n) => (n, true),
+                Smart::Auto => (auto_number, false),
+            };
+            number = if reversed { number } else { item_number + 1 };
+            let number_text =
+                enum_func_number_text(&numbering_fn, item_number, styles, engine, child.span())
+                    .or_else(|| {
+                        if matches!(numbering_fn, Numbering::Func(_)) {
+                            self.degradations.push(Degradation {
+                                span: Some(item.span()),
+                                construct: "enum-numbering",
+                                action: DegradationAction::Approximated,
+                                message: "the enum numbering function could not be applied; \
+                                  the item falls back to decimal numbering"
+                                    .to_string(),
+                            });
+                        }
+                        enum_number_text(&pattern, origin, depth, item_number)
+                    });
             let body = self.collect_body_blocks(
                 &item.body,
                 &ListCtx {
@@ -1239,7 +1288,11 @@ impl Collector<'_> {
                 engine,
                 locator,
             )?;
-            items.push(IrEnumItem { number_text, body });
+            items.push(IrEnumItem {
+                number_text,
+                number_override,
+                body,
+            });
         }
         let em_pt = self.em_pt();
         let (indent_twips, body_indent_twips) = list_layout_twips(
@@ -1253,7 +1306,7 @@ impl Collector<'_> {
             numbering: pattern,
             start,
             depth,
-            reversed: styles.get(EnumElem::reversed),
+            reversed,
             indent_twips,
             body_indent_twips,
             spacing_twips: list_spacing_twips(styles.get(EnumElem::spacing), em_pt),
@@ -1488,7 +1541,7 @@ impl Collector<'_> {
         if equation.block.get(styles) {
             self.eq_count += 1;
             let omml = super::equation_omml_ir(child, &mut self.degradations);
-            let number = self.equation_number(equation, styles);
+            let number = self.equation_number(equation, styles, child.span());
             return Ok(vec![IrBlock::Equation(IrEquation {
                 omml,
                 number,
@@ -1720,6 +1773,7 @@ impl Collector<'_> {
                                 seq_identifier(meta.kind),
                                 *s,
                                 engine,
+                                &mut self.degradations,
                             ) {
                                 // Realize emits `supplement + \u{a0} + numbers
                                 // + separator + body`; the numeral's char
@@ -1954,15 +2008,37 @@ impl Collector<'_> {
             Smart::Custom(n) => u32::try_from(n).unwrap_or(1).max(1),
             Smart::Auto => 1,
         };
+        let reversed = matches!(enumer.reversed.as_option(), Some(true));
+        let numbering_fn = enumer.numbering.get_cloned(styles);
         let mut items = Vec::new();
         let mut number = u64::from(start);
-        for item in &enumer.children {
-            let item_number = match item.number.get(styles) {
-                Smart::Custom(n) => n,
-                Smart::Auto => number,
+        let total = u64::try_from(enumer.children.len()).unwrap_or(0);
+        for (index, item) in enumer.children.iter().enumerate() {
+            let auto_number = if reversed {
+                u64::from(start) + total.saturating_sub(u64::try_from(index).unwrap_or(0) + 1)
+            } else {
+                number
             };
-            number = item_number + 1;
-            let number_text = enum_number_text(&pattern, origin, depth, item_number);
+            let (item_number, number_override) = match item.number.get(styles) {
+                Smart::Custom(n) => (n, true),
+                Smart::Auto => (auto_number, false),
+            };
+            number = if reversed { number } else { item_number + 1 };
+            let number_text =
+                enum_func_number_text(&numbering_fn, item_number, styles, engine, item.span())
+                    .or_else(|| {
+                        if matches!(numbering_fn, Numbering::Func(_)) {
+                            self.degradations.push(Degradation {
+                                span: Some(item.span()),
+                                construct: "enum-numbering",
+                                action: DegradationAction::Approximated,
+                                message: "the enum numbering function could not be applied; \
+                                  the item falls back to decimal numbering"
+                                    .to_string(),
+                            });
+                        }
+                        enum_number_text(&pattern, origin, depth, item_number)
+                    });
             let body = self.collect_enum_item_body(
                 &item.body,
                 depth,
@@ -1971,7 +2047,11 @@ impl Collector<'_> {
                 engine,
                 locator,
             )?;
-            items.push(IrEnumItem { number_text, body });
+            items.push(IrEnumItem {
+                number_text,
+                number_override,
+                body,
+            });
         }
         let em_pt = self.em_pt();
         let (indent_twips, body_indent_twips) = list_layout_twips(
@@ -1985,7 +2065,7 @@ impl Collector<'_> {
             numbering: pattern,
             start,
             depth,
-            reversed: matches!(enumer.reversed.as_option(), Some(true)),
+            reversed,
             indent_twips,
             body_indent_twips,
             spacing_twips: list_spacing_twips(enumer.spacing.get(styles), em_pt),
@@ -2510,7 +2590,7 @@ impl Collector<'_> {
         }
         self.eq_count += 1;
         let omml = super::equation_omml_ir(inner, &mut self.degradations);
-        let number = self.equation_number(equation, styles);
+        let number = self.equation_number(equation, styles, inner.span());
         vec![IrBlock::Equation(IrEquation {
             omml,
             number,
@@ -2522,9 +2602,10 @@ impl Collector<'_> {
     }
 
     fn equation_number(
-        &self,
+        &mut self,
         equation: &EquationElem,
         styles: StyleChain<'_>,
+        span: Span,
     ) -> Option<IrEquationNumber> {
         let numbering = equation.numbering.get_cloned(styles)?;
         let Numbering::Pattern(pattern) = &numbering else {
@@ -2532,7 +2613,14 @@ impl Collector<'_> {
         };
         let nums = vec![self.eq_count];
         let display = pattern.apply(None, &nums).ok()?.to_string();
-        let seq = single_piece_seq(&numbering, self.eq_count, "equation");
+        let seq = single_piece_seq(
+            &numbering,
+            &display,
+            self.eq_count,
+            "equation",
+            span,
+            &mut self.degradations,
+        );
         Some(IrEquationNumber { display, seq })
     }
 
@@ -4291,13 +4379,51 @@ fn pattern_from_numbering(numbering: &Numbering, full: bool) -> Option<IrNumberi
     })
 }
 
-/// The prefix/numeral/suffix split a single-piece numbering pattern gives a
-/// rendered number — what a `SEQ` field needs: the numeral is the field's
-/// cached result, prefix+suffix stay literal.
-fn single_piece_seq(numbering: &Numbering, number: u64, identifier: &str) -> Option<IrSeqSplit> {
+/// The prefix/numeral/suffix split a single-piece rendered numeral gives —
+/// what a `SEQ` field needs: the numeral is the field's cached result,
+/// prefix+suffix stay literal. A multi-piece *pattern* still yields a
+/// single-piece rendered numeral when the counter is single-level (`"1.1"`
+/// on a figure renders `1`); a genuinely multi-piece rendered numeral is
+/// reported `seq-multi-piece` and stays literal.
+fn single_piece_seq(
+    numbering: &Numbering,
+    display: &str,
+    number: u64,
+    identifier: &str,
+    span: Span,
+    degradations: &mut Vec<Degradation>,
+) -> Option<IrSeqSplit> {
     let pattern = pattern_from_numbering(numbering, false)?;
     let [piece] = pattern.pieces.as_slice() else {
-        return None;
+        // `display` minus the first piece's prefix and the pattern's suffix
+        // is the rendered numeral; it is single-piece when none of the
+        // later pieces' prefixes rendered.
+        let [first, ..] = pattern.pieces.as_slice() else {
+            return None;
+        };
+        let single = display
+            .strip_prefix(first.prefix.as_str())
+            .and_then(|d| d.strip_suffix(pattern.suffix.as_str()))
+            .filter(|inner| rendered_is_single_piece(&pattern.pieces, inner));
+        let Some(inner) = single else {
+            degradations.push(Degradation {
+                span: Some(span),
+                construct: "seq-multi-piece",
+                action: DegradationAction::Approximated,
+                message: format!(
+                    "the rendered numeral {display:?} has multiple pieces; \
+                     it stays literal"
+                ),
+            });
+            return None;
+        };
+        return Some(IrSeqSplit {
+            prefix: first.prefix.clone(),
+            numeral: inner.to_string(),
+            suffix: pattern.suffix.clone(),
+            system: first.system,
+            identifier: identifier.to_string(),
+        });
     };
     Some(IrSeqSplit {
         prefix: piece.prefix.clone(),
@@ -4305,6 +4431,17 @@ fn single_piece_seq(numbering: &Numbering, number: u64, identifier: &str) -> Opt
         suffix: pattern.suffix.clone(),
         system: piece.system,
         identifier: identifier.to_string(),
+    })
+}
+
+/// `true` when `rendered` is a single-piece numeral for `pieces` — no later
+/// piece's prefix appears in it, and every later piece has a non-empty
+/// prefix (a prefixless later piece can't be detected, so it counts as
+/// rendered).
+fn rendered_is_single_piece(pieces: &[IrNumberingPiece], rendered: &str) -> bool {
+    pieces.get(1..).is_none_or(|rest| {
+        rest.iter()
+            .all(|p| !p.prefix.is_empty() && !rendered.contains(p.prefix.as_str()))
     })
 }
 
@@ -4318,14 +4455,15 @@ fn seq_identifier(kind: IrFigureKind) -> &'static str {
 }
 
 /// The SEQ split of a figure caption's number — `None` unless the caption
-/// carries a synthesized counter/numbering/location AND the numbering is a
-/// single-piece pattern. The numeral text is the counter's own display, so
-/// the C3 field's cached result is exactly the C2 literal.
+/// carries a synthesized counter/numbering/location AND the rendered
+/// numeral is a single piece. The numeral text is the counter's own
+/// display, so the C3 field's cached result is exactly the C2 literal.
 fn caption_number_seq(
     caption: &Packed<FigureCaption>,
     identifier: &str,
     styles: StyleChain<'_>,
     engine: &mut Engine,
+    degradations: &mut Vec<Degradation>,
 ) -> Option<IrSeqSplit> {
     let (Some(Some(numbering)), Some(Some(counter)), Some(Some(location))) = (
         &caption.numbering,
@@ -4342,14 +4480,27 @@ fn caption_number_seq(
         return None;
     }
     let pattern = pattern_from_numbering(numbering, false)?;
-    let [piece] = pattern.pieces.as_slice() else {
-        return None;
+    let system = match pattern.pieces.as_slice() {
+        [] => return None,
+        [first, ..] if rendered_is_single_piece(&pattern.pieces, &numeral) => first.system,
+        _ => {
+            degradations.push(Degradation {
+                span: Some(caption.span()),
+                construct: "seq-multi-piece",
+                action: DegradationAction::Approximated,
+                message: format!(
+                    "the rendered numeral {numeral:?} has multiple pieces; \
+                     it stays literal"
+                ),
+            });
+            return None;
+        }
     };
     Some(IrSeqSplit {
         prefix: String::new(),
         numeral,
         suffix: String::new(),
-        system: piece.system,
+        system,
         identifier: identifier.to_string(),
     })
 }
@@ -4381,6 +4532,39 @@ fn enum_number_text(
     let piece = &pattern.pieces[idx];
     let rendered = piece.system.render(number);
     Some(format!("{}{}{}", piece.prefix, rendered, pattern.suffix))
+}
+
+/// The rendered numeral of a `Numbering::Func` applied to one item number —
+/// e.g. `n => "§" + str(n) + "."` on 1 → `§1.`. `None` when the function
+/// fails (a function reading location state has no location in this
+/// location-less context) or returns something that is not text.
+fn enum_func_number_text(
+    numbering: &Numbering,
+    number: u64,
+    styles: StyleChain<'_>,
+    engine: &mut Engine,
+    span: Span,
+) -> Option<String> {
+    if !matches!(numbering, Numbering::Func(_)) {
+        return None;
+    }
+    let context = typst_library::foundations::Context::new(None, Some(styles));
+    let value = numbering
+        .apply(
+            engine,
+            typst::comemo::Track::track(&context),
+            span,
+            &[number],
+        )
+        .ok()?;
+    match value {
+        Value::Str(text) => Some(text.as_str().to_string()),
+        Value::Content(body) => {
+            let plain = plain_text(&body);
+            (!plain.is_empty()).then_some(plain)
+        }
+        _ => None,
+    }
 }
 
 fn page_content_width_pt(styles: StyleChain<'_>) -> f64 {
@@ -4949,4 +5133,33 @@ fn diag_text(errs: &[typst::diag::SourceDiagnostic]) -> String {
         .map(|d| d.message.as_str())
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn piece(prefix: &str) -> IrNumberingPiece {
+        IrNumberingPiece {
+            prefix: prefix.to_owned(),
+            system: IrNumeralSystem::Arabic,
+        }
+    }
+
+    #[test]
+    fn rendered_numeral_arity_decides_the_seq_guard() {
+        let one = [piece("")];
+        let two = [piece(""), piece(".")];
+        let two_prefixless = [piece(""), piece("")];
+        // A single-piece pattern renders a single-piece numeral.
+        assert!(rendered_is_single_piece(&one, "1"));
+        // A "1.1"-pattern on a single-level counter renders "1" — the second
+        // piece's prefix never appears, so the numeral is single-piece.
+        assert!(rendered_is_single_piece(&two, "1"));
+        assert!(rendered_is_single_piece(&two, "(1)"));
+        // A genuinely multi-piece rendered numeral.
+        assert!(!rendered_is_single_piece(&two, "1.1"));
+        // A prefixless later piece can't be detected — count it as rendered.
+        assert!(!rendered_is_single_piece(&two_prefixless, "1"));
+    }
 }

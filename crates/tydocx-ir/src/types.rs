@@ -56,6 +56,9 @@ pub struct IrDocumentInfo {
     pub keywords: Vec<String>,
     /// `document(date: datetime(...))` → ISO 8601 `dcterms:created`.
     pub created: Option<String>,
+    /// The `\@ "..."` picture a bare `document.date` read resolves to;
+    /// `None` when `document.date` is `none`.
+    pub date_picture: Option<&'static str>,
 }
 
 /// Which Word field code an [`IrInline::Field`] emits at C3.
@@ -66,8 +69,10 @@ pub enum IrField {
     /// ` NOTEREF <label> \h ` — `counter(footnote).at(<label>)` where the
     /// label marks a footnote; that footnote carries the matching bookmark.
     NoteRef { label: String },
-    /// ` DATE ` — `datetime.today()`.
-    Date,
+    /// ` DATE ` — `datetime.today()`. `picture` is the `\@ "..."` date/time
+    /// picture the Typst display pattern translates to; `None` emits a bare
+    /// field (unmappable or computed pattern — reported upstream).
+    Date { picture: Option<String> },
     /// ` TIME ` — a `datetime`-shaped time call.
     Time,
     /// ` STYLEREF "Heading <level>" ` — a running-header heading
@@ -76,8 +81,12 @@ pub enum IrField {
     StyleRef { level: u8 },
     /// ` DOCPROPERTY <name> ` — a `context document.<field>` read
     /// (`document.title`, `document.author`, `document.description`,
-    /// `document.keywords`, `document.date`).
-    DocProperty { name: String },
+    /// `document.keywords`, `document.date`). `picture` is the `\@ "..."`
+    /// date/time picture for `CreateDate`; `None` emits a bare field.
+    DocProperty {
+        name: String,
+        picture: Option<String>,
+    },
     /// ` SEQ <identifier> ` — a single-piece numeral spliced out of literal
     /// numbering text (figure captions, equation numbers).
     Seq {
@@ -312,6 +321,25 @@ pub struct IrFirstLineIndent {
     pub chars: Option<i64>,
 }
 
+/// The page-counter read behind a `PAGEREF`-shaped ref — where the counter
+/// is read and whether the rendered number is formatted through the page
+/// numbering at that spot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrPageTarget {
+    /// `Location::hash()` of the element the counter is read at — the
+    /// ref's target (`ref`, `counter(page).at(<label>)`).
+    pub location: u128,
+    /// `ref(form: "page")` formats through the target's page numbering;
+    /// `counter(page).at(<label>)` keeps the raw counter-state shape.
+    /// Only consulted when `span` is absent — a span lets the patch
+    /// re-parse the full display shape.
+    pub numbered: bool,
+    /// Source span of the `counter(page).at(<label>)…` expression — the
+    /// patch re-classifies a trailing `.display(...)` on the chain;
+    /// `None` for `ref(form: "page")`.
+    pub span: Option<typst_syntax::Span>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrInline {
     Text(Run),
@@ -324,6 +352,9 @@ pub enum IrInline {
         target_label: String,
         display_text: String,
         page_ref: bool,
+        /// Where a `PAGEREF`-shaped ref reads the page counter — the patch
+        /// resolves it to the rendered number; `None` on ordinary refs.
+        page_target: Option<IrPageTarget>,
     },
     Cite {
         keys: Vec<String>,
@@ -350,6 +381,12 @@ pub enum IrInline {
     Tab,
     PageField {
         display_text: String,
+        /// `Location::hash()` of the `context` element — the paged patch
+        /// resolves it to the physical page and numbering at this spot.
+        location: Option<u128>,
+        /// Source span of the counter expression — the patch re-classifies
+        /// the display shape (`.display(...)` vs raw `.at`/`.final`).
+        span: Option<typst_syntax::Span>,
     },
     /// A Word field (`w:fldChar`/`w:instrText` complex field). `body` holds
     /// the inlines the field replaces: at C1/C2 it lowers verbatim (the
@@ -360,6 +397,9 @@ pub enum IrInline {
         body: Vec<IrInline>,
         /// Source span, so a pre-C3 fallback degradation keeps its position.
         span: Option<typst_syntax::Span>,
+        /// `Location::hash()` of the `context` element — the paged patch
+        /// resolves counter expressions (`counter(page).final()`) at it.
+        location: Option<u128>,
     },
     Shape {
         kind: IrShapeKind,
@@ -558,6 +598,9 @@ pub struct IrEnum {
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrEnumItem {
     pub number_text: Option<String>,
+    /// The item's `number:` was set explicitly — a `SEQ` field cannot
+    /// express it, so the item stays literal (`enum-seq-override`).
+    pub number_override: bool,
     pub body: Vec<IrBlock>,
 }
 

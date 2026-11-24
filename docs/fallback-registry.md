@@ -398,9 +398,13 @@ bodies — now comes from `StyleChain`s or element identity.
   references to labelled footnotes — the footnote carries a matching
   `w:bookmarkStart`), ` DATE ` (`datetime.today()`), ` DOCPROPERTY `
   (`document.title`/`author`/`keywords`/`description`/`date` →
-  Title/Author/Keywords/Comments/CreateDate), ` SEQ ` for single-piece
-  figure/table caption numbers and equation numbering, ` STYLEREF
-  "Heading N" ` for page zones whose whole content is a heading query,
+  Title/Author/Keywords/Comments/CreateDate, `\@` picture switches
+  translated from the source display pattern), ` SEQ ` for single-piece
+  figure/table caption numbers and equation numbering (the guard is the
+  rendered numeral's arity) and for flat literal enums (` SEQ enum-N `),
+  ` STYLEREF "Heading N" ` for page zones containing a heading query —
+  the query-result span is spliced out when literal markup surrounds it,
+  in headers and footers —
   and ` CITATION <key> \l 1033 ` for `@key`/`#cite` (D2 decided — the
   marker stays literal at C1/C2). `customXml/item1.xml` carries the
   hayagriva sources at every level. `#link(url)` was already a
@@ -414,12 +418,13 @@ bodies — now comes from `StyleChain`s or element identity.
     (`counter(page).final()` is always whole-document), so there is no
     source expression to feed it.
   - `TIME` — `datetime.now()` does not exist in Typst 0.15.
-  - `SEQ` for enums — C2 never emits literal enum numbering (unmapped
-    systems fall back to `w:numPr` decimal), so there is no literal to
-    cache; native `w:numPr` numbering must not regress.
-  - `DATE \@ `/`DOCPROPERTY` format switches, multi-piece `SEQ` numbering
-    (`1.1`-style counters), `STYLEREF` for zones that mix the heading
-    query with literal markup, and ` NOTEREF ` for references whose label
+  - `SEQ` for nested or reversed literal enums, per-item `number:`
+    overrides, and rendered numerals with genuinely multiple pieces (no
+    probed path produces one) — stays literal +
+    `enum-seq-nested`/`enum-seq-override`/`enum-seq-numeral`/
+    `enum-reversed`/`seq-multi-piece`; native `w:numPr`
+    numbering must not regress.
+  - ` NOTEREF ` for references whose label
     never lands on a `FootnoteElem` (stays literal +
     `footnote-counter-reference`, same as C2).
 

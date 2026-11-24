@@ -208,8 +208,9 @@ fn cli_degradation_report_sidecar() {
             "report should list {construct}, got: {json}"
         );
     }
-    // A C2 run reports nothing: the figure-targeted outline resolves its
-    // entries into a cached `\c` field result.
+    // A C2 run reports only `enum-reversed`: the figure-targeted outline
+    // resolves its entries into a cached `\c` field result, while the
+    // forward-numbered enum is an approximation at every level.
     let report_c2 = dir.join("report-c2.json");
     let result = run_tydocx_extra(
         &fixture_path("issue_c1_misc"),
@@ -229,8 +230,12 @@ fn cli_degradation_report_sidecar() {
     let sidecar_c2 = fs::read_to_string(&report_c2).unwrap();
     assert_eq!(
         sidecar_c2.matches("\"construct\"").count(),
-        0,
-        "the figure outline resolves its entries, so c2 reports nothing, got: {sidecar_c2}"
+        1,
+        "c2 reports only the enum-reversed remainder, got: {sidecar_c2}"
+    );
+    assert!(
+        sidecar_c2.contains("\"construct\": \"enum-reversed\""),
+        "the reported construct is enum-reversed: {sidecar_c2}"
     );
     let _ = fs::remove_dir_all(&dir);
 }

@@ -6,6 +6,9 @@
 //! from the source AST: walk down the callee chain of the expression until a
 //! `counter(page).at(<label>)` call is found.
 
+use std::str::FromStr;
+
+use typst_library::model::{Numbering, NumberingPattern};
 use typst_syntax::LinkedNode;
 use typst_syntax::Source;
 use typst_syntax::Span;
@@ -166,6 +169,173 @@ fn is_datetime_access(access: ast::FieldAccess<'_>) -> bool {
         && matches!(access.target(), ast::Expr::Ident(ident) if ident.get().as_str() == "datetime")
 }
 
+/// The `.display(...)` argument a `datetime`/`document.date` expression
+/// carries — recovered from the source expression a `context` Tag's span
+/// points at, for the Word `\@ "..."` picture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatePattern {
+    /// No `.display` call, or `.display()`/`display(auto)` — Typst's
+    /// kind-dependent auto format.
+    Auto,
+    /// `.display("[year]/[month]/[day]")` — a string-literal pattern.
+    Literal(String),
+    /// `.display(expr)` where `expr` is not a string literal — a computed
+    /// pattern the translator cannot see.
+    Computed,
+}
+
+/// Recover the `.display(...)` pattern of the source expression a `context`
+/// Tag's span points at — the same callee-chain walk `datetime_use` applies,
+/// so the first `display` call on the way to the `datetime`/`document.date`
+/// read is the one that formats the value.
+#[must_use]
+pub fn date_display_pattern(source: &Source, span: Span) -> DatePattern {
+    let Some(mut node) = source.find(span) else {
+        return DatePattern::Auto;
+    };
+    loop {
+        if let Some(call) = node.cast::<ast::FuncCall>() {
+            if let ast::Expr::FieldAccess(access) = call.callee()
+                && access.field().get().as_str() == "display"
+            {
+                let mut args = call.args().items();
+                return match args.next() {
+                    None | Some(ast::Arg::Pos(ast::Expr::Auto(_))) => DatePattern::Auto,
+                    Some(ast::Arg::Pos(ast::Expr::Str(text))) => {
+                        DatePattern::Literal(text.get().to_string())
+                    }
+                    Some(_) => DatePattern::Computed,
+                };
+            }
+            let Some(next) = node.children().next() else {
+                return DatePattern::Auto;
+            };
+            node = next;
+        } else if node.cast::<ast::FieldAccess>().is_some() {
+            let Some(next) = node.children().next() else {
+                return DatePattern::Auto;
+            };
+            node = next;
+        } else {
+            return DatePattern::Auto;
+        }
+    }
+}
+
+/// Translate a Typst `.display("...")` pattern to a Word `\@` date/time
+/// picture, via `time`'s format-description parser (the same component
+/// syntax Typst accepts). `Err` names the first component with no Word
+/// picture equivalent.
+pub fn typst_pattern_to_word(pattern: &str) -> Result<String, String> {
+    let items = time::format_description::parse_borrowed::<2>(pattern)
+        .map_err(|_| "unparseable".to_string())?;
+    word_picture(&items)
+}
+
+fn word_picture(
+    items: &[time::format_description::BorrowedFormatItem<'_>],
+) -> Result<String, String> {
+    use time::format_description::BorrowedFormatItem;
+    let mut out = String::new();
+    for item in items {
+        match item {
+            BorrowedFormatItem::Literal(bytes) => {
+                out.push_str(&word_literal(&String::from_utf8_lossy(bytes)));
+            }
+            BorrowedFormatItem::Component(component) => {
+                out.push_str(&word_component(*component)?);
+            }
+            BorrowedFormatItem::Compound(inner) => out.push_str(&word_picture(inner)?),
+            BorrowedFormatItem::Optional(inner) => {
+                out.push_str(&word_picture(std::slice::from_ref(*inner))?);
+            }
+            // `first` formats with the slice's first alternative.
+            BorrowedFormatItem::First(items) => {
+                out.push_str(&word_picture(&items[..items.len().min(1)])?);
+            }
+            _ => return Err("format item".to_string()),
+        }
+    }
+    Ok(out)
+}
+
+/// Literal text in a Word date/time picture: `-` `/` `:` `.` `,` and spaces
+/// are separators Word reads verbatim; anything else goes in single quotes
+/// (a literal `'` doubles).
+fn word_literal(text: &str) -> String {
+    let mut out = String::new();
+    let mut quoted = String::new();
+    for ch in text.chars() {
+        if matches!(ch, '-' | '/' | ':' | '.' | ',' | ' ') {
+            if !quoted.is_empty() {
+                out.push('\'');
+                out.push_str(&quoted);
+                out.push('\'');
+                quoted.clear();
+            }
+            out.push(ch);
+        } else if ch == '\'' {
+            quoted.push('\'');
+            quoted.push('\'');
+        } else {
+            quoted.push(ch);
+        }
+    }
+    if !quoted.is_empty() {
+        out.push('\'');
+        out.push_str(&quoted);
+        out.push('\'');
+    }
+    out
+}
+
+/// The Word picture for one `time` component; `Err` names components with
+/// no Word equivalent.
+fn word_component(component: time::format_description::Component) -> Result<String, String> {
+    use time::format_description::Component;
+    use time::format_description::modifier::{MonthRepr, Padding, WeekdayRepr, YearRepr};
+    let padded = |padding: Padding, two: &'static str, one: &'static str| match padding {
+        Padding::Zero => Ok(two),
+        Padding::None => Ok(one),
+        _ => Err("padding".to_string()),
+    };
+    Ok(match component {
+        Component::Year(m) => match m.repr {
+            YearRepr::LastTwo => "yy",
+            _ => "yyyy",
+        },
+        Component::Month(m) => match m.repr {
+            MonthRepr::Long => "MMMM",
+            MonthRepr::Short => "MMM",
+            MonthRepr::Numerical => padded(m.padding, "MM", "M")?,
+            _ => return Err("month".to_string()),
+        },
+        Component::Day(m) => padded(m.padding, "dd", "d")?,
+        Component::Weekday(m) => match m.repr {
+            WeekdayRepr::Long => "dddd",
+            WeekdayRepr::Short => "ddd",
+            _ => return Err("weekday".to_string()),
+        },
+        Component::Hour(m) if m.is_12_hour_clock => padded(m.padding, "hh", "h")?,
+        Component::Hour(m) => padded(m.padding, "HH", "H")?,
+        Component::Minute(m) => padded(m.padding, "mm", "m")?,
+        Component::Second(m) => padded(m.padding, "ss", "s")?,
+        Component::Period(m) if m.is_uppercase => "AM/PM",
+        Component::Period(_) => "am/pm",
+        Component::Ordinal(_) => return Err("ordinal".to_string()),
+        Component::WeekNumber(_) => return Err("week_number".to_string()),
+        Component::Subsecond(_) => return Err("subsecond".to_string()),
+        Component::OffsetHour(_) => return Err("offset_hour".to_string()),
+        Component::OffsetMinute(_) => return Err("offset_minute".to_string()),
+        Component::OffsetSecond(_) => return Err("offset_second".to_string()),
+        Component::Ignore(_) => return Err("ignore".to_string()),
+        Component::UnixTimestamp(_) => return Err("unix_timestamp".to_string()),
+        Component::End(_) => return Err("end".to_string()),
+        _ => return Err("unknown".to_string()),
+    }
+    .to_string())
+}
+
 /// Which document-metadata field a `context` expression reads, for the C3
 /// `DOCPROPERTY` field. Walks the callee chain to a `document.<field>` field
 /// access; only the fields tydocx writes into `docProps/core.xml` map.
@@ -199,6 +369,137 @@ fn document_field(access: ast::FieldAccess<'_>) -> Option<&'static str> {
         "keywords" => Some("Keywords"),
         "description" => Some("Comments"),
         "date" => Some("CreateDate"),
+        _ => None,
+    }
+}
+
+/// How a `counter(page)` expression renders its value — the paged patch
+/// re-renders the realize-time cached text through this shape.
+#[derive(Debug, Clone)]
+pub enum PageCounterRender {
+    /// `.at(here())`/`.get()`/`.final()` — the raw `CounterState` array (or
+    /// an index of it); the cached text's own `(…)` wrapper keeps the shape.
+    Raw,
+    /// `counter(page).display(...)`.
+    Display {
+        /// Explicit numbering arg; `None` resolves the page numbering at the
+        /// counter's location.
+        numbering: Option<Numbering>,
+        /// `both: true` renders `(current, final)` through the numbering.
+        both: bool,
+        /// `at: <label>` reads the counter at the label's location instead
+        /// of `here()`; `None` = the expression's own location.
+        at_label: Option<String>,
+    },
+    /// A display shape the patch cannot re-render (a numbering function, an
+    /// unparseable pattern, a non-label `at:` selector). The patch falls
+    /// back to decimal digits and reports.
+    Unrenderable,
+}
+
+/// Classify the render shape of the page-counter expression a `context`
+/// Tag's span points at — the same callee-chain walk the counter-use
+/// classifiers apply.
+#[must_use]
+pub fn page_counter_render(source: &Source, span: Span) -> PageCounterRender {
+    let Some(mut node) = source.find(span) else {
+        return PageCounterRender::Raw;
+    };
+    loop {
+        if let Some(call) = node.cast::<ast::FuncCall>() {
+            if let ast::Expr::FieldAccess(access) = call.callee()
+                && access.field().get().as_str() == "display"
+            {
+                return page_display_render(call);
+            }
+            let Some(next) = node.children().next() else {
+                return PageCounterRender::Raw;
+            };
+            node = next;
+        } else if node.cast::<ast::FieldAccess>().is_some() {
+            let Some(next) = node.children().next() else {
+                return PageCounterRender::Raw;
+            };
+            node = next;
+        } else {
+            return PageCounterRender::Raw;
+        }
+    }
+}
+
+/// The render shape of a `…display(...)` call's arguments: the numbering
+/// (positional or `numbering:`), `both:` and `at:` named args.
+fn page_display_render(call: ast::FuncCall<'_>) -> PageCounterRender {
+    let mut numbering = None;
+    let mut both = false;
+    let mut at_label = None;
+    for arg in call.args().items() {
+        match arg {
+            ast::Arg::Pos(expr) => {
+                let Some(n) = numbering_arg(expr) else {
+                    return PageCounterRender::Unrenderable;
+                };
+                numbering = n.numbering();
+            }
+            ast::Arg::Named(named) => match named.name().as_str() {
+                "numbering" => {
+                    let Some(n) = numbering_arg(named.expr()) else {
+                        return PageCounterRender::Unrenderable;
+                    };
+                    numbering = n.numbering();
+                }
+                "both" => {
+                    let ast::Expr::Bool(value) = named.expr() else {
+                        return PageCounterRender::Unrenderable;
+                    };
+                    both = value.get();
+                }
+                "at" => match named.expr() {
+                    ast::Expr::Label(label) => {
+                        at_label = Some(label.get().to_string());
+                    }
+                    ast::Expr::FuncCall(here) if matches!(here.callee(), ast::Expr::Ident(i) if i.get().as_str() == "here") =>
+                        {}
+                    _ => return PageCounterRender::Unrenderable,
+                },
+                _ => {}
+            },
+            ast::Arg::Spread(_) => return PageCounterRender::Unrenderable,
+        }
+    }
+    PageCounterRender::Display {
+        numbering,
+        both,
+        at_label,
+    }
+}
+
+/// The `Numbering` an argument expression denotes.
+enum NumberingArg {
+    /// `auto` — the default numbering.
+    Auto,
+    /// A pattern literal that parses.
+    Pattern(Numbering),
+}
+
+impl NumberingArg {
+    fn numbering(self) -> Option<Numbering> {
+        match self {
+            Self::Auto => None,
+            Self::Pattern(n) => Some(n),
+        }
+    }
+}
+
+/// A `numbering` argument that resolved statically: a pattern literal, or
+/// `auto`. Anything else (a function, a computed value) the patch cannot
+/// re-render.
+fn numbering_arg(expr: ast::Expr<'_>) -> Option<NumberingArg> {
+    match expr {
+        ast::Expr::Str(text) => NumberingPattern::from_str(&text.get())
+            .ok()
+            .map(|p| NumberingArg::Pattern(Numbering::Pattern(p))),
+        ast::Expr::Auto(_) => Some(NumberingArg::Auto),
         _ => None,
     }
 }
@@ -252,7 +553,7 @@ fn is_page_final_call(call: ast::FuncCall<'_>) -> bool {
 fn is_current_page_ref(mut node: LinkedNode<'_>) -> bool {
     loop {
         if let Some(call) = node.cast::<ast::FuncCall>() {
-            if is_page_display_call(call) || is_page_at_here_call(call) {
+            if is_page_display_call(call) || is_page_at_here_call(call) || is_page_get_call(call) {
                 return true;
             }
             // Descend into the callee (`.first()` on a display, ...).
@@ -286,6 +587,21 @@ fn is_page_display_call(call: ast::FuncCall<'_>) -> bool {
         return false;
     };
     is_counter_call(inner, "page")
+}
+
+/// Whether this call is `.get()` on a `counter(page)` call — the raw state
+/// at `here()`, the same value `.at(here())` reads.
+fn is_page_get_call(call: ast::FuncCall<'_>) -> bool {
+    let ast::Expr::FieldAccess(access) = call.callee() else {
+        return false;
+    };
+    if access.field().get().as_str() != "get" {
+        return false;
+    }
+    let ast::Expr::FuncCall(inner) = access.target() else {
+        return false;
+    };
+    is_counter_call(inner, "page") && call.args().items().next().is_none()
 }
 
 /// Whether this call is `.at(here())` on a `counter(page)` call.
@@ -373,6 +689,60 @@ mod tests {
             return Some(node.clone());
         }
         node.children().find_map(|child| find_node(child, kind))
+    }
+
+    #[test]
+    fn typst_patterns_translate_to_word_pictures() {
+        for (pattern, picture) in [
+            ("[year]", "yyyy"),
+            ("[year repr:last_two]", "yy"),
+            ("[month]", "MM"),
+            ("[month padding:none]", "M"),
+            ("[month repr:long]", "MMMM"),
+            ("[month repr:short]", "MMM"),
+            ("[day]", "dd"),
+            ("[day padding:none]", "d"),
+            ("[weekday]", "dddd"),
+            ("[weekday repr:short]", "ddd"),
+            ("[hour]", "HH"),
+            ("[hour padding:none]", "H"),
+            ("[hour repr:12]", "hh"),
+            ("[hour repr:12 padding:none]", "h"),
+            ("[minute]", "mm"),
+            ("[minute padding:none]", "m"),
+            ("[second]", "ss"),
+            ("[second padding:none]", "s"),
+            ("[period]", "AM/PM"),
+            ("[period case:lower]", "am/pm"),
+            ("[year]-[month]-[day]", "yyyy-MM-dd"),
+            (
+                "[month repr:short] [day padding:none], [year]",
+                "MMM d, yyyy",
+            ),
+            ("[year]y", "yyyy'y'"),
+        ] {
+            assert_eq!(
+                typst_pattern_to_word(pattern).as_deref(),
+                Ok(picture),
+                "{pattern}"
+            );
+        }
+        for pattern in [
+            "[ordinal]",
+            "[week_number]",
+            "[unix_timestamp]",
+            "[subsecond]",
+        ] {
+            let Err(component) = typst_pattern_to_word(pattern) else {
+                panic!("{pattern} should be unmappable");
+            };
+            assert!(!component.is_empty(), "{pattern} names the component");
+        }
+        assert_eq!(
+            typst_pattern_to_word("[ordinal]").unwrap_err(),
+            "ordinal",
+            "the unmappable component is named"
+        );
     }
 
     /// Resolve the label for a bare source expression. The test text is a
