@@ -309,7 +309,8 @@ fn for_each_place(blocks: &[IrBlock], f: &mut impl FnMut(u64, &[IrBlock])) {
             }
             IrBlock::Figure { body, .. }
             | IrBlock::Quote { body }
-            | IrBlock::Shape { body, .. } => for_each_place(body, f),
+            | IrBlock::Shape { body, .. }
+            | IrBlock::Columns { body, .. } => for_each_place(body, f),
             IrBlock::List(list) => {
                 for item in &list.items {
                     for_each_place(&item.body, f);
@@ -355,7 +356,8 @@ fn apply_anchors(blocks: &mut [IrBlock], geometry: &HashMap<u64, IrAnchor>) {
             }
             IrBlock::Figure { body, .. }
             | IrBlock::Quote { body }
-            | IrBlock::Shape { body, .. } => apply_anchors(body, geometry),
+            | IrBlock::Shape { body, .. }
+            | IrBlock::Columns { body, .. } => apply_anchors(body, geometry),
             IrBlock::List(list) => {
                 for item in &mut list.items {
                     apply_anchors(&mut item.body, geometry);

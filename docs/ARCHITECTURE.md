@@ -277,9 +277,9 @@ borrow the realize arenas and cannot outlive `create()` — and `create()`
 runs once per round of the compiler's introspection-convergence loop, so it
 keeps no cross-call state — so the collector
 copies them into owned data at once: `IrDocument { info, page, style,
-body, footnotes, citation_sources }`, with `IrBlock` (14 variants:
+body, footnotes, citation_sources }`, with `IrBlock` (16 variants:
 Paragraph, Heading, Table, Grid, Figure, List, Enum, Equation, Quote,
-Raw, Outline, Bibliography, Place, PageBreak) and `IrInline` (12
+Raw, Outline, Bibliography, Place, PageBreak, Shape, Columns) and `IrInline` (12
 variants: Text, Link, Ref, Cite, FootnoteMarker, LineBreak, Space, Image,
 Math, PageBreak, ColumnBreak, Tab). Strong/Emph/Super/Sub are **run
 attributes**, not inline variants — the Paged show rules already merged

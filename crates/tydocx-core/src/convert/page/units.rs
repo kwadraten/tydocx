@@ -8,6 +8,30 @@ pub(in crate::convert) fn pt_to_twips(pt: f64) -> u32 {
     (pt * 20.0).round().max(0.0) as u32
 }
 
+/// Typst's default `columns(gutter:)` — `Ratio::new(0.04)` on
+/// `ColumnsElem::gutter`, a share of the column region's width.
+pub(in crate::convert) const DEFAULT_COLUMNS_GUTTER: typst_library::layout::Rel<
+    typst_library::layout::Abs,
+> = typst_library::layout::Rel::new(
+    typst_library::layout::Ratio::new(0.04),
+    typst_library::layout::Abs::zero(),
+);
+
+/// The gutter (`w:cols w:space`) a `columns` region reports — its
+/// `Rel<Abs>` ratio part resolves against the region's base width, which
+/// for both `page(columns:)` and a page-level `#columns` block is the
+/// text width (typst-layout `regions.base().x`).
+pub(in crate::convert) fn columns_gutter_twips(
+    gutter: typst_library::layout::Rel<typst_library::layout::Abs>,
+    text_width_pt: f64,
+) -> u32 {
+    pt_to_twips(
+        gutter
+            .relative_to(typst_library::layout::Abs::pt(text_width_pt))
+            .to_pt(),
+    )
+}
+
 /// Convert a length in points to Word half-points (1 pt = 2 half-pt), rounded.
 /// See [`pt_to_twips`] for the cast rationale.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

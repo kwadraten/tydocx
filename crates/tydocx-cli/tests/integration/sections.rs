@@ -1,7 +1,10 @@
 //! Section, header/footer, and page-furniture tests (manuscript cases
 //! T-01/M7, T-02/U13, T-06/M6, T-07/U31, T-08/U30, T-22/L3).
 
-use crate::common::{fixture_outcome_with_options, fixture_package, fixture_package_with_options};
+use crate::common::{
+    fixture_doc_xml, fixture_outcome_with_options, fixture_package, fixture_package_with_options,
+    paragraph_containing,
+};
 use tydocx_core::{CompatMode, ConvertOptions};
 
 fn c1(fixture: &str) -> tydocx_core::ConvertOutcome {
@@ -420,5 +423,180 @@ fn issue_header_run_styles_c2_also_keeps_size() {
             .part_text("word/header1.xml")
             .contains("<w:sz w:val=\"18\"/>"),
         "header run keeps its 9pt size"
+    );
+}
+
+/// The `w:type w:val` of every `w:sectPr` in document order — the mid-body
+/// `w:pPr` sectPrs plus the body-final one.
+fn section_types(xml: &str) -> Vec<&str> {
+    xml.split("<w:type w:val=\"")
+        .skip(1)
+        .map(|s| s.split('"').next().unwrap_or_default())
+        .collect()
+}
+
+/// A `#columns(n)[…]` block lowers to a continuous section pair: the
+/// ambient section ends at the paragraph before the block, the block's
+/// paragraphs sit inside a `w:cols` section that ends `continuous`, and
+/// the resumed ambient section also starts (and so ends) `continuous`.
+/// Each `w:sectPr` describes the section that *ends* at it, so the
+/// `w:type` sequence records how each section started.
+#[test]
+fn columns_block_emits_continuous_section_pair() {
+    let xml = fixture_doc_xml("columns_two");
+    assert_eq!(
+        section_types(&xml),
+        ["nextPage", "continuous", "continuous"],
+        "ambient -> columns -> ambient, all continuous but the first: {xml}"
+    );
+    assert!(
+        xml.contains(r#"<w:cols w:num="2" w:space="363"/>"#),
+        "two columns, 4% of the 160mm text width ≈ 363 twips: {xml}"
+    );
+    let in_break = paragraph_containing(&xml, "Before the columns block.");
+    assert!(
+        in_break.contains("<w:sectPr>") && !in_break.contains("<w:cols"),
+        "the ambient section ends on the paragraph before the block"
+    );
+    let out_break = paragraph_containing(&xml, "Second column text.");
+    assert!(
+        out_break.contains(r#"<w:cols w:num="2""#),
+        "the columns section ends on the block's last paragraph"
+    );
+    let after = paragraph_containing(&xml, "After the columns block.");
+    assert!(
+        !after.contains("<w:sectPr>") && !after.contains("<w:cols"),
+        "the paragraph after the block is plain single-column flow"
+    );
+}
+
+/// A declared `gutter:` on the block is used verbatim — 8mm ≈ 454 twips.
+#[test]
+fn columns_block_declared_gutter() {
+    let xml = fixture_doc_xml("columns_three_gutter");
+    assert!(
+        xml.contains(r#"<w:cols w:num="3" w:space="454"/>"#),
+        "three columns with the declared 8mm gutter: {xml}"
+    );
+}
+
+/// A block mid-page still gets the full pair — text before and after it
+/// stays in the ambient single-column flow on the same page.
+#[test]
+fn columns_block_mid_page_sections_cleanly() {
+    let xml = fixture_doc_xml("columns_mid_page");
+    assert_eq!(
+        section_types(&xml),
+        ["nextPage", "continuous", "continuous"],
+        "the block sections without disturbing the ambient flow: {xml}"
+    );
+    assert!(
+        xml.contains(r#"<w:cols w:num="2" w:space="408"/>"#),
+        "4% of the 180mm text width ≈ 408 twips: {xml}"
+    );
+    for text in [
+        "Intro paragraph that shares the page.",
+        "A mid-page column block.",
+        "And a following paragraph, still on the first page.",
+    ] {
+        assert!(xml.contains(text), "missing {text:?}: {xml}");
+    }
+}
+
+/// A `#pagebreak()` immediately before the block is real content the
+/// continuous in-break must not swallow — it survives in the paragraph
+/// that carries the ending `w:sectPr`.
+#[test]
+fn columns_block_after_pagebreak_keeps_break() {
+    let xml = fixture_doc_xml("columns_page_break");
+    let break_para = paragraph_containing(&xml, r#"<w:br w:type="page"/>"#);
+    assert!(
+        break_para.contains("<w:sectPr>"),
+        "the explicit page break shares the in-break paragraph: {xml}"
+    );
+    assert!(
+        xml.contains(r#"<w:cols w:num="2""#),
+        "the columns section still forms: {xml}"
+    );
+}
+
+/// Representable top-level blocks never report `column-block` — at any
+/// compat level the continuous-section pair is plain OOXML.
+#[test]
+fn columns_block_reports_no_degradation() {
+    for mode in [CompatMode::C1, CompatMode::C2, CompatMode::C3] {
+        let outcome = fixture_outcome_with_options("columns_two", &ConvertOptions::new(mode));
+        assert!(
+            !outcome
+                .degradations
+                .iter()
+                .any(|d| d.construct == "column-block"),
+            "{mode:?} reports a representable block: {:?}",
+            outcome.degradations
+        );
+    }
+}
+
+/// Sections cannot scope inside a table cell — the nested block reports
+/// `column-block` and keeps its content in single-column flow.
+#[test]
+fn columns_block_nested_degrades_and_keeps_content() {
+    let outcome =
+        fixture_outcome_with_options("columns_nested", &ConvertOptions::new(CompatMode::C2));
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| { d.construct == "column-block" && d.message.contains("single-column") }),
+        "the nested block reports its single-column flattening: {:?}",
+        outcome.degradations
+    );
+    let xml = fixture_doc_xml("columns_nested");
+    assert_eq!(
+        xml.matches("<w:sectPr").count(),
+        1,
+        "only the body-final sectPr remains: {xml}"
+    );
+    assert!(
+        xml.contains("Cell text that stays single-column inside a table."),
+        "the nested content survives: {xml}"
+    );
+}
+
+/// `page(columns:)` without a declared gutter resolves Typst's 4%-of-text-
+/// width default — not the writer's old 720-twip fallback.
+#[test]
+fn page_columns_default_gutter_resolves_against_text_width() {
+    let xml = fixture_doc_xml("columns_page_default_gutter");
+    assert!(
+        xml.contains(r#"<w:cols w:num="2" w:space="340"/>"#),
+        "4% of the 150mm text width ≈ 340 twips, not 720: {xml}"
+    );
+    assert!(
+        !xml.contains(r#"w:space="720""#),
+        "the hardcoded fallback is gone: {xml}"
+    );
+}
+
+/// A declared `#set columns(gutter:)` keeps its value on a multi-column
+/// page — the 4% default only applies when nothing is declared.
+#[test]
+fn page_columns_declared_gutter_wins() {
+    let xml = fixture_doc_xml("columns_page_set_gutter");
+    assert!(
+        xml.contains(r#"<w:cols w:num="2" w:space="567"/>"#),
+        "the declared 10mm gutter ≈ 567 twips is kept: {xml}"
+    );
+}
+
+/// A declared *ratio* gutter resolves against the text width like the
+/// default does — the AST decomposition drops the ratio part, so the
+/// chain resolution is the only correct value.
+#[test]
+fn page_columns_ratio_gutter_resolves_against_text_width() {
+    let xml = fixture_doc_xml("columns_page_ratio_gutter");
+    assert!(
+        xml.contains(r#"<w:cols w:num="2" w:space="425"/>"#),
+        "5% of the 150mm text width ≈ 425 twips, not 720: {xml}"
     );
 }

@@ -51,7 +51,16 @@ fn c3_cached_results_reproduce_c2_text() {
         "fields_seq_multi",
         "fields_hyperlink",
         "fields_page_counters",
+        "fields_ref_marker",
         "bibliography_basic",
+        "columns_two",
+        "columns_three_gutter",
+        "columns_mid_page",
+        "columns_page_break",
+        "columns_page_default_gutter",
+        "columns_page_set_gutter",
+        "columns_page_ratio_gutter",
+        "columns_nested",
     ] {
         assert_eq!(
             all_visible_text(fixture, CompatMode::C2),
@@ -560,6 +569,33 @@ fn external_links_use_the_hyperlink_field_form() {
             doc.contains(">the example site<"),
             "{mode:?}: the link text is the field result: {doc}"
         );
+    }
+}
+
+/// `next_marker_text` concatenates every `TextElem` of a ref's rendered
+/// marker up to the tag's `End` — a `[Section ]`/`[Chapter ]` supplement
+/// prefix plus the number is one cached result; taking only the first run
+/// would silently drop the rest.
+#[test]
+fn ref_supplement_marker_caches_the_full_text() {
+    for mode in [CompatMode::C2, CompatMode::C3] {
+        let doc = part("fields_ref_marker", mode, "word/document.xml");
+        assert_eq!(
+            doc.matches(" REF intro ").count(),
+            2,
+            "{mode:?}: both refs emit REF fields against the heading bookmark: {doc}"
+        );
+        let cached: Vec<&str> = doc
+            .split("fldCharType=\"separate\"")
+            .skip(1)
+            .map(|s| s.split("fldCharType=\"end\"").next().unwrap_or_default())
+            .collect();
+        for expected in ["Section\u{a0}1", "Chapter\u{a0}1"] {
+            assert!(
+                cached.iter().any(|s| s.contains(expected)),
+                "{mode:?}: supplement prefix + number is one cached result {expected:?}: {cached:?}"
+            );
+        }
     }
 }
 

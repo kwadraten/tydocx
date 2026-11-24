@@ -342,7 +342,8 @@ fn collect_heading_sizes(
             }
             IrBlock::Figure { body, .. }
             | IrBlock::Quote { body }
-            | IrBlock::Place { body, .. } => {
+            | IrBlock::Place { body, .. }
+            | IrBlock::Columns { body, .. } => {
                 collect_heading_sizes(body, per_level, run_counts);
             }
             IrBlock::List(list) => {

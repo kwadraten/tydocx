@@ -257,6 +257,7 @@ fn conformance_ir_variant_coverage() {
         "Place",
         "PageBreak",
         "Shape",
+        "Columns",
     ];
     const INLINE_ALL: &[&str] = &[
         "Text",

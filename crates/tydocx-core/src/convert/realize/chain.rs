@@ -3,7 +3,7 @@
 //! never contaminates a global read.
 
 use tydocx_ooxml::document::VerticalAlign;
-use typst_library::foundations::{Smart, StyleChain};
+use typst_library::foundations::{Resolve, Smart, StyleChain};
 use typst_library::introspection::TagElem;
 use typst_library::layout::{AlignElem, ColumnsElem, Length, PageElem, Rel, Sides, VAlignment};
 use typst_library::model::{FootnoteEntry, Numbering, ParElem, ParLine};
@@ -11,6 +11,7 @@ use typst_library::routines::Pair;
 use typst_library::text::{Lang, TextElem};
 use typst_library::visualize::LineElem;
 
+use super::collect;
 use super::page::{self, SourceStyleOverrides};
 
 /// Split a `Length` into `(twips, em)` — the decomposition the AST pass
@@ -157,9 +158,20 @@ fn page_props(styles: StyleChain<'_>, ovr: &mut SourceStyleOverrides, defaults: 
         ovr.vertical_align = vertical_align(styles);
     }
     if ovr.column_gutter_twips.is_none() && ovr.column_gutter_em.is_none() {
-        let (twips, em) = rel_length_amount(&styles.get(ColumnsElem::gutter));
-        ovr.column_gutter_twips = twips;
-        ovr.column_gutter_em = em;
+        let gutter = styles.get(ColumnsElem::gutter);
+        if styles.get(PageElem::columns).get() > 1 {
+            // On a multi-column page Typst resolves the gutter's ratio
+            // part (4% by default) against the text width — the AST
+            // decomposition dropped it as "unrepresentable" and the
+            // writer's 720-twip default took over.
+            let rel = gutter.resolve(styles);
+            let spacing = page::columns_gutter_twips(rel, collect::page_content_width_pt(styles));
+            ovr.column_gutter_twips = Some(spacing);
+        } else {
+            let (twips, em) = rel_length_amount(&gutter);
+            ovr.column_gutter_twips = twips;
+            ovr.column_gutter_em = em;
+        }
     }
 }
 

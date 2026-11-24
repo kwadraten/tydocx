@@ -47,4 +47,4 @@ pub(super) use page_ref::{
 pub(crate) use source_ast::{PageZoneHeadings, ZoneStyleref};
 pub(super) use source_ast::{detect_page_setting_change, page_zone_heading_levels};
 pub(super) use style::apply_footnote_text_size;
-pub(super) use units::pt_to_twips;
+pub(in crate::convert) use units::{DEFAULT_COLUMNS_GUTTER, columns_gutter_twips, pt_to_twips};
