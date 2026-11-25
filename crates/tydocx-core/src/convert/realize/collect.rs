@@ -60,6 +60,11 @@ pub struct CollectorState {
     pub footnote_circled: bool,
     pub degradations: Vec<Degradation>,
     pub chain_overrides: page::SourceStyleOverrides,
+    /// Any top-level page state declared inside/outside margins — OR'd into
+    /// `margins_mirrored` for the C2/C3 flag and the mixed-margin report;
+    /// `chain_overrides.margins_mirrored` keeps the chain's last-wins read
+    /// so C1's report contract is unchanged.
+    pub two_sided_margins: bool,
     /// Span of the pair whose ambient page settings first diverged — the
     /// `section-break` degradation's location.
     pub section_span: Option<Span>,
@@ -97,6 +102,10 @@ pub struct Collector<'a> {
     /// combined with `margins_mirrored` it means the document-global
     /// `w:mirrorMargins` also swaps that state's margins on even pages.
     one_sided_asymmetric_margins: bool,
+    /// A top-level page state declared inside/outside margins —
+    /// `w:mirrorMargins` is document-global, so any section's `two_sided`
+    /// sets it, accumulated here because the chain read is last-wins.
+    two_sided_margins: bool,
     /// The `\@` picture `document.date` renders in its kind-dependent auto
     /// format, resolved from `DocumentInfo::date` before collection.
     doc_date_picture: Option<&'static str>,
@@ -210,6 +219,7 @@ pub fn collect_document(
         sections: Vec::new(),
         section_span: None,
         one_sided_asymmetric_margins: false,
+        two_sided_margins: false,
         doc_date_picture: info.date_picture,
         _marker: std::marker::PhantomData,
     };
@@ -225,6 +235,7 @@ pub fn collect_document(
         footnote_circled: collector.footnote_circled,
         degradations: std::mem::take(&mut collector.degradations),
         chain_overrides,
+        two_sided_margins: collector.two_sided_margins,
         section_span: collector.section_span,
     };
     let mut page_furniture = Vec::new();
@@ -482,6 +493,7 @@ impl Collector<'_> {
                 let snapshot = PageSnapshot::resolve(styles);
                 self.one_sided_asymmetric_margins |= !snapshot.two_sided
                     && snapshot.left_pt.to_bits() != snapshot.right_pt.to_bits();
+                self.two_sided_margins |= snapshot.two_sided;
                 match &self.page_snapshot {
                     None => {
                         self.page_snapshot = Some(snapshot.clone());
