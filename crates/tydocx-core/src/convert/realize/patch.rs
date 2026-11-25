@@ -467,13 +467,14 @@ fn patch_page_blocks(blocks: &mut [IrBlock], patch: &mut PagePatch<'_>) {
             | IrBlock::Columns { body, .. } => {
                 patch_page_blocks(body, patch);
             }
-            IrBlock::Bibliography { entries } => {
+            IrBlock::Bibliography { title, entries } => {
+                patch_page_blocks(title, patch);
                 for entry in entries {
                     patch_page_inlines(&mut entry.body, patch);
                 }
             }
             IrBlock::Outline { title, entries, .. } => {
-                patch_page_inlines(title, patch);
+                patch_page_blocks(title, patch);
                 for entry in entries {
                     patch_page_inlines(&mut entry.title, patch);
                 }
@@ -747,13 +748,14 @@ fn patch_block_images(blocks: &mut [IrBlock], sizes: &HashMap<u64, ImagePlacemen
             | IrBlock::Columns { body, .. } => {
                 patch_block_images(body, sizes);
             }
-            IrBlock::Bibliography { entries } => {
+            IrBlock::Bibliography { title, entries } => {
+                patch_block_images(title, sizes);
                 for entry in entries {
                     patch_inline_images(&mut entry.body, sizes);
                 }
             }
             IrBlock::Outline { title, entries, .. } => {
-                patch_inline_images(title, sizes);
+                patch_block_images(title, sizes);
                 for entry in entries {
                     patch_inline_images(&mut entry.title, sizes);
                 }

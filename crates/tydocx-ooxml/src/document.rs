@@ -429,7 +429,10 @@ pub enum InlineElement {
     Text(Run),
     /// A footnote reference (rendered as superscript number in the document).
     /// The `id` corresponds to the footnote in the `Document::footnotes` list.
-    FootnoteRef(u32),
+    FootnoteRef {
+        id: u32,
+        custom_mark: Option<String>,
+    },
     /// A math equation rendered as OMML XML.
     /// If `equation_number` is set, the equation is a numbered block equation.
     Math {
@@ -773,6 +776,7 @@ pub struct Footnote {
     /// A bookmark wrapping the footnote's reference mark — the target a
     /// `NOTEREF` field (Typst `counter(footnote).at(<label>)`) points at.
     pub bookmark: Option<FootnoteBookmark>,
+    pub custom_mark: Option<String>,
 }
 
 /// A bookmark name + ID pair anchoring a footnote's reference mark.
@@ -873,6 +877,7 @@ pub struct Paragraph {
     /// Paragraph shading fill (`w:pPr/w:shd w:fill`), a six-digit hex like
     /// `Run::shading`.
     pub shading: Option<String>,
+    pub toc_exclude: bool,
 }
 
 impl Paragraph {
@@ -977,7 +982,10 @@ impl Paragraph {
 
     /// Add a footnote reference to this paragraph.
     pub fn add_footnote_ref(&mut self, id: u32) {
-        self.inlines.push(InlineElement::FootnoteRef(id));
+        self.inlines.push(InlineElement::FootnoteRef {
+            id,
+            custom_mark: None,
+        });
     }
 
     /// Add a math equation (OMML XML) to this paragraph.
@@ -1631,6 +1639,7 @@ pub enum FootnoteFormat {
     #[default]
     Decimal,
     CircledNumber,
+    CustomMarks,
 }
 
 /// Footnote area layout overrides from Typst `set footnote.entry(...)`.
@@ -2090,6 +2099,7 @@ impl Document {
             id,
             paragraphs,
             bookmark: None,
+            custom_mark: None,
         });
         id
     }

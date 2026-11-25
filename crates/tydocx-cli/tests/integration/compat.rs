@@ -407,7 +407,20 @@ fn c1_header_weight_kept() {
 fn c1_footnote_numbering_literalized() {
     let constructs = c1_constructs("issue_c1_footnote_numbering");
     assert_has(&constructs, "footnote-numbering");
-    assert_clean("issue_c1_footnote_numbering");
+    // "(n)" markers map to no w:numFmt, so the evaluated-mark fallback —
+    // customMarkFollows literals — reports at every mode, not just C1.
+    for mode in [CompatMode::C2, CompatMode::C3] {
+        let constructs = constructs_for("issue_c1_footnote_numbering", mode);
+        assert_has(&constructs, "footnote-numbering");
+        let xml =
+            fixture_package_with_options("issue_c1_footnote_numbering", &ConvertOptions::new(mode))
+                .part_text("word/document.xml")
+                .to_owned();
+        assert!(
+            xml.contains(r#"w:footnoteReference w:customMarkFollows="1""#),
+            "{mode:?}: the (n) mark stays a literal custom mark: {xml}"
+        );
+    }
 }
 
 #[test]

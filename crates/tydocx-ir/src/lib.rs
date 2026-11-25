@@ -19,7 +19,7 @@ pub use degradation::{
     format_degradation,
 };
 pub use geometry::GeometryInput;
-pub use lower::{LowerCtx, lower};
+pub use lower::{LowerCtx, footnote_mark_plan, lower};
 pub use mode::CompatMode;
 pub use types::*;
 pub use units::{pt_to_emu, pt_to_twips};

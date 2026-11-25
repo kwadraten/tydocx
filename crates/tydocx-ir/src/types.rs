@@ -152,6 +152,7 @@ pub enum IrBlock {
         /// The number Typst rendered for this heading, if any. Emitted as
         /// literal text whenever the numbering is not mapped to a `w:numPr`.
         numbering_text: Option<String>,
+        toc_exclude: bool,
         /// How the heading's numbering maps to Word numbering: `Mappable`
         /// when the pattern is a set of Arabic/Latin/Roman pieces, or
         /// `Unmappable` when Typst's numbering is a function or uses a numeral
@@ -199,7 +200,7 @@ pub enum IrBlock {
     },
     Raw(IrRaw),
     Outline {
-        title: Vec<IrInline>,
+        title: Vec<IrBlock>,
         entries: Vec<IrOutlineEntry>,
         depth: u8,
         custom_target: bool,
@@ -213,6 +214,7 @@ pub enum IrBlock {
         figure_caption_id: Option<String>,
     },
     Bibliography {
+        title: Vec<IrBlock>,
         entries: Vec<IrBibEntry>,
     },
     Place {
@@ -824,6 +826,7 @@ pub struct IrRaw {
 pub struct IrOutlineEntry {
     pub level: u8,
     pub title: Vec<IrInline>,
+    pub alignment: Option<Alignment>,
     /// Bookmark name the entry hyperlinks to (the heading's own label, or a
     /// synthesized `outline-target-N` the collector registers on the heading).
     pub target: Option<String>,

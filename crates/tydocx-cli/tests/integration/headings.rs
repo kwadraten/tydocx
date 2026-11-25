@@ -2,6 +2,7 @@
 
 use crate::common::{
     fixture_doc_xml, fixture_outcome, fixture_part, fixture_styles_xml, paragraph_containing,
+    paragraph_texts,
 };
 use tydocx_core::{CompatMode, ConvertOptions};
 
@@ -556,5 +557,58 @@ fn issue_uncomputable_page_counters_report_degradations() {
     assert!(
         constructs.contains(&"footnote-counter-reference"),
         "counter(footnote) should be reported, got: {constructs:?}"
+    );
+}
+
+#[test]
+fn appendix_heading_evaluated_numbering_and_shared_alignment() {
+    // A numbering switch mid-document gets a fresh w:numPr only while it
+    // reproduces the evaluated numbers exactly; a counter update off that
+    // sequence falls back to a literal prefix + Heading style + bookmark and
+    // reports the approximation. Body headings and TOC entries share the
+    // effective alignment.
+    let outcome = fixture_outcome("appendix_heading");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "heading-numbering"),
+        "the counter divergence must be reported: {:?}",
+        outcome.degradations
+    );
+    let doc_xml = fixture_doc_xml("appendix_heading");
+    // The TOC entry's hyperlink contains the same title text; the body
+    // heading is the second paragraph carrying it.
+    let heading_para = |needle: &str| {
+        let first = doc_xml.find(needle).expect("heading text present");
+        paragraph_containing(&doc_xml[first + needle.len()..], needle)
+    };
+    let body = heading_para("Body Chapter");
+    let appendix_a = heading_para("Appendix One");
+    let appendix_e = heading_para("Appendix Two");
+    for para in [&body, &appendix_a, &appendix_e] {
+        assert!(
+            para.contains(r#"w:jc w:val="center""#),
+            "centered heading keeps the effective alignment: {para}"
+        );
+    }
+    assert!(body.contains("<w:numPr>"), "in-sequence 1. maps: {body}");
+    assert!(
+        appendix_a.contains("<w:numPr>"),
+        "a fresh A. instance reproduces the evaluated A: {appendix_a}"
+    );
+    assert!(
+        !appendix_e.contains("<w:numPr>"),
+        "an off-sequence E. cannot come from Word numbering: {appendix_e}"
+    );
+    assert!(
+        appendix_e.contains("E. Appendix Two"),
+        "the evaluated prefix stays literal: {appendix_e}"
+    );
+    assert!(
+        paragraph_texts(&doc_xml)
+            .iter()
+            .any(|t| t.contains("A. Appendix One")),
+        "the TOC entry carries the evaluated number: {doc_xml}"
     );
 }

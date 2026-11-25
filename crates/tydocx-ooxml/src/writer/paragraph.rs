@@ -64,6 +64,7 @@ pub(super) fn write_paragraph<W: Write>(
             || para.mark_size_half_pt.is_some()
             || para.first_line_indent.is_some()
             || para.justify.is_some()
+            || para.toc_exclude
         {
             w.create_element("w:pPr").write_inner_content(|ppr| {
                 // Horizontal rule: emit bottom border
@@ -308,6 +309,11 @@ pub(super) fn write_paragraph<W: Write>(
                 } else if let Some(justify) = para.justify {
                     ppr.create_element("w:jc")
                         .with_attribute(("w:val", if justify { "both" } else { "left" }))
+                        .write_empty()?;
+                }
+                if para.toc_exclude {
+                    ppr.create_element("w:outlineLvl")
+                        .with_attribute(("w:val", "9"))
                         .write_empty()?;
                 }
                 if let Some(sz) = para.mark_size_half_pt {

@@ -36,7 +36,9 @@ pub(super) fn write_inline<W: Write>(
 ) -> io::Result<()> {
     match inline {
         InlineElement::Text(run) => write_run(writer, run, ctx.doc_style),
-        InlineElement::FootnoteRef(id) => write_footnote_ref(writer, *id),
+        InlineElement::FootnoteRef { id, custom_mark } => {
+            write_footnote_ref(writer, *id, custom_mark.as_deref())
+        }
         InlineElement::Math {
             omml_xml,
             equation_number: _,

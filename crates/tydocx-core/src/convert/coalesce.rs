@@ -345,12 +345,21 @@ mod tests {
         let mut p = Paragraph::new();
         p.inlines = vec![
             text_run("see"),
-            InlineElement::FootnoteRef(2),
+            InlineElement::FootnoteRef {
+                id: 2,
+                custom_mark: None,
+            },
             text_run("here"),
         ];
         coalesce_paragraph(&mut p);
         assert_eq!(run_count(&p), 2);
-        assert!(matches!(p.inlines[1], InlineElement::FootnoteRef(2)));
+        assert!(matches!(
+            p.inlines[1],
+            InlineElement::FootnoteRef {
+                id: 2,
+                custom_mark: None
+            }
+        ));
     }
 
     #[test]

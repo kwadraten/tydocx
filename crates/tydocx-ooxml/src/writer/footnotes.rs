@@ -40,22 +40,42 @@ pub(super) fn write_footnote_pr<W: Write>(
         })?;
     Ok(())
 }
-fn write_footnote_mark_run<W: Write>(writer: &mut Writer<W>) -> io::Result<()> {
-    // Word generates the marker from the footnote format, so the run holds
-    // only `w:footnoteRef` — never a literal marker character, which would
-    // freeze the global sequence and contradict a per-page restart.
+fn write_footnote_mark_run<W: Write>(
+    writer: &mut Writer<W>,
+    custom_mark: Option<&str>,
+) -> io::Result<()> {
     writer.create_element("w:r").write_inner_content(|w| {
         w.create_element("w:rPr").write_inner_content(|rpr| {
             write_value_element(rpr, "w:rStyle", "FootnoteReference")?;
             Ok(())
         })?;
-        w.create_element("w:footnoteRef").write_empty()?;
+        if custom_mark.is_some() {
+            w.create_element("w:footnoteRef")
+                .with_attribute(("w:customMarkFollows", "1"))
+                .write_empty()?;
+        } else {
+            w.create_element("w:footnoteRef").write_empty()?;
+        }
         Ok(())
     })?;
+    if let Some(mark) = custom_mark {
+        writer.create_element("w:r").write_inner_content(|w| {
+            w.create_element("w:rPr").write_inner_content(|rpr| {
+                write_value_element(rpr, "w:rStyle", "FootnoteReference")?;
+                Ok(())
+            })?;
+            write_text_run(w, mark, true)?;
+            Ok(())
+        })?;
+    }
     Ok(())
 }
 
-pub(super) fn write_footnote_ref<W: Write>(writer: &mut Writer<W>, id: u32) -> io::Result<()> {
+pub(super) fn write_footnote_ref<W: Write>(
+    writer: &mut Writer<W>,
+    id: u32,
+    custom_mark: Option<&str>,
+) -> io::Result<()> {
     let id_str = id.to_string();
     writer.create_element("w:r").write_inner_content(|w| {
         w.create_element("w:rPr").write_inner_content(|rpr| {
@@ -64,11 +84,28 @@ pub(super) fn write_footnote_ref<W: Write>(writer: &mut Writer<W>, id: u32) -> i
                 .write_empty()?;
             Ok(())
         })?;
-        w.create_element("w:footnoteReference")
-            .with_attribute(("w:id", id_str.as_str()))
-            .write_empty()?;
+        if custom_mark.is_some() {
+            w.create_element("w:footnoteReference")
+                .with_attribute(("w:customMarkFollows", "1"))
+                .with_attribute(("w:id", id_str.as_str()))
+                .write_empty()?;
+        } else {
+            w.create_element("w:footnoteReference")
+                .with_attribute(("w:id", id_str.as_str()))
+                .write_empty()?;
+        }
         Ok(())
     })?;
+    if let Some(mark) = custom_mark {
+        writer.create_element("w:r").write_inner_content(|w| {
+            w.create_element("w:rPr").write_inner_content(|rpr| {
+                write_value_element(rpr, "w:rStyle", "FootnoteReference")?;
+                Ok(())
+            })?;
+            write_text_run(w, mark, true)?;
+            Ok(())
+        })?;
+    }
     Ok(())
 }
 
@@ -196,7 +233,7 @@ fn write_footnote_entry(
                         if let Some(bookmark) = &footnote.bookmark {
                             write_bookmark_start(p_w, bookmark.id, &bookmark.name)?;
                         }
-                        write_footnote_mark_run(p_w)?;
+                        write_footnote_mark_run(p_w, footnote.custom_mark.as_deref())?;
                         if let Some(bookmark) = &footnote.bookmark {
                             write_bookmark_end(p_w, bookmark.id)?;
                         }

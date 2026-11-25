@@ -16,7 +16,7 @@ use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
 use typst_library::foundations::{
     Content, ContextElem, Datetime, Element, LocatableSelector, NativeElement, Packed, Resolve,
-    SequenceElem, Smart, StyleChain, StyledElem, Styles, Value,
+    SequenceElem, ShowSet, Smart, StyleChain, StyledElem, Styles, Value,
 };
 use typst_library::introspection::{Counter, Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::grid::Celled;
@@ -62,7 +62,6 @@ use crate::convert::table_width::{TableWidthCtx, track_widths_pct};
 pub struct CollectorState {
     pub footnote_markers: Vec<FootnoteMarker>,
     pub footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
-    pub footnote_circled: bool,
     pub degradations: Vec<Degradation>,
     pub fragment_tags: Vec<(Tag, usize)>,
     pub chain_overrides: page::SourceStyleOverrides,
@@ -92,6 +91,7 @@ pub struct Collector<'a> {
     /// (entry collection registers heading bookmarks, which headings consume
     /// later in document order — the outline itself precedes them).
     outline_entries: HashMap<Span, OutlineEntries>,
+    heading_alignments: HashMap<Location, Option<Alignment>>,
     /// Next synthesized `outline-target-N` bookmark index — monotonic so
     /// rebuilds and multiple outlines cannot collide on the same name.
     next_outline_bookmark: usize,
@@ -99,7 +99,6 @@ pub struct Collector<'a> {
     works: Option<std::sync::Arc<Works>>,
     footnote_markers: Vec<FootnoteMarker>,
     footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
-    footnote_circled: bool,
     degradations: Vec<Degradation>,
     eq_count: u64,
     source: Option<Source>,
@@ -218,12 +217,12 @@ pub fn collect_document(
         block_depth: 0,
         heading_bookmarks: HashMap::new(),
         outline_entries: HashMap::new(),
+        heading_alignments: HashMap::new(),
         next_outline_bookmark: 0,
         bib_entries: None,
         works: None,
         footnote_markers: Vec::new(),
         footnote_bodies: HashMap::new(),
-        footnote_circled: false,
         degradations: Vec::new(),
         eq_count: 0,
         source,
@@ -247,7 +246,6 @@ pub fn collect_document(
         fragment_tags: std::mem::take(&mut collector.fragment_tags),
         footnote_markers: std::mem::take(&mut collector.footnote_markers),
         footnote_bodies: std::mem::take(&mut collector.footnote_bodies),
-        footnote_circled: collector.footnote_circled,
         degradations: std::mem::take(&mut collector.degradations),
         chain_overrides,
         two_sided_margins: collector.two_sided_margins,
@@ -396,6 +394,20 @@ impl Collector<'_> {
         // synthesized bookmarks on their targets — ahead of document order,
         // so an outline anywhere (including at the end) finds every target
         // already book-marked when it is collected.
+        for i in 0..pairs.len() {
+            let (content, _) = pairs[i];
+            if let Some(tagged) = content.to_packed::<TagElem>()
+                && let Tag::Start(inner, _) = &tagged.tag
+                && inner.to_packed::<HeadingElem>().is_some()
+                && let Some(location) = inner.location()
+            {
+                let end = find_end(pairs, i + 1, Some(location));
+                self.heading_alignments.insert(
+                    location,
+                    heading_inner_styles(&pairs[i + 1..end]).and_then(alignment_from_styles),
+                );
+            }
+        }
         for (content, styles) in pairs {
             let (outline, span) = if let Some(tagged) = content.to_packed::<TagElem>() {
                 match &tagged.tag {
@@ -492,7 +504,6 @@ impl Collector<'_> {
             source: self.source.as_ref(),
             block_math_as_inline: false,
             footnote_bodies: &mut self.footnote_bodies,
-            footnote_circled: &mut self.footnote_circled,
             layouter_index: &self.layouter_index,
             scoped_par: None,
             doc_date_picture: self.doc_date_picture,
@@ -608,7 +619,7 @@ impl Collector<'_> {
         }
         if let Some(heading) = inner.to_packed::<HeadingElem>() {
             return Ok(vec![self.collect_heading(
-                heading, inner, group, styles, engine, locator,
+                heading, inner, group, styles, engine, locator, false,
             )?]);
         }
         if let Some(figure) = inner.to_packed::<FigureElem>() {
@@ -648,12 +659,20 @@ impl Collector<'_> {
             });
             return Ok(Vec::new());
         }
-        if inner.to_packed::<BibliographyElem>().is_some() {
-            let entries = self.bib_entries.clone().unwrap_or_default();
-            return Ok(vec![IrBlock::Bibliography { entries }]);
+        if let Some(bib) = inner.to_packed::<BibliographyElem>() {
+            return self.collect_bibliography(bib, styles, engine, locator);
         }
         if let Some(raw) = inner.to_packed::<RawElem>() {
-            return Ok(vec![self.collect_raw(raw, inner, styles, engine, locator)?]);
+            if raw_is_block(raw, styles) {
+                return Ok(vec![self.collect_raw(raw, inner, styles, engine, locator)?]);
+            }
+            let mut ctx = self.inline_ctx();
+            let inlines = collect_inlines(inner, styles, engine, locator, &mut ctx)?;
+            return Ok(vec![IrBlock::Paragraph(IrParagraph {
+                inlines,
+                par: par_style_from_styles(styles),
+                ..IrParagraph::default()
+            })]);
         }
         if let Some(quote) = inner.to_packed::<QuoteElem>() {
             return self.collect_quote(quote, styles, engine, locator);
@@ -690,6 +709,25 @@ impl Collector<'_> {
             return Ok(vec![shape]);
         }
         self.collect_blocks(group, engine, locator, false)
+    }
+
+    fn collect_bibliography(
+        &mut self,
+        bib: &Packed<BibliographyElem>,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrBlock>> {
+        let scoped = bib.show_set(styles);
+        let title = self.elem_title(
+            bib.realize_title(styles.chain(&scoped)),
+            &scoped,
+            styles,
+            engine,
+            locator,
+        )?;
+        let entries = self.bib_entries.clone().unwrap_or_default();
+        Ok(vec![IrBlock::Bibliography { title, entries }])
     }
 
     /// Content lifted out of `context { … }` reaches the pairs only as an
@@ -917,7 +955,7 @@ impl Collector<'_> {
         if let Some(shape) = self.collect_shape(&original, styles, engine, locator)? {
             return Ok(vec![shape]);
         }
-        if is_block_element(&original) {
+        if is_block_element(&original, styles) {
             return self.collect_content_element(&original, styles, engine, locator);
         }
         // `is_block_element` claims `ColumnsElem`, so it never reaches the
@@ -1106,7 +1144,7 @@ impl Collector<'_> {
                 out.extend(self.collect_pad_body_blocks(pad, styles, engine, locator)?);
                 i += 1;
             } else if let Some(styled) = child.to_packed::<StyledElem>()
-                && styled_holds_block(&styled.child)
+                && styled_holds_block(&styled.child, styles.chain(&styled.styles))
             {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
                 out.extend(self.collect_body_blocks(child, list_ctx, styles, engine, locator)?);
@@ -1124,11 +1162,11 @@ impl Collector<'_> {
                         .to_string(),
                 });
                 i = skip_tag_children(children, i + 1, inner.location());
-            } else if is_block_element(child) {
+            } else if is_block_element(child, styles) {
                 flush_pending(&mut pending, &mut out, self, styles, engine, locator)?;
                 out.extend(self.collect_content_element(child, styles, engine, locator)?);
                 i += 1;
-            } else if is_inline_element(child) {
+            } else if is_inline_element(child, styles) {
                 pending.push(child.clone());
                 i += 1;
             } else if child.to_packed::<ParbreakElem>().is_some() {
@@ -1394,13 +1432,20 @@ impl Collector<'_> {
 
     fn collect_outline_elem(
         &mut self,
-        outline: &OutlineElem,
+        outline: &Packed<OutlineElem>,
         span: Span,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
-        let title = self.outline_title(outline, styles, engine, locator)?;
+        let scoped = outline.show_set(styles);
+        let title = self.elem_title(
+            outline.realize_title(styles.chain(&scoped)),
+            &scoped,
+            styles,
+            engine,
+            locator,
+        )?;
         let resolved = match self.outline_entries.get(&span) {
             Some(resolved) => resolved.clone(),
             None => self.build_outline_entries(outline, styles, engine, locator)?,
@@ -1455,7 +1500,16 @@ impl Collector<'_> {
             return self.collect_equation_elem(equation, child, styles, engine, locator);
         }
         if let Some(raw) = child.to_packed::<RawElem>() {
-            return Ok(vec![self.collect_raw(raw, child, styles, engine, locator)?]);
+            if raw_is_block(raw, styles) {
+                return Ok(vec![self.collect_raw(raw, child, styles, engine, locator)?]);
+            }
+            let mut ctx = self.inline_ctx();
+            let inlines = collect_inlines(child, styles, engine, locator, &mut ctx)?;
+            return Ok(vec![IrBlock::Paragraph(IrParagraph {
+                inlines,
+                par: par_style_from_styles(styles),
+                ..IrParagraph::default()
+            })]);
         }
         if let Some(quote) = child.to_packed::<QuoteElem>() {
             return self.collect_quote(quote, styles, engine, locator);
@@ -1572,7 +1626,7 @@ impl Collector<'_> {
         }
         Ok(heading_block(HeadingSpec {
             level,
-            numbering: heading_numbering(styles),
+            numbering: heading_numbering(heading, styles),
             numbering_text,
             body,
             labels: self.bookmark_name(child).into_iter().collect(),
@@ -1580,6 +1634,7 @@ impl Collector<'_> {
             par: scoped_par.unwrap_or_else(|| par_style_from_styles(styles)),
             span: child.span().id().map(|_| child.span()),
             outlined,
+            keep_style: false,
         }))
     }
 
@@ -1610,6 +1665,10 @@ impl Collector<'_> {
         })])
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one heading's inputs; the caller sites pass them through"
+    )]
     fn collect_heading(
         &mut self,
         heading: &HeadingElem,
@@ -1618,18 +1677,19 @@ impl Collector<'_> {
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
+        keep_style: bool,
     ) -> SourceResult<IrBlock> {
         let level = heading.resolve_level(styles).get();
         let level = u8::try_from(level.min(255)).unwrap_or(u8::MAX);
         let numbering_text = heading_numbers(heading);
+        let effective = heading_inner_styles(group).unwrap_or(styles);
+        let alignment = alignment_from_styles(effective);
         let mut body: Vec<IrInline> = Vec::new();
-        let mut alignment = alignment_from_styles(styles);
         let mut par = par_style_from_styles(styles);
         for (content, pair_styles) in group {
             if let Some(block) = content.to_packed::<BlockElem>()
                 && let Some(body_content) = block_body_content(block, *pair_styles)
             {
-                alignment = alignment_from_styles(*pair_styles);
                 let mut ctx = self.inline_ctx();
                 body = collect_inlines(body_content, *pair_styles, engine, locator, &mut ctx)?;
                 par = ctx
@@ -1642,7 +1702,6 @@ impl Collector<'_> {
                 break;
             }
             if let Some(inner_par) = content.to_packed::<ParElem>() {
-                alignment = alignment_from_styles(*pair_styles);
                 let mut ctx = self.inline_ctx();
                 let para =
                     collect_paragraph(&inner_par.body, *pair_styles, engine, locator, &mut ctx)?;
@@ -1660,7 +1719,7 @@ impl Collector<'_> {
             body = collect_inlines(&heading.body, styles, engine, locator, &mut ctx)?;
         }
         let outlined = heading.outlined.get(styles);
-        if !outlined {
+        if !outlined && !keep_style {
             self.degradations.push(Degradation {
                 span: Some(inner.span()),
                 construct: "unoutlined-heading",
@@ -1674,7 +1733,7 @@ impl Collector<'_> {
         self.absorbed_labels(group, &mut labels);
         Ok(heading_block(HeadingSpec {
             level,
-            numbering: heading_numbering(styles),
+            numbering: heading_numbering(heading, effective),
             numbering_text,
             body,
             labels,
@@ -1682,6 +1741,7 @@ impl Collector<'_> {
             par,
             span: inner.span().id().map(|_| inner.span()),
             outlined,
+            keep_style,
         }))
     }
 
@@ -2789,13 +2849,20 @@ impl Collector<'_> {
 
     fn collect_outline(
         &mut self,
-        outline: &OutlineElem,
+        outline: &Packed<OutlineElem>,
         span: Span,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
-        let title = self.outline_title(outline, styles, engine, locator)?;
+        let scoped = outline.show_set(styles);
+        let title = self.elem_title(
+            outline.realize_title(styles.chain(&scoped)),
+            &scoped,
+            styles,
+            engine,
+            locator,
+        )?;
         let resolved = match self.outline_entries.get(&span) {
             Some(resolved) => resolved.clone(),
             None => self.build_outline_entries(outline, styles, engine, locator)?,
@@ -2868,9 +2935,19 @@ impl Collector<'_> {
                     &mut ctx,
                 )?);
                 any_heading = true;
+                let alignment = match content
+                    .location()
+                    .and_then(|loc| self.heading_alignments.get(&loc))
+                {
+                    Some(alignment) => *alignment,
+                    None => with_fragment(engine, locator, content, styles, |_, _, pairs| {
+                        Ok(heading_inner_styles(pairs).and_then(alignment_from_styles))
+                    })?,
+                };
                 entries.push(IrOutlineEntry {
                     level,
                     title: entry_title,
+                    alignment,
                     target: Some(self.outline_target_bookmark(content)),
                     page_number: None,
                     page_loc: content.location().map(typst::introspection::Location::hash),
@@ -3068,6 +3145,7 @@ impl Collector<'_> {
         entries.push(IrOutlineEntry {
             level: 1,
             title: entry_title,
+            alignment: None,
             target: Some(self.outline_target_bookmark(content)),
             page_number: None,
             page_loc: content.location().map(typst::introspection::Location::hash),
@@ -3121,6 +3199,7 @@ impl Collector<'_> {
         entries.push(IrOutlineEntry {
             level: 1,
             title: entry_title,
+            alignment: None,
             target: Some(self.outline_target_bookmark(content)),
             page_number: None,
             page_loc: content.location().map(typst::introspection::Location::hash),
@@ -3181,20 +3260,55 @@ impl Collector<'_> {
         }
     }
 
-    fn outline_title(
+    fn elem_title(
         &mut self,
-        outline: &OutlineElem,
+        title: Option<Content>,
+        scoped: &Styles,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
-    ) -> SourceResult<Vec<IrInline>> {
-        match outline.title.get_cloned(styles) {
-            Smart::Custom(Some(title)) => {
-                let mut ctx = self.inline_ctx();
-                collect_inlines(&title, styles, engine, locator, &mut ctx)
+    ) -> SourceResult<Vec<IrBlock>> {
+        let Some(title) = title else {
+            return Ok(Vec::new());
+        };
+        let chained = styles.chain(scoped);
+        with_fragment(
+            engine,
+            locator,
+            &title,
+            chained,
+            |engine, locator, pairs| self.collect_title_blocks(pairs, engine, locator),
+        )
+    }
+
+    fn collect_title_blocks(
+        &mut self,
+        pairs: &[Pair<'_>],
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) -> SourceResult<Vec<IrBlock>> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < pairs.len() {
+            let (content, styles) = pairs[i];
+            if let Some(tagged) = content.to_packed::<TagElem>()
+                && let Tag::Start(inner, _) = &tagged.tag
+            {
+                let end = find_end(pairs, i + 1, inner.location());
+                let group = &pairs[i + 1..end];
+                if let Some(heading) = inner.to_packed::<HeadingElem>() {
+                    out.push(
+                        self.collect_heading(heading, inner, group, styles, engine, locator, true)?,
+                    );
+                } else {
+                    out.extend(self.collect_tag_group(inner, group, styles, engine, locator)?);
+                }
+                i = end + 1;
+            } else {
+                i += 1;
             }
-            _ => Ok(Vec::new()),
         }
+        Ok(out)
     }
 
     fn collect_place(
@@ -3873,17 +3987,24 @@ pub(super) fn shape_fill_hex(content: &Content, styles: StyleChain<'_>) -> Optio
     fill.as_ref().and_then(paint_to_shd_hex)
 }
 
-fn styled_holds_block(content: &Content) -> bool {
+fn styled_holds_block(content: &Content, styles: StyleChain<'_>) -> bool {
     if let Some(styled) = content.to_packed::<StyledElem>() {
-        return styled_holds_block(&styled.child);
+        return styled_holds_block(&styled.child, styles.chain(&styled.styles));
     }
     if let Some(sequence) = content.to_packed::<SequenceElem>() {
-        return sequence.children.iter().any(styled_holds_block);
+        return sequence
+            .children
+            .iter()
+            .any(|child| styled_holds_block(child, styles));
     }
-    is_block_element(content)
+    is_block_element(content, styles)
 }
 
-fn is_block_element(content: &Content) -> bool {
+fn raw_is_block(raw: &RawElem, styles: StyleChain<'_>) -> bool {
+    raw.block.get(styles)
+}
+
+fn is_block_element(content: &Content, styles: StyleChain<'_>) -> bool {
     content.to_packed::<HeadingElem>().is_some()
         || content.to_packed::<TableElem>().is_some()
         || content.to_packed::<GridElem>().is_some()
@@ -3896,7 +4017,9 @@ fn is_block_element(content: &Content) -> bool {
         || content
             .to_packed::<EquationElem>()
             .is_some_and(|eq| matches!(eq.block.as_option(), Some(true)))
-        || content.to_packed::<RawElem>().is_some()
+        || content
+            .to_packed::<RawElem>()
+            .is_some_and(|raw| raw_is_block(raw, styles))
         || content.to_packed::<QuoteElem>().is_some()
         || content.to_packed::<OutlineElem>().is_some()
         || content.to_packed::<BibliographyElem>().is_some()
@@ -3911,8 +4034,8 @@ fn is_block_element(content: &Content) -> bool {
         || content.to_packed::<LineElem>().is_some()
 }
 
-fn is_inline_element(content: &Content) -> bool {
-    !is_block_element(content)
+fn is_inline_element(content: &Content, styles: StyleChain<'_>) -> bool {
+    !is_block_element(content, styles)
         && content.to_packed::<TagElem>().is_none()
         && content
             .to_packed::<typst_library::layout::VElem>()
@@ -4109,11 +4232,26 @@ fn heading_numbers(heading: &HeadingElem) -> Option<String> {
     }
 }
 
-/// The heading's declared `set heading(numbering:)`: `Mappable` when the
-/// pattern's numeral systems all have an OOXML `w:numFmt`, `Unmappable` for a
-/// function numbering or an unrepresentable system. `None` = no numbering.
-fn heading_numbering(styles: StyleChain<'_>) -> Option<IrHeadingNumbering> {
-    let numbering = styles.get_cloned(HeadingElem::numbering)?;
+fn heading_inner_styles<'a>(pairs: &[Pair<'a>]) -> Option<StyleChain<'a>> {
+    for (content, pair_styles) in pairs {
+        if let Some(block) = content.to_packed::<BlockElem>()
+            && block_body_content(block, *pair_styles).is_some()
+        {
+            return Some(*pair_styles);
+        }
+        if content.to_packed::<ParElem>().is_some() {
+            return Some(*pair_styles);
+        }
+    }
+    None
+}
+
+/// The heading's effective `heading(numbering:)` — element arg first, then
+/// the chain's set rules — `Mappable` when the pattern's numeral systems all
+/// have an OOXML `w:numFmt`, `Unmappable` for a function numbering or an
+/// unrepresentable system. `None` = no numbering.
+fn heading_numbering(heading: &HeadingElem, styles: StyleChain<'_>) -> Option<IrHeadingNumbering> {
+    let numbering = heading.numbering.get_ref(styles).clone()?;
     Some(match &numbering {
         Numbering::Func(_) => IrHeadingNumbering::Unmappable,
         Numbering::Pattern(_) => pattern_from_numbering(&numbering, true)
@@ -4253,13 +4391,16 @@ struct HeadingSpec {
     par: IrParStyle,
     span: Option<Span>,
     outlined: bool,
+    keep_style: bool,
 }
 
 /// `outlined: false` headings leave the document outline, so they lower to a
 /// plain paragraph (numbering prefix and label kept) instead of a Heading
-/// style that would re-enter the TOC.
+/// style that would re-enter the TOC — unless `keep_style` asks for the
+/// Heading style plus a `toc_exclude` outline-level override (element titles
+/// Typst keeps heading-styled but unoutlined).
 fn heading_block(spec: HeadingSpec) -> IrBlock {
-    if !spec.outlined {
+    if !spec.outlined && !spec.keep_style {
         let mut para = IrParagraph {
             alignment: spec.alignment,
             par: spec.par,
@@ -4290,6 +4431,7 @@ fn heading_block(spec: HeadingSpec) -> IrBlock {
         par: spec.par,
         alignment: spec.alignment,
         span: spec.span,
+        toc_exclude: !spec.outlined,
     }
 }
 

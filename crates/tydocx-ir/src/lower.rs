@@ -3,10 +3,10 @@ use std::fmt::Write;
 
 use tydocx_ooxml::document::{
     AnchorWrap, AnchoredContent, AnchoredFloat, BlockElement, CellBorders, CellContent, Document,
-    EquationNumber, FirstLineIndent, FootnoteBookmark, ImageData, ImageFormat, InlineElement,
-    LevelOverride, ListInfo, PageNumberFormat, PageSettings, Paragraph, RelFrom, SectionBreak,
-    SectionBreakType, Table, TableBorders, TableCell, TableCellMargins, TableFloat, TableRow,
-    VMerge, truncate_bookmark_name,
+    EquationNumber, FirstLineIndent, FootnoteBookmark, FootnoteFormat, ImageData, ImageFormat,
+    InlineElement, LevelOverride, ListInfo, PageNumberFormat, PageSettings, Paragraph, RelFrom,
+    SectionBreak, SectionBreakType, Table, TableBorders, TableCell, TableCellMargins, TableFloat,
+    TableRow, VMerge, truncate_bookmark_name,
 };
 
 use crate::degradation::{Degradation, DegradationAction};
@@ -27,6 +27,7 @@ pub struct LowerCtx {
     pub body_size_half_pt: u32,
     pub heading_sizes: [u32; 5],
     pub footnote_ids: HashMap<u32, u32>,
+    pub footnote_marks: HashMap<u32, String>,
     pub next_bookmark_id: u32,
     pub degradations: Vec<Degradation>,
     /// Simulated heading-numbering counters per num instance (`numId`), used
@@ -75,6 +76,7 @@ pub struct HeadingNumState {
     pub counters: [u32; 9],
     /// Whether a counter divergence was already reported for this instance.
     pub reported: bool,
+    pub diverged: bool,
 }
 
 impl LowerCtx {
@@ -147,6 +149,7 @@ pub fn lower(
         body_size_half_pt: ir.style.body_size_half_pt,
         heading_sizes: ir.style.heading_sizes,
         footnote_ids: HashMap::new(),
+        footnote_marks: HashMap::new(),
         next_bookmark_id: doc.bookmark_counter,
         degradations: Vec::new(),
         heading_counters: HashMap::new(),
@@ -171,30 +174,7 @@ pub fn lower(
         next_enum_seq: 0,
     };
 
-    for footnote in &ir.footnotes {
-        if compat.is_c1() && !footnote_marker_representable(&footnote.rendered) {
-            ctx.degrade(
-                "footnote-numbering",
-                DegradationAction::Literalized,
-                format!(
-                    "footnote numbering {:?} is not representable; references using it are dropped",
-                    footnote.rendered
-                ),
-            );
-        }
-        let content = lower_footnote_body(footnote, &mut ctx);
-        let id = doc.add_footnote(content);
-        if compat.is_c3()
-            && let Some(label) = &footnote.label
-            && let Some(entry) = doc.footnotes.last_mut()
-        {
-            entry.bookmark = Some(FootnoteBookmark {
-                id: ctx.next_bookmark(),
-                name: truncate_bookmark_name(label).to_string(),
-            });
-        }
-        ctx.footnote_ids.insert(footnote.ordinal, id);
-    }
+    lower_footnotes(ir, compat, &mut doc, &mut ctx);
 
     lower_body(ir, geometry, &mut doc, &mut ctx);
 
@@ -222,6 +202,46 @@ pub fn lower(
     doc.bookmark_counter = ctx.next_bookmark_id;
     let degradations = ctx.degradations;
     (doc, degradations)
+}
+
+fn lower_footnotes(ir: &IrDocument, compat: CompatMode, doc: &mut Document, ctx: &mut LowerCtx) {
+    let mark_plan = footnote_mark_plan(
+        &ir.footnotes
+            .iter()
+            .map(|f| f.rendered.as_str())
+            .collect::<Vec<_>>(),
+        ir.style.footnote_restart_each_page,
+    );
+    let custom_marks = mark_plan == FootnoteFormat::CustomMarks;
+    doc.style.footnote_format = mark_plan;
+    if custom_marks {
+        ctx.degrade(
+            "footnote-numbering",
+            DegradationAction::Approximated,
+            "the evaluated footnote markers are not a numbering Word can regenerate; each mark \
+             is kept as literal text on a customMarkFollows reference"
+                .to_string(),
+        );
+    }
+    for footnote in &ir.footnotes {
+        let content = lower_footnote_body(footnote, ctx);
+        let id = doc.add_footnote(content);
+        if let Some(entry) = doc.footnotes.last_mut() {
+            if custom_marks {
+                entry.custom_mark = Some(footnote.rendered.clone());
+                ctx.footnote_marks.insert(id, footnote.rendered.clone());
+            }
+            if compat.is_c3()
+                && let Some(label) = &footnote.label
+            {
+                entry.bookmark = Some(FootnoteBookmark {
+                    id: ctx.next_bookmark(),
+                    name: truncate_bookmark_name(label).to_string(),
+                });
+            }
+        }
+        ctx.footnote_ids.insert(footnote.ordinal, id);
+    }
 }
 
 /// Sections after the first end the previous section with a `w:sectPr` on
@@ -573,9 +593,10 @@ fn lower_block_in(
             *custom_target,
             *indent_twips_per_level,
             figure_caption_id.as_deref(),
+            doc,
             ctx,
         ),
-        IrBlock::Bibliography { entries } => lower_bibliography(entries, ctx),
+        IrBlock::Bibliography { title, entries } => lower_bibliography(title, entries, doc, ctx),
         IrBlock::Place {
             float,
             wrap,
@@ -757,13 +778,18 @@ fn lower_shape_block(
     out
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one outline block's fields; the match arm passes them through"
+)]
 fn lower_outline(
-    title: &[IrInline],
+    title: &[IrBlock],
     entries: &[IrOutlineEntry],
     depth: u8,
     custom_target: bool,
     indent_twips_per_level: u32,
     caption_id: Option<&str>,
+    doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> Vec<BlockElement> {
     if ctx.compat.is_c1() && custom_target && entries.is_empty() {
@@ -777,20 +803,20 @@ fn lower_outline(
     // A heading TOC field would list targets the source did not ask for;
     // with no resolvable entries only the outline's own title survives.
     if custom_target && entries.is_empty() {
-        let mut para = Paragraph::new();
-        para.inlines = merge_runs(lower_inlines(title, ctx));
-        return vec![BlockElement::Paragraph(para)];
+        return title
+            .iter()
+            .flat_map(|block| lower_block_in(block, doc, ctx, None))
+            .collect();
     }
     let mut out = Vec::new();
-    if !title.is_empty() {
-        let mut title_para = Paragraph::new();
-        title_para.inlines = lower_inlines(title, ctx);
-        out.push(BlockElement::Paragraph(title_para));
+    for block in title {
+        out.extend(lower_block_in(block, doc, ctx, None));
     }
     if !entries.is_empty() {
         let mut entry_paras = Vec::with_capacity(entries.len());
         for entry in entries {
             let mut para = Paragraph::new();
+            para.alignment = entry.alignment;
             let indent =
                 indent_twips_per_level.saturating_mul(u32::from(entry.level.saturating_sub(1)));
             if indent > 0 {
@@ -833,6 +859,7 @@ fn lower_heading(
     let mut para = Paragraph::new();
     para.style = Some(ParagraphStyle::Heading(spec.level));
     para.alignment = spec.alignment;
+    para.toc_exclude = spec.toc_exclude;
     apply_par_overrides(&mut para, spec.par, ctx);
     let num_id = match spec.numbering {
         Some(IrHeadingNumbering::Mappable(pattern))
@@ -840,10 +867,9 @@ fn lower_heading(
         {
             let levels = heading_level_overrides(pattern);
             let (num_id, _) = doc.find_or_allocate_heading_numbering(&levels);
-            if let Some(rendered) = spec.numbering_text {
-                check_heading_number(ctx, num_id, pattern, spec.level, rendered, spec.span);
-            }
-            Some(num_id)
+            let rendered = spec.numbering_text.map_or("", String::as_str);
+            check_heading_number(ctx, num_id, pattern, spec.level, rendered, spec.span)
+                .then_some(num_id)
         }
         Some(IrHeadingNumbering::Unmappable) => {
             if !ctx.unmappable_heading_reported {
@@ -906,10 +932,11 @@ fn heading_level_overrides(pattern: &IrNumberingPattern) -> Vec<LevelOverride> {
 }
 
 /// Advance the simulated counters for one heading and compare the number
-/// Word will render against the one Typst already rendered. A divergence —
-/// a source `#counter(heading).update`, a numbering switched mid-document —
-/// is reported once per numbering instance so the user knows the emitted
-/// `w:numPr` does not match the source.
+/// Word will render against the one Typst already rendered. Returns `true`
+/// when `w:numPr` reproduces the evaluated number exactly. A divergence — a
+/// source `#counter(heading).update`, a numbering switched mid-document —
+/// poisons the instance (a literal heading does not advance Word's counter)
+/// and is reported once per numbering instance.
 fn check_heading_number(
     ctx: &mut LowerCtx,
     num_id: u32,
@@ -917,26 +944,31 @@ fn check_heading_number(
     level: u8,
     rendered: &str,
     span: Option<typst_syntax::Span>,
-) {
+) -> bool {
     let idx = usize::from(level).saturating_sub(1).min(8);
-    let mut diverged = false;
     let state = ctx.heading_counters.entry(num_id).or_default();
     state.counters[idx] = state.counters[idx].saturating_add(1);
     for counter in state.counters.iter_mut().skip(idx + 1) {
         *counter = 0;
     }
-    if expected_heading_number(pattern, &state.counters, idx) != rendered && !state.reported {
-        state.reported = true;
-        diverged = true;
+    let expected = expected_heading_number(pattern, &state.counters, idx);
+    if !state.diverged && expected == rendered {
+        return true;
     }
-    if diverged {
+    let first_divergence = !state.reported;
+    state.reported = true;
+    state.diverged = true;
+    if first_divergence {
         ctx.degrade_at(
             span,
             "heading-numbering",
             DegradationAction::Approximated,
-            "heading counter was shifted in the source; Word numbering restarts at 1".to_string(),
+            "heading numbering moved off the sequence Word can regenerate (a counter update or \
+             a numbering switch); the evaluated number is kept as literal text"
+                .to_string(),
         );
     }
+    false
 }
 
 /// Render the number a Word `w:numPr` would produce for the given counters,
@@ -1059,7 +1091,16 @@ fn lower_raw(raw: &IrRaw) -> Vec<BlockElement> {
     out
 }
 
-fn lower_bibliography(entries: &[IrBibEntry], ctx: &mut LowerCtx) -> Vec<BlockElement> {
+fn lower_bibliography(
+    title: &[IrBlock],
+    entries: &[IrBibEntry],
+    doc: &mut Document,
+    ctx: &mut LowerCtx,
+) -> Vec<BlockElement> {
+    let mut out: Vec<BlockElement> = title
+        .iter()
+        .flat_map(|block| lower_block_in(block, doc, ctx, None))
+        .collect();
     let mut paragraphs = Vec::new();
     for entry in entries {
         let mut para = Paragraph::new();
@@ -1073,13 +1114,11 @@ fn lower_bibliography(entries: &[IrBibEntry], ctx: &mut LowerCtx) -> Vec<BlockEl
         paragraphs.push(para);
     }
     if ctx.compat.is_c3() {
-        vec![BlockElement::BibliographyBlock { paragraphs }]
+        out.push(BlockElement::BibliographyBlock { paragraphs });
     } else {
-        paragraphs
-            .into_iter()
-            .map(BlockElement::Paragraph)
-            .collect()
+        out.extend(paragraphs.into_iter().map(BlockElement::Paragraph));
     }
+    out
 }
 
 struct PlaceSpec<'a> {
@@ -1389,6 +1428,7 @@ struct HeadingSpec<'a> {
     par: IrParStyle,
     alignment: Option<Alignment>,
     span: Option<typst_syntax::Span>,
+    toc_exclude: bool,
 }
 
 fn lower_heading_block(
@@ -1405,6 +1445,7 @@ fn lower_heading_block(
         par,
         alignment,
         span,
+        toc_exclude,
     } = block
     else {
         return Vec::new();
@@ -1419,6 +1460,7 @@ fn lower_heading_block(
             par: *par,
             alignment: *alignment,
             span: *span,
+            toc_exclude: *toc_exclude,
         },
         doc,
         ctx,
@@ -1630,13 +1672,13 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
             } => {
                 out.extend(lower_field(kind, body, *span, ctx));
             }
-            IrInline::FootnoteMarker { ordinal, rendered } => {
-                if let Some(id) = ctx.footnote_ids.get(ordinal) {
-                    out.push(InlineElement::FootnoteRef(*id));
-                } else {
-                    out.push(InlineElement::Text(Run::new(rendered)));
-                }
-            }
+            IrInline::FootnoteMarker { ordinal, rendered } => match ctx.footnote_ids.get(ordinal) {
+                Some(id) => out.push(InlineElement::FootnoteRef {
+                    id: *id,
+                    custom_mark: ctx.footnote_marks.get(id).cloned(),
+                }),
+                None => out.push(InlineElement::Text(Run::new(rendered))),
+            },
             IrInline::LineBreak { .. } => {
                 let mut run = Run::new(String::new());
                 run.line_break = true;
@@ -2633,8 +2675,30 @@ fn c1_numbering_overrides(
     overrides
 }
 
-fn footnote_marker_representable(marker: &str) -> bool {
-    marker.parse::<u32>().is_ok() || parse_circled_number(marker).is_some()
+#[must_use]
+pub fn footnote_mark_plan(rendered: &[&str], restart_each_page: bool) -> FootnoteFormat {
+    if restart_each_page {
+        if rendered.iter().all(|s| s.parse::<u32>().is_ok()) {
+            return FootnoteFormat::Decimal;
+        }
+        if rendered.iter().all(|s| parse_circled_number(s).is_some()) {
+            return FootnoteFormat::CircledNumber;
+        }
+    } else {
+        if rendered.iter().enumerate().all(|(i, s)| {
+            u32::try_from(i + 1).is_ok_and(|n| s.parse::<u32>().is_ok_and(|m| m == n))
+        }) {
+            return FootnoteFormat::Decimal;
+        }
+        if rendered
+            .iter()
+            .enumerate()
+            .all(|(i, s)| u32::try_from(i + 1).is_ok_and(|n| parse_circled_number(s) == Some(n)))
+        {
+            return FootnoteFormat::CircledNumber;
+        }
+    }
+    FootnoteFormat::CustomMarks
 }
 
 fn parse_circled_number(s: &str) -> Option<u32> {
@@ -2890,6 +2954,7 @@ mod tests {
             par: IrParStyle::default(),
             alignment: None,
             span: None,
+            toc_exclude: false,
         });
         let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         assert!(degradations.is_empty());
@@ -3163,7 +3228,13 @@ mod tests {
         let BlockElement::Paragraph(para) = &doc.body.elements[0] else {
             panic!("expected a paragraph");
         };
-        assert_eq!(para.inlines, vec![InlineElement::FootnoteRef(2)]);
+        assert_eq!(
+            para.inlines,
+            vec![InlineElement::FootnoteRef {
+                id: 2,
+                custom_mark: None,
+            }]
+        );
     }
 
     #[test]
@@ -3469,17 +3540,43 @@ mod tests {
     }
 
     #[test]
-    fn footnote_markers() {
-        assert!(footnote_marker_representable("1"));
-        assert!(footnote_marker_representable("42"));
-        assert!(footnote_marker_representable("①"));
-        assert!(footnote_marker_representable("⑳"));
-        assert!(!footnote_marker_representable("a)"));
-        assert!(!footnote_marker_representable("1)"));
-        assert!(!footnote_marker_representable(""));
+    fn footnote_mark_plan_decides() {
         assert_eq!(parse_circled_number("①"), Some(1));
         assert_eq!(parse_circled_number("㊿"), Some(50));
         assert_eq!(parse_circled_number("①②"), None);
+        let decimal: Vec<&str> = vec!["1", "2", "3"];
+        assert_eq!(footnote_mark_plan(&decimal, false), FootnoteFormat::Decimal);
+        let circled: Vec<&str> = vec!["①", "②", "③"];
+        assert_eq!(
+            footnote_mark_plan(&circled, false),
+            FootnoteFormat::CircledNumber
+        );
+        let shifted: Vec<&str> = vec!["①", "②", "⑦"];
+        assert_eq!(
+            footnote_mark_plan(&shifted, false),
+            FootnoteFormat::CustomMarks
+        );
+        let parens: Vec<&str> = vec!["(1)"];
+        assert_eq!(
+            footnote_mark_plan(&parens, false),
+            FootnoteFormat::CustomMarks
+        );
+        let restarted: Vec<&str> = vec!["1", "1", "2"];
+        assert_eq!(
+            footnote_mark_plan(&restarted, true),
+            FootnoteFormat::Decimal
+        );
+        assert_eq!(
+            footnote_mark_plan(&restarted, false),
+            FootnoteFormat::CustomMarks
+        );
+        let circled_restart: Vec<&str> = vec!["①", "①", "②"];
+        assert_eq!(
+            footnote_mark_plan(&circled_restart, true),
+            FootnoteFormat::CircledNumber
+        );
+        let empty: Vec<&str> = vec![];
+        assert_eq!(footnote_mark_plan(&empty, false), FootnoteFormat::Decimal);
     }
 
     fn heading(level: u8, number: &str, numbering: Option<IrHeadingNumbering>) -> IrBlock {
@@ -3492,6 +3589,7 @@ mod tests {
             par: IrParStyle::default(),
             alignment: None,
             span: None,
+            toc_exclude: false,
         }
     }
 

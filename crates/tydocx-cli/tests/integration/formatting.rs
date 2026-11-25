@@ -1214,3 +1214,43 @@ fn par_unchanged_paragraphs_still_inherit_normal() {
         "the document-global Normal style is untouched:\n{normal}"
     );
 }
+
+#[test]
+fn inline_raw_in_paragraph_stays_a_run() {
+    // `block: false` raw flows through the run collector: it lands as a
+    // monospace run inside the paragraph, not a CodeBlock paragraph.
+    let doc_xml = fixture_doc_xml("inline_raw_paragraph");
+    let para = paragraph_containing(&doc_xml, "aclrtMemcpyAsync");
+    assert!(
+        !para.contains("CodeBlock"),
+        "inline raw must not open a code block: {para}"
+    );
+    assert!(
+        para.contains("Call ") && para.contains(" to copy"),
+        "the raw run shares its paragraph with the body text: {para}"
+    );
+    assert!(
+        doc_xml.contains("CodeBlock"),
+        "the fenced raw still lowers as a block: {doc_xml}"
+    );
+}
+
+#[test]
+fn inline_raw_inside_enum_item_stays_a_run() {
+    // The same shared block decision applies inside containers: `block: false`
+    // raw inside an enum item is a run of the item's paragraph.
+    let doc_xml = fixture_doc_xml("inline_raw_in_enum");
+    assert!(
+        !doc_xml.contains("CodeBlock"),
+        "no standalone code block may be emitted: {doc_xml}"
+    );
+    let para = paragraph_containing(&doc_xml, "aclrtMemcpyAsync");
+    assert!(
+        para.contains("<w:numPr>"),
+        "the inline raw stays inside the enum item's paragraph: {para}"
+    );
+    assert!(
+        para.contains("Call ") && para.contains(" here"),
+        "the raw run shares the item's text: {para}"
+    );
+}
