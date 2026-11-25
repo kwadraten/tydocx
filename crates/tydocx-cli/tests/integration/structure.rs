@@ -1225,3 +1225,43 @@ fn toc_entries_indent_by_level() {
         "level-1 entries need no indent: {toc}"
     );
 }
+
+#[test]
+fn outline_title_tri_state_semantic_block() {
+    // auto resolves the localized title ("Contents" under lang "en"), custom
+    // content is kept verbatim — each as a Heading1-styled block carrying
+    // w:outlineLvl=9 so a TOC field update skips it. Explicit `none` emits no
+    // title block at all.
+    let doc_xml = fixture_doc_xml("outline_titles");
+    for title in ["Contents", "My Custom Contents"] {
+        let para = paragraph_containing(&doc_xml, title);
+        assert!(
+            para.contains(r#"w:pStyle w:val="Heading1""#),
+            "{title} must keep the Heading1 style: {para}"
+        );
+        assert!(
+            para.contains(r#"w:outlineLvl w:val="9""#),
+            "{title} must be excluded from the outline: {para}"
+        );
+    }
+    assert_eq!(
+        doc_xml.matches(r#"w:outlineLvl w:val="9""#).count(),
+        2,
+        "only the two titled outlines emit a title block: {doc_xml}"
+    );
+}
+
+#[test]
+fn outline_title_auto_localizes_with_text_lang() {
+    // Under lang "zh" the auto title is the localized "目录".
+    let doc_xml = fixture_doc_xml("outline_title_zh");
+    let para = paragraph_containing(&doc_xml, "目录");
+    assert!(
+        para.contains(r#"w:pStyle w:val="Heading1""#),
+        "localized title keeps the Heading1 style: {para}"
+    );
+    assert!(
+        para.contains(r#"w:outlineLvl w:val="9""#),
+        "localized title is excluded from the outline: {para}"
+    );
+}

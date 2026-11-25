@@ -14,7 +14,7 @@ use tydocx_ir::{
     CompatMode as IrCompatMode, Degradation as IrDegradation, DegradationAction as IrAction,
     GeometryInput, IrBlock, IrDocument, IrInline, IrNumeralSystem, IrParagraph, lower,
 };
-use tydocx_ooxml::document::{Document, FootnoteFormat};
+use tydocx_ooxml::document::Document;
 use typst::World;
 use typst::diag::{SourceDiagnostic, SourceResult, StrResult};
 use typst::ecow::{EcoString, EcoVec};
@@ -79,7 +79,6 @@ pub struct DocxDocument {
     ir: IrDocument,
     footnote_markers: Vec<inline::FootnoteMarker>,
     footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
-    footnote_circled: bool,
     degradations: Vec<IrDegradation>,
     chain_overrides: page::SourceStyleOverrides,
     /// Any section declared inside/outside margins — see
@@ -128,7 +127,6 @@ impl Output for DocxDocument {
             ir,
             footnote_markers: state.footnote_markers,
             footnote_bodies: state.footnote_bodies,
-            footnote_circled: state.footnote_circled,
             degradations: state.degradations,
             chain_overrides: state.chain_overrides,
             two_sided_margins: state.two_sided_margins,
@@ -518,10 +516,6 @@ pub fn export_ir_with_ir(
         && let Some(paged) = paged_doc
     {
         assign_numbering_starts(&mut ir.sections, ir.first_numbering, paged);
-    }
-
-    if docx_doc.footnote_circled {
-        ir.style.footnote_format = FootnoteFormat::CircledNumber;
     }
 
     measure_heading_sizes_from_ir(&mut ir);

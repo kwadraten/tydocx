@@ -3,7 +3,10 @@
 
 use std::collections::BTreeSet;
 
-use tydocx_ir::{IrBlock, IrDocument, IrEnumItem, IrInline, IrListItem, IrParagraph};
+use tydocx_ir::{
+    IrBlock, IrDocument, IrEnumItem, IrInline, IrListItem, IrParagraph, footnote_mark_plan,
+};
+use tydocx_ooxml::document::FootnoteFormat;
 
 /// One paragraph's worth of text the IR carries, plus the generated prefixes
 /// the lowerer may emit in front of it (numbering, markers, captions).
@@ -28,11 +31,14 @@ fn inline_text(
     out: &mut String,
     generated: &mut BTreeSet<String>,
     paragraphs: &mut Vec<String>,
+    marks_literal: bool,
 ) {
     for inline in inlines {
         match inline {
             IrInline::Text(run) => out.push_str(&run.text),
-            IrInline::Link { body, .. } => inline_text(body, out, generated, paragraphs),
+            IrInline::Link { body, .. } => {
+                inline_text(body, out, generated, paragraphs, marks_literal);
+            }
             IrInline::Ref { display_text, .. }
             | IrInline::Cite {
                 rendered: display_text,
@@ -40,7 +46,11 @@ fn inline_text(
             }
             | IrInline::PageField { display_text, .. } => out.push_str(display_text),
             IrInline::FootnoteMarker { rendered, .. } => {
-                generated.insert(rendered.clone());
+                if marks_literal {
+                    out.push_str(rendered);
+                } else {
+                    generated.insert(rendered.clone());
+                }
             }
             IrInline::Space => out.push(' '),
             IrInline::Shape { body, geometry, .. } => {
@@ -49,13 +59,15 @@ fn inline_text(
                 // flattens the body into the parent run (shaded text).
                 if geometry.is_some() && !body.is_empty() {
                     let mut text = String::new();
-                    inline_text(body, &mut text, generated, paragraphs);
+                    inline_text(body, &mut text, generated, paragraphs, marks_literal);
                     paragraphs.push(text);
                 } else {
-                    inline_text(body, out, generated, paragraphs);
+                    inline_text(body, out, generated, paragraphs, marks_literal);
                 }
             }
-            IrInline::Field { body, .. } => inline_text(body, out, generated, paragraphs),
+            IrInline::Field { body, .. } => {
+                inline_text(body, out, generated, paragraphs, marks_literal);
+            }
             IrInline::LineBreak { .. }
             | IrInline::Tab
             | IrInline::PageBreak
@@ -69,9 +81,16 @@ fn paragraph_text(
     para: &IrParagraph,
     generated: &mut BTreeSet<String>,
     paragraphs: &mut Vec<String>,
+    marks_literal: bool,
 ) -> String {
     let mut text = String::new();
-    inline_text(&para.inlines, &mut text, generated, paragraphs);
+    inline_text(
+        &para.inlines,
+        &mut text,
+        generated,
+        paragraphs,
+        marks_literal,
+    );
     text
 }
 
@@ -88,11 +107,12 @@ fn block_texts<'a>(
     paragraphs: &mut Vec<String>,
     generated: &mut BTreeSet<String>,
     out_of_band: &mut Vec<String>,
+    marks_literal: bool,
 ) {
     for block in blocks {
         match block {
             IrBlock::Paragraph(para) => {
-                let text = paragraph_text(para, generated, paragraphs);
+                let text = paragraph_text(para, generated, paragraphs, marks_literal);
                 paragraphs.push(text);
             }
             IrBlock::Heading {
@@ -101,7 +121,7 @@ fn block_texts<'a>(
                 ..
             } => {
                 let mut text = String::new();
-                inline_text(body, &mut text, generated, paragraphs);
+                inline_text(body, &mut text, generated, paragraphs, marks_literal);
                 paragraphs.push(text);
                 if let Some(number) = numbering_text {
                     generated.insert(format!("{number} "));
@@ -116,6 +136,7 @@ fn block_texts<'a>(
                 paragraphs,
                 generated,
                 out_of_band,
+                marks_literal,
             ),
             IrBlock::Grid(grid) => block_texts(
                 &mut grid
@@ -126,6 +147,7 @@ fn block_texts<'a>(
                 paragraphs,
                 generated,
                 out_of_band,
+                marks_literal,
             ),
             IrBlock::Figure {
                 body,
@@ -133,9 +155,21 @@ fn block_texts<'a>(
                 supplement,
                 ..
             } => {
-                block_texts(&mut body.iter(), paragraphs, generated, out_of_band);
+                block_texts(
+                    &mut body.iter(),
+                    paragraphs,
+                    generated,
+                    out_of_band,
+                    marks_literal,
+                );
                 let mut caption_text = String::new();
-                inline_text(caption, &mut caption_text, generated, paragraphs);
+                inline_text(
+                    caption,
+                    &mut caption_text,
+                    generated,
+                    paragraphs,
+                    marks_literal,
+                );
                 if !caption_text.trim().is_empty() {
                     if let Some(supplement) = supplement {
                         generated.insert(format!("{supplement} "));
@@ -154,6 +188,7 @@ fn block_texts<'a>(
                     paragraphs,
                     generated,
                     out_of_band,
+                    marks_literal,
                 );
             }
             IrBlock::Enum(enumer) => {
@@ -167,6 +202,7 @@ fn block_texts<'a>(
                     paragraphs,
                     generated,
                     out_of_band,
+                    marks_literal,
                 );
             }
             IrBlock::Equation(equation) => {
@@ -178,7 +214,13 @@ fn block_texts<'a>(
             | IrBlock::Place { body, .. }
             | IrBlock::Shape { body, .. }
             | IrBlock::Columns { body, .. } => {
-                block_texts(&mut body.iter(), paragraphs, generated, out_of_band);
+                block_texts(
+                    &mut body.iter(),
+                    paragraphs,
+                    generated,
+                    out_of_band,
+                    marks_literal,
+                );
             }
             IrBlock::Raw(raw) => {
                 for line in &raw.lines {
@@ -192,27 +234,42 @@ fn block_texts<'a>(
             IrBlock::Outline { title, entries, .. } => {
                 generated
                     .insert("Right-click and update field to see table of contents.".to_owned());
-                let mut title_text = String::new();
-                inline_text(title, &mut title_text, generated, paragraphs);
-                if !title_text.trim().is_empty() {
-                    paragraphs.push(title_text);
-                }
+                block_texts(
+                    &mut title.iter(),
+                    paragraphs,
+                    generated,
+                    out_of_band,
+                    marks_literal,
+                );
                 for entry in entries {
                     let mut text = String::new();
-                    inline_text(&entry.title, &mut text, generated, paragraphs);
+                    inline_text(
+                        &entry.title,
+                        &mut text,
+                        generated,
+                        paragraphs,
+                        marks_literal,
+                    );
                     generated.insert(text);
                     if let Some(page) = &entry.page_number {
                         generated.insert(page.clone());
                     }
                 }
             }
-            IrBlock::Bibliography { entries } => {
+            IrBlock::Bibliography { title, entries } => {
+                block_texts(
+                    &mut title.iter(),
+                    paragraphs,
+                    generated,
+                    out_of_band,
+                    marks_literal,
+                );
                 for entry in entries {
                     if let Some(marker) = &entry.marker {
                         generated.insert(format!("{marker} "));
                     }
                     let mut text = String::new();
-                    inline_text(&entry.body, &mut text, generated, paragraphs);
+                    inline_text(&entry.body, &mut text, generated, paragraphs, marks_literal);
                     if !text.trim().is_empty() {
                         out_of_band.push(text);
                     }
@@ -231,22 +288,39 @@ pub fn ir_texts(doc: &IrDocument) -> IrText {
         generated: BTreeSet::new(),
         out_of_band: Vec::new(),
     };
+    let marks_literal = footnote_mark_plan(
+        &doc.footnotes
+            .iter()
+            .map(|f| f.rendered.as_str())
+            .collect::<Vec<_>>(),
+        doc.style.footnote_restart_each_page,
+    ) == FootnoteFormat::CustomMarks;
     block_texts(
         &mut doc.body.iter(),
         &mut texts.paragraphs,
         &mut texts.generated,
         &mut texts.out_of_band,
+        marks_literal,
     );
     for footnote in &doc.footnotes {
-        generated_from_footnote(footnote, &mut texts);
+        generated_from_footnote(footnote, &mut texts, marks_literal);
     }
     texts
 }
 
-fn generated_from_footnote(footnote: &tydocx_ir::IrFootnote, texts: &mut IrText) {
+fn generated_from_footnote(
+    footnote: &tydocx_ir::IrFootnote,
+    texts: &mut IrText,
+    marks_literal: bool,
+) {
     texts.generated.insert(footnote.rendered.clone());
     for para in &footnote.body {
-        let text = paragraph_text(para, &mut texts.generated, &mut texts.paragraphs);
+        let text = paragraph_text(
+            para,
+            &mut texts.generated,
+            &mut texts.paragraphs,
+            marks_literal,
+        );
         texts.paragraphs.push(text);
     }
 }
@@ -308,11 +382,12 @@ fn variant_walk(doc: &IrDocument) -> (BTreeSet<&'static str>, BTreeSet<&'static 
             IrBlock::List(list) => stack.extend(item_blocks(&list.items)),
             IrBlock::Enum(enumer) => stack.extend(enum_item_blocks(&enumer.items)),
             IrBlock::Outline { title, entries, .. } => {
-                inline_variant_names(title.iter(), &mut inlines);
+                stack.extend(title.iter());
                 for entry in entries {
                     inline_variant_names(entry.title.iter(), &mut inlines);
                 }
             }
+            IrBlock::Bibliography { title, .. } => stack.extend(title.iter()),
             _ => {}
         }
         inline_variant_names(block_inlines(block), &mut inlines);

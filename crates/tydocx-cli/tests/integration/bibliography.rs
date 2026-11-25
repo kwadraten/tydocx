@@ -427,3 +427,21 @@ fn bibliography_style_without_sources_reports_a_skip() {
         outcome.degradations
     );
 }
+
+#[test]
+fn bibliography_title_is_a_semantic_heading_block() {
+    // `#bibliography`'s evaluated title lowers as a Heading1-styled block
+    // before the entries, not as dropped or plain text.
+    let doc_xml = fixture_doc_xml("bibliography_title");
+    let title = paragraph_containing(&doc_xml, "Bibliography");
+    assert!(
+        title.contains(r#"w:pStyle w:val="Heading1""#),
+        "the bibliography title keeps the Heading1 style: {title}"
+    );
+    let title_pos = doc_xml.find("Bibliography").unwrap();
+    let entry_pos = doc_xml.find("An Example Article").unwrap();
+    assert!(
+        title_pos < entry_pos,
+        "the title block precedes the entries: {doc_xml}"
+    );
+}

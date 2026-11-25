@@ -109,11 +109,11 @@ fn ir_has_overline(doc: &IrDocument) -> bool {
             | IrBlock::Place { body, .. }
             | IrBlock::Shape { body, .. }
             | IrBlock::Columns { body, .. } => blocks_have(body),
-            IrBlock::Bibliography { entries } => {
-                entries.iter().any(|entry| inlines_have(&entry.body))
+            IrBlock::Bibliography { title, entries } => {
+                blocks_have(title) || entries.iter().any(|entry| inlines_have(&entry.body))
             }
             IrBlock::Outline { title, entries, .. } => {
-                inlines_have(title) || entries.iter().any(|entry| inlines_have(&entry.title))
+                blocks_have(title) || entries.iter().any(|entry| inlines_have(&entry.title))
             }
             IrBlock::Equation(_) | IrBlock::Raw(_) | IrBlock::PageBreak { .. } => false,
         })
@@ -285,13 +285,14 @@ fn patch_overlines_in_blocks(blocks: &mut [IrBlock], state: &mut PatchState<'_>)
             | IrBlock::Columns { body, .. } => {
                 patch_overlines_in_blocks(body, state);
             }
-            IrBlock::Bibliography { entries } => {
+            IrBlock::Bibliography { title, entries } => {
+                patch_overlines_in_blocks(title, state);
                 for entry in entries {
                     patch_overlines_in_inlines(&mut entry.body, state);
                 }
             }
             IrBlock::Outline { title, entries, .. } => {
-                patch_overlines_in_inlines(title, state);
+                patch_overlines_in_blocks(title, state);
                 for entry in entries {
                     patch_overlines_in_inlines(&mut entry.title, state);
                 }

@@ -1,6 +1,8 @@
 //! Footnote and endnote tests.
 
-use crate::common::{fixture_doc_xml, fixture_document, fixture_package, fixture_styles_xml};
+use crate::common::{
+    fixture_doc_xml, fixture_document, fixture_outcome, fixture_package, fixture_styles_xml,
+};
 
 #[test]
 fn issue_blockquote_in_footnote_content() {
@@ -599,5 +601,73 @@ fn footnote_paragraphs_keep_their_own_alignment() {
         para_jc("Right paragraph"),
         Some("right"),
         "the right-aligned footnote paragraph keeps w:jc=right"
+    );
+}
+
+#[test]
+fn footnote_circled_func_numbering_maps_to_enclosed_circle() {
+    // A numbering FUNCTION producing circled marks decides
+    // decimalEnclosedCircle from the evaluated marker sequence, not the
+    // Numbering::Pattern shape — the old check only read the pattern kind.
+    let package = fixture_package("footnote_circled_func");
+    let settings_xml = package.part_text("word/settings.xml");
+    assert!(
+        settings_xml.contains("decimalEnclosedCircle"),
+        "a function numbering's circled sequence must emit w:numFmt: {settings_xml}"
+    );
+    let doc_xml = package.part_text("word/document.xml");
+    assert!(
+        !doc_xml.contains("customMarkFollows"),
+        "native numbering generates the marks: {doc_xml}"
+    );
+}
+
+#[test]
+fn footnote_unmappable_marks_fall_back_to_custom_mark() {
+    // Symbol marks map to no w:numFmt: each footnote keeps its literal mark
+    // via customMarkFollows on the body reference AND the note head, links
+    // intact, with the fallback reported.
+    let outcome = fixture_outcome("footnote_custom_marks");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "footnote-numbering"),
+        "the custom-mark fallback must be reported: {:?}",
+        outcome.degradations
+    );
+    let package = fixture_package("footnote_custom_marks");
+    let doc_xml = package.part_text("word/document.xml");
+    assert_eq!(
+        doc_xml
+            .matches(r#"w:footnoteReference w:customMarkFollows="1""#)
+            .count(),
+        2,
+        "each reference carries the customMarkFollows attribute: {doc_xml}"
+    );
+    for mark in [">*<", ">†<"] {
+        assert!(
+            doc_xml.contains(mark),
+            "the body mark {mark} is the evaluated literal: {doc_xml}"
+        );
+    }
+    let fn_xml = package.part_text("word/footnotes.xml");
+    assert_eq!(
+        fn_xml
+            .matches(r#"w:footnoteRef w:customMarkFollows="1""#)
+            .count(),
+        2,
+        "each note head carries the customMarkFollows attribute: {fn_xml}"
+    );
+    for mark in [">*<", ">†<"] {
+        assert!(
+            fn_xml.contains(mark),
+            "the note-head mark {mark} matches the body mark: {fn_xml}"
+        );
+    }
+    assert!(
+        !package.part_text("word/settings.xml").contains("w:numFmt"),
+        "custom marks emit no numFmt: {}",
+        package.part_text("word/settings.xml")
     );
 }

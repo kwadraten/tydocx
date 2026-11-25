@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use crate::convert::footnote::parse_circled_number;
 use crate::convert::page::{
     CounterUse, DatePattern, DateTimeUse, classify_counter_use, counter_footnote_label,
     counter_page_label, date_display_pattern, datetime_use, docproperty_use, typst_pattern_to_word,
@@ -21,8 +20,8 @@ use typst_library::layout::{
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
-    CiteElem, CiteGroup, Destination, FootnoteBody, FootnoteElem, LinkElem, LinkTarget, Numbering,
-    ParElem, ParbreakElem, RefElem, RefForm,
+    CiteElem, CiteGroup, Destination, FootnoteBody, FootnoteElem, LinkElem, LinkTarget, ParElem,
+    ParbreakElem, RefElem, RefForm,
 };
 use typst_library::routines::Pair;
 use typst_library::text::{
@@ -66,7 +65,6 @@ pub struct InlineCtx<'a> {
     pub source: Option<&'a Source>,
     pub block_math_as_inline: bool,
     pub footnote_bodies: &'a mut HashMap<Location, Vec<IrParagraph>>,
-    pub footnote_circled: &'a mut bool,
     pub layouter_index: &'a HashMap<Span, Content>,
     /// The `par` style resolved on the fragment's first realized element —
     /// the chain a set rule scoped inside a show-rule body lands on, whether
@@ -775,13 +773,6 @@ fn handle_tag_start(
         return skip_to_end(pairs, i + 1, location);
     }
     if let Some(fn_elem) = inner.to_packed::<FootnoteElem>() {
-        if let Numbering::Pattern(pattern) = fn_elem.numbering.get_ref(styles)
-            && pattern
-                .apply(None, &[1])
-                .is_ok_and(|text| parse_circled_number(text.trim()).is_some())
-        {
-            *ctx.footnote_circled = true;
-        }
         let rendered = match next_marker_text(pairs, i + 1) {
             Some(text) if text != "0" => text,
             _ => (ctx.footnote_markers.len() + 1).to_string(),
@@ -806,7 +797,6 @@ fn handle_tag_start(
             source: ctx.source,
             block_math_as_inline: true,
             footnote_bodies: &mut *ctx.footnote_bodies,
-            footnote_circled: &mut *ctx.footnote_circled,
             layouter_index: ctx.layouter_index,
             scoped_par: None,
             doc_date_picture: ctx.doc_date_picture,
