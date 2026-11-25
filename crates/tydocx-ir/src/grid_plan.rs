@@ -876,7 +876,7 @@ mod tests {
                     tab_stops: Vec::new(),
                     spacing_before: None,
                     spacing_after: None,
-                    bookmark: None,
+                    bookmarks: Vec::new(),
                 },
             )],
             x,

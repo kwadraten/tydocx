@@ -2,6 +2,7 @@
 mod common;
 
 mod bibliography;
+mod citations;
 mod cli;
 mod compat;
 mod conformance;

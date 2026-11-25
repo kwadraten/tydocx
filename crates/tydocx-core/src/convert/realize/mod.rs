@@ -22,15 +22,13 @@ use typst::engine::Engine;
 use typst::foundations::{Content, Label, Output, Selector, StyleChain, Target};
 use typst::introspection::{
     DocumentPosition, ElementIntrospector, ElementIntrospectorBuilder, Introspector, Location,
-    Locator, SplitLocator, TagElem,
+    Locator, SplitLocator, Tag, TagElem,
 };
 use typst::model::{DocumentInfo, Numbering};
 use typst::routines::{Arenas, FragmentKind, Pair, RealizationKind};
 use typst::syntax::{Span, VirtualPath};
 use typst_layout::PagedDocument;
-use typst_library::foundations::{SequenceElem, StyledElem};
-use typst_library::layout::{BlockBody, BlockElem};
-use typst_library::model::ParElem;
+
 use typst_realize::realize;
 
 use crate::compat::{CompatMode, ConvertOptions, ConvertOutcome, Degradation, DegradationAction};
@@ -124,7 +122,7 @@ impl Output for DocxDocument {
             source,
             content,
         )?;
-        let introspector = build_introspector(&pairs);
+        let introspector = build_introspector(&pairs, &state.fragment_tags);
 
         Ok(Self {
             ir,
@@ -219,14 +217,22 @@ impl Introspector for DocxDocument {
     }
 }
 
-fn build_introspector(pairs: &[Pair<'_>]) -> ElementIntrospector<DocxPosition> {
+fn build_introspector(
+    pairs: &[Pair<'_>],
+    fragment_tags: &[(Tag, usize)],
+) -> ElementIntrospector<DocxPosition> {
     let mut builder = ElementIntrospectorBuilder::<DocxPosition>::new();
-    for (index, (content, styles)) in pairs.iter().enumerate() {
+    let mut extra: std::collections::BTreeMap<usize, Vec<&Tag>> = std::collections::BTreeMap::new();
+    for (tag, index) in fragment_tags {
+        extra.entry(*index).or_default().push(tag);
+    }
+    for (index, (content, _)) in pairs.iter().enumerate() {
         let position = DocxPosition { pair: index };
-        if let Some(tagged) = content.to_packed::<TagElem>() {
-            builder.discover_tag(&tagged.tag, position);
-        } else {
-            collect_nested_tags(content, position, *styles, &mut builder);
+        collect_nested_tags(content, position, &mut builder);
+        if let Some(tags) = extra.get(&index) {
+            for tag in tags {
+                builder.discover_tag(tag, position);
+            }
         }
     }
     builder.finalize()
@@ -237,25 +243,19 @@ fn build_introspector(pairs: &[Pair<'_>]) -> ElementIntrospector<DocxPosition> {
 fn collect_nested_tags(
     content: &Content,
     position: DocxPosition,
-    styles: StyleChain,
     builder: &mut ElementIntrospectorBuilder<DocxPosition>,
 ) {
     if let Some(tagged) = content.to_packed::<TagElem>() {
         builder.discover_tag(&tagged.tag, position);
+        if let Tag::Start(inner, _) = &tagged.tag {
+            collect_nested_tags(inner, position, builder);
+        }
         return;
     }
-    if let Some(seq) = content.to_packed::<SequenceElem>() {
-        for child in &seq.children {
-            collect_nested_tags(child, position, styles, builder);
+    for child in collect::content_children(content) {
+        if !std::ptr::eq(child, content) {
+            collect_nested_tags(child, position, builder);
         }
-    } else if let Some(styled) = content.to_packed::<StyledElem>() {
-        collect_nested_tags(&styled.child, position, styles, builder);
-    } else if let Some(par) = content.to_packed::<ParElem>() {
-        collect_nested_tags(&par.body, position, styles, builder);
-    } else if let Some(block) = content.to_packed::<BlockElem>()
-        && let Some(BlockBody::Content(body)) = block.body.get_ref(styles)
-    {
-        collect_nested_tags(body, position, styles, builder);
     }
 }
 
