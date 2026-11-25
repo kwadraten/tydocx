@@ -2373,7 +2373,10 @@ fn lower_enum(
     ctx: &mut LowerCtx,
     inherited: Option<ListAlloc>,
 ) -> Vec<BlockElement> {
-    if enumer.numbering.pieces.is_empty()
+    // The literal route also covers a reversed enum the collector rendered:
+    // `w:numPr` can only count forward, so the reversed `number_text` is the
+    // faithful output. Nested reversed enums keep the `w:numPr` path.
+    if (enumer.numbering.pieces.is_empty() || enumer.reversed)
         && inherited.is_none()
         && enumer.items.iter().all(|item| item.number_text.is_some())
     {

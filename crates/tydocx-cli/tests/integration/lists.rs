@@ -1,8 +1,10 @@
 //! List structure, numbering, and formatting tests.
 
 use crate::common::{
-    fixture_doc_xml, fixture_document, fixture_package, fixture_part, paragraph_containing,
+    fixture_doc_xml, fixture_document, fixture_outcome_with_options, fixture_package,
+    fixture_package_with_options, fixture_part, paragraph_containing, paragraph_texts,
 };
+use tydocx_core::{CompatMode, ConvertOptions};
 
 #[test]
 fn issue_display_math_in_list_numbering() {
@@ -457,5 +459,96 @@ fn enum_numbering_patterns_map_to_ooxml_num_fmt() {
         "inner one",
     ] {
         assert!(xml.contains(text), "enum item '{text}' should be present");
+    }
+}
+
+/// A reversed enum's `w:numPr` can only count forward, so when every item's
+/// numeral was collector-rendered (`number_text`) the faithful output is the
+/// literal text — taken at every compat level. The `enum-reversed` report
+/// stays: one entry per reversed enum.
+#[test]
+fn issue_enum_reversed_literal_at_every_compat() {
+    for mode in [CompatMode::C1, CompatMode::C2, CompatMode::C3] {
+        let xml =
+            fixture_package_with_options("issue_enum_reversed_literal", &ConvertOptions::new(mode))
+                .part_text("word/document.xml")
+                .to_owned();
+        assert!(
+            !xml.contains("w:numPr"),
+            "{mode:?}: a rendered reversed enum is literal, not numPr: {xml}"
+        );
+        assert_eq!(
+            paragraph_texts(&xml),
+            [
+                "3. first",
+                "2. second",
+                "1. third",
+                "3. alpha",
+                "2. beta",
+                "1. gamma"
+            ],
+            "{mode:?}: the reversed numerals are literal, in order"
+        );
+        let constructs: Vec<&str> =
+            fixture_outcome_with_options("issue_enum_reversed_literal", &ConvertOptions::new(mode))
+                .degradations
+                .iter()
+                .map(|d| d.construct)
+                .collect();
+        assert_eq!(
+            constructs,
+            ["enum-reversed", "enum-reversed"],
+            "{mode:?}: exactly one enum-reversed entry per enum"
+        );
+    }
+}
+
+/// C3 keeps the reversed numerals literal: a `SEQ` field can only count
+/// forward, so the literal route disables the seq splice for reversed enums.
+#[test]
+fn issue_enum_reversed_emits_no_seq_at_c3() {
+    let c3 = fixture_package_with_options(
+        "issue_enum_reversed_literal",
+        &ConvertOptions::new(CompatMode::C3),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
+    assert!(
+        !c3.contains(" SEQ "),
+        "a reversed enum emits no SEQ field at C3: {c3}"
+    );
+}
+
+/// Out-of-scope pins: a reversed enum whose numerals OOXML cannot express
+/// (an unmappable `"①"` pattern leaves every `number_text` empty) and one
+/// nested under a `w:numPr` parent both keep the numbering path —
+/// forward-numbered and reported. If a later change literalizes either,
+/// this test shows it.
+#[test]
+fn issue_enum_reversed_unmappable_stays_numpr() {
+    let c2 = fixture_package_with_options(
+        "issue_enum_reversed_unmappable",
+        &ConvertOptions::new(CompatMode::C2),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
+    assert!(
+        c2.contains("w:numPr"),
+        "unrendered or nested reversed enums keep w:numPr: {c2}"
+    );
+    for mode in [CompatMode::C1, CompatMode::C2, CompatMode::C3] {
+        let constructs: Vec<&str> = fixture_outcome_with_options(
+            "issue_enum_reversed_unmappable",
+            &ConvertOptions::new(mode),
+        )
+        .degradations
+        .iter()
+        .map(|d| d.construct)
+        .collect();
+        assert_eq!(
+            constructs,
+            ["enum-reversed", "enum-reversed"],
+            "{mode:?}: both reversed enums report enum-reversed: {constructs:?}"
+        );
     }
 }
