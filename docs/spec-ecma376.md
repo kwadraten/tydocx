@@ -110,7 +110,7 @@ flowchart LR
 | `- item` | `w:numPr` (`w:numId`/`w:ilvl`) against a bullet `abstractNum`; `indent`/`body-indent` → `w:ind` left+hanging; `spacing` → `w:after` on the item's last paragraph | default bullet; custom markers → `"list-marker"` literalized | custom text markers kept as `bullet` `lvlText` (e.g. `—`, `▸`); function markers → `"list-marker"` |
 | `+ item` | `w:numPr` against an enum `abstractNum` with per-level `numFmt`/`lvlText` and `startOverride`; `full:` numbering → multi-level `lvlText` (`%1.%2`) | shared default decimal + `"enum-numbering"` when a non-default pattern would be needed | pattern mapped |
 | numeral systems | `numFmt`: arabic→`decimal`, `a`/`A`→`lowerLetter`/`upperLetter`, `i`/`I`→`lowerRoman`/`upperRoman`. Other systems (e.g. CJK) and function numbering → the item's literal `number_text` run instead of `w:numPr` | literal | literal |
-| `#enum(reversed: true)` | no OOXML equivalent — items numbered forward | + `"enum-reversed"` literalized | silently forward-numbered (no report) |
+| `#enum(reversed: true)` | no OOXML countdown — every item's collector-rendered numeral emits as a literal `number_text` run (faithful order); an item without one (unmappable pattern) or a nested reversed enum keeps `w:numPr` forward numbering | `"enum-reversed"` literalized | same |
 | enum with an empty pattern | literal `number_text` runs (all levels, e.g. function numbering whose text was rendered) | same | same |
 | `/ term: desc` | plain paragraphs: bold term run + separator + description | same | same |
 
@@ -276,7 +276,7 @@ text mode prints them after the output path. Collector-raised constructs
 `grid-column-split`, `table-grid-unresolved`, `box-*`,
 `unoutlined-heading`, `placed-content` for non-float placement, …) fire at
 every level; the C1-specific gate adds `grid-layout`, `vector-image`,
-`image-fit`, `image-alt`, `list-marker`, `enum-numbering`, `enum-reversed`,
+`image-fit`, `image-alt`, `list-marker`, `enum-numbering`,
 `table-cell-fill`, `table-gutter`, `shape`, `page-foreground`,
 `section-break`, `header-footer-variant`, `mirrored-margins`,
 `page-numbering-change`, `footnote-numbering`, `outline-target`,

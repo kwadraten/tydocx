@@ -438,8 +438,8 @@ fn c1_misc_gates() {
         "resolved outlines report nothing: {constructs:?}"
     );
     for mode in [CompatMode::C2, CompatMode::C3] {
-        // `enum-reversed` is approximated (forward-numbered) at every level,
-        // so every level reports it — nothing else remains.
+        // `enum-reversed` is literal at every level and still reports it —
+        // nothing else remains.
         assert_eq!(
             constructs_for("issue_c1_misc", mode),
             vec!["enum-reversed"],

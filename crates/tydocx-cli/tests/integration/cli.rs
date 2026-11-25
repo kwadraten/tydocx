@@ -210,7 +210,7 @@ fn cli_degradation_report_sidecar() {
     }
     // A C2 run reports only `enum-reversed`: the figure-targeted outline
     // resolves its entries into a cached `\c` field result, while the
-    // forward-numbered enum is an approximation at every level.
+    // literalized reversed enum still reports at every level.
     let report_c2 = dir.join("report-c2.json");
     let result = run_tydocx_extra(
         &fixture_path("issue_c1_misc"),

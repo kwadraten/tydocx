@@ -403,11 +403,22 @@ bodies — now comes from `StyleChain`s or element identity.
 
 ### Silent-at-C2 degradations
 - **What:** several aspects report only at C1 even though C2/C3 also drop
-  them: `enum(reversed:)` (forward-numbered), `outline(target:)` /
-  `outline(indent:)` (title-only / default indent), custom
-  `footnote(numbering:)` (falls back to the active `numFmt`), two-sided
-  margins, bare shapes, `figure` explicit placement, `image(fit:/alt:)`.
+  them: `outline(target:)` / `outline(indent:)` (title-only / default
+  indent), custom `footnote(numbering:)` (falls back to the active
+  `numFmt`), two-sided margins, bare shapes, `figure` explicit placement,
+  `image(fit:/alt:)`.
   See `docs/spec-ecma376.md` for the per-feature rows.
+
+### Reversed enums still on `w:numPr`
+- **What:** a reversed enum whose numerals the collector rendered (every
+  item carries `number_text`) is lowered as literal text at every compat
+  level — the faithful `N … 1` order `w:numPr` cannot express — and
+  reports `enum-reversed` (literalized). Two cases still take the
+  `w:numPr` path and number forward: a reversed enum nested under a
+  numbering parent (`inherited` allocation) and one whose items lack
+  `number_text` (an unmappable pattern like `numbering: "①"`, or a
+  numbering function that failed to apply). Both still report
+  `enum-reversed`.
 
 ### Dual `CompatMode` / `Degradation` definitions
 - **What:** `tydocx-core` (`compat.rs`) and `tydocx-ir` (`mode.rs`,
