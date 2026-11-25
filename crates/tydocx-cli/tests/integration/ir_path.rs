@@ -328,9 +328,11 @@ fn ir_path_documented_diffs() {
         ("bibliography_multiple", "loc_2", "Alpha"),
     ] {
         let (new_xml, legacy_xml) = convert_both(fixture);
+        // HPL-AI citations: the new path emits the BIBLIOGRAPHY field + SDT
+        // only at C3; at the default C2 it writes plain entry paragraphs.
         assert!(
-            new_xml.contains("<w:bibliography/>"),
-            "bibliography field present"
+            !new_xml.contains("<w:bibliography/>"),
+            "C2 emits no bibliography field"
         );
         assert!(legacy_xml.contains(&format!("w:anchor=\"{anchor}\"")));
         assert!(new_xml.contains("w:hyperlink"), "citation links present");

@@ -158,7 +158,7 @@ pub enum IrBlock {
         /// system OOXML cannot express. `None` when no numbering is declared.
         numbering: Option<IrHeadingNumbering>,
         body: Vec<IrInline>,
-        label: Option<String>,
+        labels: Vec<String>,
         /// `par` settings resolved on the heading body's `StyleChain`
         /// (e.g. `#show heading: set par(first-line-indent: 0pt)`); emitted as
         /// `w:ind`/`w:jc` overrides when they differ from Normal.
@@ -182,7 +182,7 @@ pub enum IrBlock {
         caption_seq: Option<IrCaptionSeq>,
         kind: IrFigureKind,
         supplement: Option<String>,
-        label: Option<String>,
+        labels: Vec<String>,
         caption_first: bool,
         custom_placement: bool,
         /// `figure(gap:)` override in twips — spacing between body and caption.
@@ -340,7 +340,7 @@ pub struct IrParagraph {
     pub spacing_before: Option<u32>,
     /// `w:spacing w:after` override (twips) — `block(above:|below:|spacing:)`.
     pub spacing_after: Option<u32>,
-    pub bookmark: Option<String>,
+    pub bookmarks: Vec<String>,
 }
 
 /// `par` element settings resolved on an element's own `StyleChain` — the
@@ -776,7 +776,7 @@ fn to_roman(mut number: u64, upper: bool) -> String {
 pub struct IrEquation {
     pub omml: String,
     pub number: Option<IrEquationNumber>,
-    pub bookmark: Option<String>,
+    pub bookmarks: Vec<String>,
 }
 
 /// A block equation's rendered number. `display` holds the full literal text

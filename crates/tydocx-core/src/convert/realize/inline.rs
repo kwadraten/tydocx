@@ -58,6 +58,9 @@ pub struct InlineCtx<'a> {
     /// Cite-group source span → entry bookmark, resolved via `Works` (the
     /// rendered citation's entry link is layout-time content the pairs lack).
     pub cite_span_map: &'a HashMap<Span, String>,
+    pub cite_render_map: &'a HashMap<Span, String>,
+    pub fragment_tags: &'a mut Vec<(Tag, usize)>,
+    pub pair_index: usize,
     pub footnote_markers: &'a mut Vec<FootnoteMarker>,
     pub degradations: &'a mut Vec<Degradation>,
     pub source: Option<&'a Source>,
@@ -92,6 +95,33 @@ pub fn collect_inlines(
         content,
         styles,
         |engine, locator, pairs| {
+            let mut depth = 0usize;
+            let mut capture_at: Option<usize> = None;
+            for (content, _) in pairs {
+                let Some(tagged) = content.to_packed::<TagElem>() else {
+                    continue;
+                };
+                match &tagged.tag {
+                    Tag::Start(inner, _) => {
+                        if inner.to_packed::<CiteGroup>().is_some() && capture_at.is_none() {
+                            capture_at = Some(depth + 1);
+                        }
+                        if capture_at.is_some() {
+                            ctx.fragment_tags.push((tagged.tag.clone(), ctx.pair_index));
+                        }
+                        depth += 1;
+                    }
+                    Tag::End(..) => {
+                        if capture_at.is_some() {
+                            ctx.fragment_tags.push((tagged.tag.clone(), ctx.pair_index));
+                        }
+                        if capture_at == Some(depth) {
+                            capture_at = None;
+                        }
+                        depth = depth.saturating_sub(1);
+                    }
+                }
+            }
             ctx.scoped_par = ctx.scoped_par.or_else(|| {
                 pairs
                     .iter()
@@ -604,8 +634,11 @@ fn handle_tag_start(
             let end = find_end(pairs, i + 1, location);
             let display = marker_text_in(&pairs[i + 1..end]);
             ctx.prev_char = display.chars().next_back().or(ctx.prev_char);
+            let bookmark_name = label_location(ctx.label_map, &label)
+                .and_then(|loc| ctx.label_map.get(&loc).cloned())
+                .unwrap_or_else(|| label.clone());
             out.push(IrInline::Ref {
-                target_label: label.clone(),
+                target_label: bookmark_name,
                 display_text: display,
                 page_ref: true,
                 page_target: label_location(ctx.label_map, &label).map(|loc| IrPageTarget {
@@ -765,6 +798,9 @@ fn handle_tag_start(
             label_map: ctx.label_map,
             bib_map: ctx.bib_map,
             cite_span_map: ctx.cite_span_map,
+            cite_render_map: ctx.cite_render_map,
+            fragment_tags: &mut *ctx.fragment_tags,
+            pair_index: ctx.pair_index,
             footnote_markers: &mut *ctx.footnote_markers,
             degradations: &mut *ctx.degradations,
             source: ctx.source,
@@ -844,7 +880,11 @@ fn handle_tag_start(
         let target_label = reference.target.resolve().to_string();
         if !ctx.label_map.values().any(|label| label == &target_label) {
             let end = find_end(pairs, i + 1, location);
-            let rendered = marker_text_in(&pairs[i + 1..end]);
+            let rendered = ctx
+                .cite_render_map
+                .get(&inner.span())
+                .cloned()
+                .unwrap_or_else(|| marker_text_in(&pairs[i + 1..end]));
             let target = ctx.cite_span_map.get(&inner.span()).cloned().or_else(|| {
                 bib_link_in(&pairs[i + 1..end]).and_then(|loc| ctx.bib_map.get(&loc).cloned())
             });
@@ -859,8 +899,11 @@ fn handle_tag_start(
         let display_text = next_marker_text(pairs, i + 1).unwrap_or_default();
         ctx.prev_char = display_text.chars().next_back().or(ctx.prev_char);
         let page_ref = reference.form.get(styles) == RefForm::Page;
+        let bookmark_name = label_location(ctx.label_map, &target_label)
+            .and_then(|loc| ctx.label_map.get(&loc).cloned())
+            .unwrap_or_else(|| target_label.clone());
         out.push(IrInline::Ref {
-            target_label: target_label.clone(),
+            target_label: bookmark_name,
             display_text,
             page_ref,
             page_target: page_ref
@@ -882,8 +925,12 @@ fn handle_tag_start(
             .filter_map(|child| child.to_packed::<CiteElem>())
             .map(|cite| cite.key.resolve().to_string())
             .collect();
-        let rendered = next_marker_text(pairs, i + 1).unwrap_or_default();
         let end = find_end(pairs, i + 1, location);
+        let rendered = ctx
+            .cite_render_map
+            .get(&inner.span())
+            .cloned()
+            .unwrap_or_else(|| marker_text_in(&pairs[i + 1..end]));
         let target = ctx.cite_span_map.get(&inner.span()).cloned().or_else(|| {
             bib_link_in(&pairs[i + 1..end]).and_then(|loc| ctx.bib_map.get(&loc).cloned())
         });

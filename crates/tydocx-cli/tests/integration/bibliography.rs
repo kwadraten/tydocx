@@ -74,15 +74,27 @@ fn bibliography_style_is_defined() {
 }
 
 #[test]
-fn bibliography_produces_bibliography_sdt() {
-    let xml = fixture_doc_xml("bibliography_basic");
+fn bibliography_sdt_and_field_only_at_c3() {
+    // C2 keeps literal paragraphs — the BIBLIOGRAPHY field + SDT only exist
+    // at C3 where Word can evaluate them.
+    let c2 = fixture_doc_xml("bibliography_basic");
     assert!(
-        xml.contains("w:bibliography"),
-        "expected w:bibliography SDT marker"
+        !c2.contains("<w:bibliography") && !c2.contains(" BIBLIOGRAPHY "),
+        "C2 must not emit the bibliography SDT/field: {c2}"
+    );
+    let c3 = fixture_package_with_options(
+        "bibliography_basic",
+        &tydocx_core::ConvertOptions::new(tydocx_core::CompatMode::C3),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
+    assert!(
+        c3.contains("w:bibliography"),
+        "expected w:bibliography SDT marker at C3"
     );
     assert!(
-        xml.contains("BIBLIOGRAPHY"),
-        "expected BIBLIOGRAPHY field code"
+        c3.contains("BIBLIOGRAPHY"),
+        "expected BIBLIOGRAPHY field code at C3"
     );
 }
 
@@ -140,7 +152,13 @@ fn bibliography_citation_sources_count() {
 
 #[test]
 fn bibliography_field_codes_have_begin_and_end() {
-    let xml = fixture_doc_xml("bibliography_basic");
+    // Field codes only exist at C3 — C2 emits literal text and hyperlinks.
+    let xml = fixture_package_with_options(
+        "bibliography_basic",
+        &tydocx_core::ConvertOptions::new(tydocx_core::CompatMode::C3),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
     // Both inline citations and bibliography block use field codes
     assert!(
         xml.contains("fldCharType=\"begin\""),
@@ -163,7 +181,14 @@ fn bibliography_display_text_present() {
 
 #[test]
 fn bibliography_section_heading_present() {
-    let xml = fixture_doc_xml("bibliography_basic");
+    // The "Bibliography" string only exists inside the C3 bibliography SDT
+    // (pStyle + sdt markers); C2's plain paragraphs carry no section markup.
+    let xml = fixture_package_with_options(
+        "bibliography_basic",
+        &tydocx_core::ConvertOptions::new(tydocx_core::CompatMode::C3),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
     // The bibliography section heading should be present
     assert!(
         xml.contains("Bibliography"),
@@ -301,10 +326,18 @@ fn bibliography_field_cache_contains_formatted_entries() {
     // The BIBLIOGRAPHY field's cached result must carry the formatted entries,
     // not an empty field — the realize pairs never see them (they are
     // layout-time `Works` content), so a regression here silently empties the
-    // rendered bibliography.
-    let xml = fixture_doc_xml("bibliography_basic");
+    // rendered bibliography. The field exists only at C3.
+    let xml = fixture_package_with_options(
+        "bibliography_basic",
+        &tydocx_core::ConvertOptions::new(tydocx_core::CompatMode::C3),
+    )
+    .part_text("word/document.xml")
+    .to_owned();
     let sdt_start = xml.find("<w:bibliography/>").expect("bibliography SDT");
-    let sdt_end = xml.find("</w:sdt>").expect("SDT close");
+    let sdt_end = xml[sdt_start..]
+        .find("</w:sdt>")
+        .map(|i| sdt_start + i)
+        .expect("SDT close");
     let sdt = &xml[sdt_start..sdt_end];
     for needle in ["An Example Article", "The Art of Computer Programming"] {
         assert!(

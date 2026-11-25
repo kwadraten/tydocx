@@ -23,20 +23,25 @@ use typst_library::layout::grid::Celled;
 use typst_library::layout::grid::GridCell;
 use typst_library::layout::grid::resolve::{Cell, CellGrid, Entry, Line, LinePosition};
 use typst_library::layout::{
-    Abs, AlignElem, Angle, Axes, BlockBody, BlockElem, ColbreakElem, ColumnsElem, GridElem,
-    HAlignment, HideElem, Length, Margin, MoveElem, PadElem, PageElem, PagebreakElem, Parity,
-    PlaceElem, Region, Rel, RotateElem, ScaleElem, Sides, Size, Sizing, SkewElem, Spacing,
+    Abs, AlignElem, Angle, Axes, BlockBody, BlockElem, BoxElem, ColbreakElem, ColumnsElem,
+    GridChild, GridElem, GridFooter, GridHeader, GridItem, HAlignment, HideElem, Length, Margin,
+    MoveElem, PadElem, PageElem, PagebreakElem, Parity, PlaceElem, Region, Rel, RepeatElem,
+    RotateElem, ScaleElem, Sides, Size, Sizing, SkewElem, Spacing, StackChild, StackElem,
     VAlignment, VElem,
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
-    BibliographyElem, CiteGroup, Destination, DirectLinkElem, EnumElem, EnumItem, FigureCaption,
-    FigureElem, FigureKind, HeadingElem, LinkElem, LinkTarget, ListElem, ListItem, ListMarker,
-    Numbering, OutlineElem, OutlineIndent, ParElem, ParbreakElem, QuoteElem, Supplement, TableCell,
-    TableElem, TermItem, TermsElem, Works,
+    BibliographyElem, CiteGroup, Destination, DirectLinkElem, EmphElem, EnumElem, EnumItem,
+    FigureCaption, FigureElem, FigureKind, FootnoteBody, FootnoteElem, HeadingElem, LinkElem,
+    LinkTarget, ListElem, ListItem, ListMarker, Numbering, OutlineElem, OutlineIndent, ParElem,
+    ParbreakElem, QuoteElem, StrongElem, Supplement, TableCell, TableChild, TableElem, TableFooter,
+    TableHeader, TableItem, TermItem, TermsElem, Works,
 };
 use typst_library::routines::Pair;
-use typst_library::text::{RawElem, RawLine, SmartQuoter, SpaceElem, TextElem};
+use typst_library::text::{
+    HighlightElem, OverlineElem, RawElem, RawLine, SmallcapsElem, SmartQuoter, SpaceElem,
+    StrikeElem, SubElem, SuperElem, TextElem, UnderlineElem,
+};
 use typst_library::visualize::{
     CircleElem, CurveElem, EllipseElem, ImageElem, LineElem, PolygonElem, RectElem, SquareElem,
 };
@@ -59,6 +64,7 @@ pub struct CollectorState {
     pub footnote_bodies: HashMap<Location, Vec<IrParagraph>>,
     pub footnote_circled: bool,
     pub degradations: Vec<Degradation>,
+    pub fragment_tags: Vec<(Tag, usize)>,
     pub chain_overrides: page::SourceStyleOverrides,
     /// Any top-level page state declared inside/outside margins — OR'd into
     /// `margins_mirrored` for the C2/C3 flag and the mixed-margin report;
@@ -75,6 +81,10 @@ pub struct Collector<'a> {
     label_map: HashMap<Location, String>,
     bib_map: HashMap<Location, String>,
     cite_span_map: HashMap<Span, String>,
+    cite_render_map: HashMap<Span, String>,
+    fragment_tags: Vec<(Tag, usize)>,
+    current_pair: usize,
+    block_depth: usize,
     /// Heading `Location` → synthesized TOC bookmark (`outline-target-N`),
     /// registered for unlabelled headings an `#outline` targets.
     heading_bookmarks: HashMap<Span, String>,
@@ -124,7 +134,7 @@ fn defaults_from_pairs(pairs: &[Pair<'_>], root_styles: StyleChain<'_>) -> Style
         let Some(par) = content.to_packed::<ParElem>() else {
             continue;
         };
-        let weight = plain_text(&par.body).chars().count();
+        let weight = shallow_plain_text(&par.body).chars().count();
         if weight == 0 {
             continue;
         }
@@ -202,6 +212,10 @@ pub fn collect_document(
         label_map: HashMap::new(),
         bib_map: HashMap::new(),
         cite_span_map: HashMap::new(),
+        cite_render_map: HashMap::new(),
+        fragment_tags: Vec::new(),
+        current_pair: 0,
+        block_depth: 0,
         heading_bookmarks: HashMap::new(),
         outline_entries: HashMap::new(),
         next_outline_bookmark: 0,
@@ -230,6 +244,7 @@ pub fn collect_document(
     let mut chain_overrides = super::chain::chain_overrides(pairs);
     chain_overrides.one_sided_asymmetric_margins |= collector.one_sided_asymmetric_margins;
     let state = CollectorState {
+        fragment_tags: std::mem::take(&mut collector.fragment_tags),
         footnote_markers: std::mem::take(&mut collector.footnote_markers),
         footnote_bodies: std::mem::take(&mut collector.footnote_bodies),
         footnote_circled: collector.footnote_circled,
@@ -345,7 +360,7 @@ struct OutlineEntries {
 
 struct FigureMeta {
     kind: IrFigureKind,
-    label: Option<String>,
+    labels: Vec<String>,
     custom_placement: bool,
     gap_twips: Option<u32>,
     location_hash: Option<u64>,
@@ -444,6 +459,10 @@ impl Collector<'_> {
             let Ok(rendered) = works.citation(loc, group.span()) else {
                 continue;
             };
+            let rendered_text = tydocx_ooxml::document::strip_break_hints(&plain_text(&rendered));
+            if !rendered_text.is_empty() {
+                self.cite_render_map.insert(group.span(), rendered_text);
+            }
             let Some(backlink) = dest_location_in(&rendered) else {
                 continue;
             };
@@ -465,6 +484,9 @@ impl Collector<'_> {
             label_map: &self.label_map,
             bib_map: &self.bib_map,
             cite_span_map: &self.cite_span_map,
+            cite_render_map: &self.cite_render_map,
+            fragment_tags: &mut self.fragment_tags,
+            pair_index: self.current_pair,
             footnote_markers: &mut self.footnote_markers,
             degradations: &mut self.degradations,
             source: self.source.as_ref(),
@@ -521,8 +543,15 @@ impl Collector<'_> {
                     Tag::Start(inner, _) => {
                         let end = find_end(pairs, i + 1, inner.location());
                         let group = &pairs[i + 1..end];
+                        if self.block_depth == 0 {
+                            self.current_pair = i;
+                        }
+                        self.block_depth += 1;
+                        let collected =
+                            self.collect_tag_group(inner, group, styles, engine, locator);
+                        self.block_depth -= 1;
                         let base = out.len();
-                        out.extend(self.collect_tag_group(inner, group, styles, engine, locator)?);
+                        out.extend(collected?);
                         i = end + 1;
                         if out.len() > base
                             && let Some(twips) = pending_vspace.take()
@@ -607,7 +636,7 @@ impl Collector<'_> {
             return self.collect_terms(terms, styles, engine, locator);
         }
         if let Some(equation) = inner.to_packed::<EquationElem>() {
-            return Ok(self.collect_equation(equation, inner, styles));
+            return Ok(self.collect_equation(equation, inner, group, styles));
         }
         if inner.to_packed::<HideElem>().is_some() {
             self.degradations.push(Degradation {
@@ -1009,7 +1038,11 @@ impl Collector<'_> {
         if let Some(align) = content.to_packed::<AlignElem>() {
             return self.collect_align_blocks(align, list_ctx, styles, engine, locator);
         }
-        let children = flatten_sequences(content_children(content));
+        let children = if let Some(sequence) = content.to_packed::<SequenceElem>() {
+            flatten_sequences(sequence.children.iter().collect())
+        } else {
+            vec![content]
+        };
         self.collect_body_children(&children, list_ctx, styles, engine, locator)
     }
 
@@ -1542,10 +1575,7 @@ impl Collector<'_> {
             numbering: heading_numbering(styles),
             numbering_text,
             body,
-            label: child
-                .label()
-                .map(|l| l.resolve().to_string())
-                .or_else(|| self.heading_bookmarks.get(&child.span()).cloned()),
+            labels: self.bookmark_name(child).into_iter().collect(),
             alignment: alignment_from_styles(styles),
             par: scoped_par.unwrap_or_else(|| par_style_from_styles(styles)),
             span: child.span().id().map(|_| child.span()),
@@ -1568,10 +1598,7 @@ impl Collector<'_> {
             return Ok(vec![IrBlock::Equation(IrEquation {
                 omml,
                 number,
-                bookmark: child
-                    .label()
-                    .map(|l| l.resolve().to_string())
-                    .or_else(|| self.heading_bookmarks.get(&child.span()).cloned()),
+                bookmarks: self.bookmark_name(child).into_iter().collect(),
             })]);
         }
         let mut ctx = self.inline_ctx();
@@ -1643,20 +1670,39 @@ impl Collector<'_> {
                     .to_string(),
             });
         }
+        let mut labels: Vec<String> = self.bookmark_name(inner).into_iter().collect();
+        self.absorbed_labels(group, &mut labels);
         Ok(heading_block(HeadingSpec {
             level,
             numbering: heading_numbering(styles),
             numbering_text,
             body,
-            label: inner
-                .label()
-                .map(|l| l.resolve().to_string())
-                .or_else(|| self.heading_bookmarks.get(&inner.span()).cloned()),
+            labels,
             alignment,
             par,
             span: inner.span().id().map(|_| inner.span()),
             outlined,
         }))
+    }
+
+    fn bookmark_name(&self, inner: &Content) -> Option<String> {
+        inner
+            .location()
+            .and_then(|loc| self.label_map.get(&loc).cloned())
+            .or_else(|| inner.label().map(|label| label.resolve().to_string()))
+            .or_else(|| self.heading_bookmarks.get(&inner.span()).cloned())
+    }
+
+    fn absorbed_labels(&self, group: &[Pair<'_>], labels: &mut Vec<String>) {
+        for (content, _) in group {
+            if let Some(tagged) = content.to_packed::<TagElem>()
+                && let Tag::Start(inner, _) = &tagged.tag
+                && let Some(name) = self.bookmark_name(inner)
+                && !labels.contains(&name)
+            {
+                labels.push(name);
+            }
+        }
     }
 
     fn collect_figure(
@@ -1668,12 +1714,12 @@ impl Collector<'_> {
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
+        let mut labels = Vec::new();
+        labels.extend(self.bookmark_name(inner));
+        self.absorbed_labels(group, &mut labels);
         let meta = FigureMeta {
             kind: figure_kind(figure, styles),
-            label: inner
-                .label()
-                .map(|l| l.resolve().to_string())
-                .or_else(|| self.heading_bookmarks.get(&inner.span()).cloned()),
+            labels,
             custom_placement: figure_custom_placement(figure),
             gap_twips: figure_gap_twips(figure, styles, self.em_pt()),
             location_hash: inner.location().map(location_hash64),
@@ -1717,10 +1763,7 @@ impl Collector<'_> {
     ) -> SourceResult<IrBlock> {
         let meta = FigureMeta {
             kind: figure_kind(figure, styles),
-            label: inner
-                .label()
-                .map(|l| l.resolve().to_string())
-                .or_else(|| self.heading_bookmarks.get(&inner.span()).cloned()),
+            labels: self.bookmark_name(inner).into_iter().collect(),
             custom_placement: figure_custom_placement(figure),
             gap_twips: figure_gap_twips(figure, styles, self.em_pt()),
             location_hash: inner.location().map(location_hash64),
@@ -1834,7 +1877,7 @@ impl Collector<'_> {
             caption_seq,
             kind: meta.kind,
             supplement,
-            label: meta.label.clone(),
+            labels: meta.labels.clone(),
             caption_first,
             custom_placement: meta.custom_placement,
             gap_twips: meta.gap_twips,
@@ -2606,6 +2649,7 @@ impl Collector<'_> {
         &mut self,
         equation: &EquationElem,
         inner: &Content,
+        group: &[Pair<'_>],
         styles: StyleChain<'_>,
     ) -> Vec<IrBlock> {
         if !equation.block.get(styles) {
@@ -2614,13 +2658,12 @@ impl Collector<'_> {
         self.eq_count += 1;
         let omml = super::equation_omml_ir(inner, &mut self.degradations);
         let number = self.equation_number(equation, styles, inner.span());
+        let mut bookmarks: Vec<String> = self.bookmark_name(inner).into_iter().collect();
+        self.absorbed_labels(group, &mut bookmarks);
         vec![IrBlock::Equation(IrEquation {
             omml,
             number,
-            bookmark: inner
-                .label()
-                .map(|l| l.resolve().to_string())
-                .or_else(|| self.heading_bookmarks.get(&inner.span()).cloned()),
+            bookmarks,
         })]
     }
 
@@ -3232,7 +3275,24 @@ impl Collector<'_> {
         };
         let mut entries = Vec::with_capacity(rendered.entries.len());
         for entry in &rendered.entries {
-            let marker = entry.prefix.as_ref().map(plain_text);
+            let marker = entry.prefix.as_ref().and_then(|prefix| {
+                let text = plain_text(prefix);
+                if text.is_empty() {
+                    self.degradations.push(Degradation {
+                        span: Some(span),
+                        construct: "bibliography-marker",
+                        action: DegradationAction::Skipped,
+                        message: format!(
+                            "bibliography entry {}'s rendered marker could not be extracted; \
+                                 it is emitted without a marker",
+                            entries.len() + 1
+                        ),
+                    });
+                    None
+                } else {
+                    Some(text)
+                }
+            });
             let mut ctx = self.inline_ctx();
             let body = collect_inlines(&entry.body, styles, engine, locator, &mut ctx)?;
             let bookmark = format!("bib-{}", entries.len());
@@ -3471,7 +3531,7 @@ fn collect_raw_lines_in(content: &Content, out: &mut Vec<Packed<RawLine>>) {
         out.extend(lines.iter().cloned());
         return;
     }
-    for child in content_children(content) {
+    for child in shallow_children(content) {
         if std::ptr::eq(child, content) {
             continue;
         }
@@ -3491,6 +3551,43 @@ fn flatten_sequences(children: Vec<&Content>) -> Vec<&Content> {
     out
 }
 
+fn shallow_children(content: &Content) -> Vec<&Content> {
+    if let Some(sequence) = content.to_packed::<SequenceElem>() {
+        return sequence.children.iter().collect();
+    }
+    if let Some(styled) = content.to_packed::<StyledElem>() {
+        return vec![&styled.child];
+    }
+    if let Some(par) = content.to_packed::<ParElem>() {
+        return shallow_children(&par.body);
+    }
+    if let Some(block) = content.to_packed::<BlockElem>() {
+        if let Some(Some(BlockBody::Content(body))) = block.body.as_option() {
+            return shallow_children(body);
+        }
+        return Vec::new();
+    }
+    vec![content]
+}
+
+fn shallow_plain_text(content: &Content) -> String {
+    let mut out = String::new();
+    shallow_plain_text_into(content, &mut out);
+    out
+}
+
+fn shallow_plain_text_into(content: &Content, out: &mut String) {
+    if let Some(text) = content.to_packed::<TextElem>() {
+        out.push_str(&text.text);
+        return;
+    }
+    for child in shallow_children(content) {
+        if !std::ptr::eq(child, content) {
+            shallow_plain_text_into(child, out);
+        }
+    }
+}
+
 pub(super) fn content_children(content: &Content) -> Vec<&Content> {
     if let Some(sequence) = content.to_packed::<SequenceElem>() {
         return sequence.children.iter().collect();
@@ -3507,7 +3604,193 @@ pub(super) fn content_children(content: &Content) -> Vec<&Content> {
         }
         return Vec::new();
     }
-    vec![content]
+    if let Some(tagged) = content.to_packed::<TagElem>() {
+        return match &tagged.tag {
+            Tag::Start(inner, _) => vec![inner],
+            Tag::End(..) => Vec::new(),
+        };
+    }
+    container_children(content).unwrap_or_else(|| vec![content])
+}
+
+fn container_children(content: &Content) -> Option<Vec<&Content>> {
+    if let Some(list) = content.to_packed::<ListElem>() {
+        return Some(list.children.iter().map(Packed::pack_ref).collect());
+    }
+    if let Some(enumer) = content.to_packed::<EnumElem>() {
+        return Some(enumer.children.iter().map(Packed::pack_ref).collect());
+    }
+    if let Some(terms) = content.to_packed::<TermsElem>() {
+        return Some(terms.children.iter().map(Packed::pack_ref).collect());
+    }
+    if let Some(item) = content.to_packed::<TermItem>() {
+        return Some(vec![&item.term, &item.description]);
+    }
+    if let Some(item) = content.to_packed::<ListItem>() {
+        return Some(vec![&item.body]);
+    }
+    if let Some(item) = content.to_packed::<EnumItem>() {
+        return Some(vec![&item.body]);
+    }
+    if let Some(cell) = content.to_packed::<TableCell>() {
+        return Some(vec![&cell.body]);
+    }
+    if let Some(cell) = content.to_packed::<GridCell>() {
+        return Some(vec![&cell.body]);
+    }
+    if let Some(table) = content.to_packed::<TableElem>() {
+        return Some(
+            table
+                .children
+                .iter()
+                .filter_map(table_child_content)
+                .collect(),
+        );
+    }
+    if let Some(header) = content.to_packed::<TableHeader>() {
+        return Some(table_items(&header.children));
+    }
+    if let Some(footer) = content.to_packed::<TableFooter>() {
+        return Some(table_items(&footer.children));
+    }
+    if let Some(grid) = content.to_packed::<GridElem>() {
+        return Some(
+            grid.children
+                .iter()
+                .filter_map(grid_child_content)
+                .collect(),
+        );
+    }
+    if let Some(header) = content.to_packed::<GridHeader>() {
+        return Some(grid_items(&header.children));
+    }
+    if let Some(footer) = content.to_packed::<GridFooter>() {
+        return Some(grid_items(&footer.children));
+    }
+    if let Some(figure) = content.to_packed::<FigureElem>() {
+        let mut children = vec![&figure.body];
+        children.extend(
+            figure
+                .caption
+                .as_option()
+                .as_ref()
+                .and_then(Option::as_ref)
+                .map(Packed::pack_ref),
+        );
+        return Some(children);
+    }
+    if let Some(footnote) = content.to_packed::<FootnoteElem>() {
+        return Some(match &footnote.body {
+            FootnoteBody::Content(body) => vec![body],
+            FootnoteBody::Reference(_) => Vec::new(),
+        });
+    }
+    if let Some(stack) = content.to_packed::<StackElem>() {
+        return Some(
+            stack
+                .children
+                .iter()
+                .filter_map(|child| match child {
+                    StackChild::Block(body) => Some(body),
+                    StackChild::Spacing(_) => None,
+                })
+                .collect(),
+        );
+    }
+    if let Some(body) = container_body(content) {
+        return Some(vec![body]);
+    }
+    if let Some(body) = optional_body(content) {
+        return Some(vec![body]);
+    }
+    None
+}
+
+fn table_child_content(child: &TableChild) -> Option<&Content> {
+    match child {
+        TableChild::Header(header) => Some(header.pack_ref()),
+        TableChild::Footer(footer) => Some(footer.pack_ref()),
+        TableChild::Item(item) => table_item_content(item),
+    }
+}
+
+fn table_items(items: &[TableItem]) -> Vec<&Content> {
+    items.iter().filter_map(table_item_content).collect()
+}
+
+fn grid_items(items: &[GridItem]) -> Vec<&Content> {
+    items.iter().filter_map(grid_item_content).collect()
+}
+
+fn table_item_content(item: &TableItem) -> Option<&Content> {
+    match item {
+        TableItem::Cell(cell) => Some(cell.pack_ref()),
+        TableItem::HLine(_) | TableItem::VLine(_) => None,
+    }
+}
+
+fn grid_child_content(child: &GridChild) -> Option<&Content> {
+    match child {
+        GridChild::Header(header) => Some(header.pack_ref()),
+        GridChild::Footer(footer) => Some(footer.pack_ref()),
+        GridChild::Item(item) => grid_item_content(item),
+    }
+}
+
+fn grid_item_content(item: &GridItem) -> Option<&Content> {
+    match item {
+        GridItem::Cell(cell) => Some(cell.pack_ref()),
+        GridItem::HLine(_) | GridItem::VLine(_) => None,
+    }
+}
+
+fn container_body(content: &Content) -> Option<&Content> {
+    macro_rules! body_of {
+        ($($ty:ty),+ $(,)?) => {
+            $(if let Some(elem) = content.to_packed::<$ty>() {
+                return Some(&elem.body);
+            })+
+        };
+    }
+    body_of!(
+        DirectLinkElem,
+        LinkElem,
+        HeadingElem,
+        QuoteElem,
+        AlignElem,
+        PadElem,
+        PlaceElem,
+        ColumnsElem,
+        MoveElem,
+        RotateElem,
+        ScaleElem,
+        SkewElem,
+        RepeatElem,
+        StrongElem,
+        EmphElem,
+        UnderlineElem,
+        OverlineElem,
+        StrikeElem,
+        HighlightElem,
+        SmallcapsElem,
+        SuperElem,
+        SubElem,
+    );
+    None
+}
+
+fn optional_body(content: &Content) -> Option<&Content> {
+    macro_rules! body_of {
+        ($($ty:ty),+ $(,)?) => {
+            $(if let Some(elem) = content.to_packed::<$ty>()
+                && let Some(body) = elem.body.as_option().as_ref().and_then(Option::as_ref)
+            {
+                return Some(body);
+            })+
+        };
+    }
+    body_of!(BoxElem, RectElem, SquareElem, EllipseElem, CircleElem);
+    None
 }
 
 fn index_content_tree(content: &Content, out: &mut HashMap<Span, Content>) {
@@ -3965,7 +4248,7 @@ struct HeadingSpec {
     numbering: Option<IrHeadingNumbering>,
     numbering_text: Option<String>,
     body: Vec<IrInline>,
-    label: Option<String>,
+    labels: Vec<String>,
     alignment: Option<Alignment>,
     par: IrParStyle,
     span: Option<Span>,
@@ -3980,7 +4263,7 @@ fn heading_block(spec: HeadingSpec) -> IrBlock {
         let mut para = IrParagraph {
             alignment: spec.alignment,
             par: spec.par,
-            bookmark: spec.label,
+            bookmarks: spec.labels,
             ..IrParagraph::default()
         };
         if let Some(number) = spec.numbering_text {
@@ -4003,7 +4286,7 @@ fn heading_block(spec: HeadingSpec) -> IrBlock {
         numbering_text: spec.numbering_text,
         numbering: spec.numbering,
         body: spec.body,
-        label: spec.label,
+        labels: spec.labels,
         par: spec.par,
         alignment: spec.alignment,
         span: spec.span,

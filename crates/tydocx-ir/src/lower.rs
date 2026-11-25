@@ -634,7 +634,7 @@ fn lower_figure_block(
         caption_seq,
         kind: _,
         supplement: _,
-        label,
+        labels,
         caption_first,
         custom_placement,
         gap_twips,
@@ -657,7 +657,7 @@ fn lower_figure_block(
             caption_alignment: *caption_alignment,
             caption_par: *caption_par,
             caption_seq: caption_seq.as_ref(),
-            label: label.as_ref(),
+            labels,
             caption_first: *caption_first,
             gap_twips: *gap_twips,
         },
@@ -877,7 +877,7 @@ fn lower_heading(
             strip_redundant_heading_run(run, style_size);
         }
     }
-    if let Some(name) = spec.label {
+    for name in spec.labels {
         let id = ctx.next_bookmark();
         para.add_bookmark_wrapping(id, name.clone());
     }
@@ -1018,7 +1018,7 @@ fn lower_equation(eq: &IrEquation, ctx: &mut LowerCtx) -> Vec<BlockElement> {
         omml_xml: eq.omml.clone(),
         equation_number,
     });
-    if let Some(name) = &eq.bookmark {
+    for name in &eq.bookmarks {
         let id = ctx.next_bookmark();
         para.add_bookmark_wrapping(id, name.clone());
     }
@@ -1061,20 +1061,25 @@ fn lower_raw(raw: &IrRaw) -> Vec<BlockElement> {
 
 fn lower_bibliography(entries: &[IrBibEntry], ctx: &mut LowerCtx) -> Vec<BlockElement> {
     let mut paragraphs = Vec::new();
-    for (index, entry) in entries.iter().enumerate() {
+    for entry in entries {
         let mut para = Paragraph::new();
         para.hanging_indent = Some(HangingIndent::Default);
-        let marker = entry
-            .marker
-            .clone()
-            .unwrap_or_else(|| format!("[{}]", index + 1));
-        para.push_run(Run::new(format!("{marker} ")));
+        if let Some(marker) = &entry.marker {
+            para.push_run(Run::new(format!("{marker} ")));
+        }
         para.inlines.extend(lower_inlines(&entry.body, ctx));
         let id = ctx.next_bookmark();
         para.add_bookmark_at_start(id, entry.bookmark.clone());
         paragraphs.push(para);
     }
-    vec![BlockElement::BibliographyBlock { paragraphs }]
+    if ctx.compat.is_c3() {
+        vec![BlockElement::BibliographyBlock { paragraphs }]
+    } else {
+        paragraphs
+            .into_iter()
+            .map(BlockElement::Paragraph)
+            .collect()
+    }
 }
 
 struct PlaceSpec<'a> {
@@ -1186,7 +1191,7 @@ fn floating_table(
                 caption_alignment,
                 caption_par,
                 caption_seq,
-                label,
+                labels,
                 caption_first,
                 gap_twips,
                 ..
@@ -1197,7 +1202,7 @@ fn floating_table(
             caption_alignment: *caption_alignment,
             caption_par: *caption_par,
             caption_seq: caption_seq.as_ref(),
-            label: label.as_ref(),
+            labels,
             caption_first: *caption_first,
             gap_twips: *gap_twips,
         },
@@ -1370,7 +1375,7 @@ struct FigureSpec<'a> {
     caption_alignment: Option<Alignment>,
     caption_par: IrParStyle,
     caption_seq: Option<&'a IrCaptionSeq>,
-    label: Option<&'a String>,
+    labels: &'a [String],
     caption_first: bool,
     gap_twips: Option<u32>,
 }
@@ -1380,7 +1385,7 @@ struct HeadingSpec<'a> {
     numbering_text: Option<&'a String>,
     numbering: Option<&'a IrHeadingNumbering>,
     body: &'a [IrInline],
-    label: Option<&'a String>,
+    labels: &'a [String],
     par: IrParStyle,
     alignment: Option<Alignment>,
     span: Option<typst_syntax::Span>,
@@ -1396,7 +1401,7 @@ fn lower_heading_block(
         numbering_text,
         numbering,
         body,
-        label,
+        labels,
         par,
         alignment,
         span,
@@ -1410,7 +1415,7 @@ fn lower_heading_block(
             numbering_text: numbering_text.as_ref(),
             numbering: numbering.as_ref(),
             body,
-            label: label.as_ref(),
+            labels,
             par: *par,
             alignment: *alignment,
             span: *span,
@@ -1421,7 +1426,7 @@ fn lower_heading_block(
 }
 
 fn figure_caption_para(fig: &FigureSpec<'_>, ctx: &mut LowerCtx) -> Option<Paragraph> {
-    if fig.caption.is_empty() && fig.label.is_none() {
+    if fig.caption.is_empty() && fig.labels.is_empty() {
         return None;
     }
     let mut para = Paragraph::new();
@@ -1441,7 +1446,7 @@ fn figure_caption_para(fig: &FigureSpec<'_>, ctx: &mut LowerCtx) -> Option<Parag
         splice_caption_seq(&mut caption, seq);
     }
     para.inlines.extend(lower_inlines(&caption, ctx));
-    if let Some(name) = fig.label {
+    for name in fig.labels {
         let id = ctx.next_bookmark();
         para.add_bookmark_wrapping(id, name.clone());
     }
@@ -1475,12 +1480,14 @@ fn lower_figure(fig: &FigureSpec<'_>, doc: &mut Document, ctx: &mut LowerCtx) ->
     if !fig.caption_first {
         if let Some(para) = caption_para.take() {
             out.push(BlockElement::Paragraph(para));
-        } else if let Some(name) = fig.label {
-            let id = ctx.next_bookmark();
-            for element in &mut out {
-                if let BlockElement::Paragraph(para) = element {
-                    para.add_bookmark_wrapping(id, name.clone());
-                    break;
+        } else {
+            for name in fig.labels {
+                let id = ctx.next_bookmark();
+                for element in &mut out {
+                    if let BlockElement::Paragraph(para) = element {
+                        para.add_bookmark_wrapping(id, name.clone());
+                        break;
+                    }
                 }
             }
         }
@@ -1565,7 +1572,7 @@ fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     out.spacing_after = para.spacing_after;
     out.keep_next = para.keep_next;
     out.inlines = merge_runs(lower_inlines(&para.inlines, ctx));
-    if let Some(name) = &para.bookmark {
+    for name in &para.bookmarks {
         let id = ctx.next_bookmark();
         out.add_bookmark_wrapping(id, name.clone());
     }
@@ -2879,7 +2886,7 @@ mod tests {
             numbering_text: Some("1.1".to_owned()),
             numbering: None,
             body: vec![IrInline::Text(Run::new("Lists"))],
-            label: Some("sec-lists".to_owned()),
+            labels: vec!["sec-lists".to_owned()],
             par: IrParStyle::default(),
             alignment: None,
             span: None,
@@ -3481,7 +3488,7 @@ mod tests {
             numbering_text: Some(number.to_owned()),
             numbering,
             body: vec![IrInline::Text(Run::new("Title"))],
-            label: None,
+            labels: Vec::new(),
             par: IrParStyle::default(),
             alignment: None,
             span: None,
