@@ -77,17 +77,14 @@ fn issue_cjk_font_localized_name() {
         eprintln!("note: SimSun not installed — localized-name assertion skipped (expected on CI)");
     }
 
-    // Per-run overrides (document.xml): heading 黑体, KaiTi span 楷体.
-    if simhei {
+    for (text, expected) in [
+        ("黑体标题内容", if simhei { "黑体" } else { "SimHei" }),
+        ("楷体大字内容内容", if kaiti { "楷体" } else { "KaiTi" }),
+    ] {
+        let para = paragraph_containing(doc_xml, text);
         assert!(
-            doc_xml.contains(r#"w:eastAsia="黑体""#),
-            "SimHei heading run must localize to 黑体, got: {doc_xml}"
-        );
-    }
-    if kaiti {
-        assert!(
-            doc_xml.contains(r#"w:eastAsia="楷体""#),
-            "KaiTi span must localize to 楷体, got: {doc_xml}"
+            para.contains(&format!(r#"w:eastAsia="{expected}""#)),
+            "{text}: declared East Asian font must reach Word as {expected}, got: {para}"
         );
     }
 }
@@ -139,6 +136,122 @@ fn issue_cjk_fallback_list_font() {
             "without NSimSun installed eastAsia must be a raw declared name, got styles: {styles_xml}"
         );
         eprintln!("note: NSimSun not installed — positional-fallback branch (expected on CI)");
+    }
+}
+
+fn run_containing<'a>(xml: &'a str, text: &str) -> &'a str {
+    xml.split("<w:r>")
+        .skip(1)
+        .filter_map(|run| run.split("</w:r>").next())
+        .find(|run| {
+            run.split_once("<w:t")
+                .and_then(|(_, tail)| tail.split_once('>'))
+                .and_then(|(_, value)| value.split_once("</w:t>"))
+                .is_some_and(|(value, _)| value.trim() == text)
+        })
+        .unwrap_or_else(|| panic!("no run containing {text:?} in {xml}"))
+}
+
+fn latin_font<'a>(xml: &'a str, slot: &str) -> &'a str {
+    let (_, fonts) = xml.split_once("<w:rFonts ").expect("direct rFonts");
+    let (tag, _) = fonts.split_once('>').expect("end of rFonts");
+    let (_, value) = tag
+        .split_once(&format!(r#"w:{slot}=""#))
+        .unwrap_or_else(|| panic!("missing w:{slot} in {tag}"));
+    value.split_once('"').expect("end of font name").0
+}
+
+#[test]
+fn raw_block_tokens_use_the_ordered_code_font_not_the_body_font() {
+    let fonts = std::path::PathBuf::from("../../tests/fonts");
+    let doc = crate::common::fixture_document_with_font_dirs("raw_ordered_font_fallback", &[fonts]);
+    let package = fixture_package_from_document(&doc);
+    let (_, code_style) = package
+        .part_text("word/styles.xml")
+        .split_once(r#"w:styleId="CodeBlock""#)
+        .expect("CodeBlock style");
+    let code_style = code_style.split_once("</w:style>").expect("style end").0;
+    // Typst's 0.8em raw size rounds to 18 half-points at the default 11pt text size.
+    assert!(code_style.contains(r#"<w:sz w:val="18"/>"#), "{code_style}");
+    let xml = package.part_text("word/document.xml");
+    let inline = paragraph_containing(xml, "inlineToken");
+    assert!(!inline.contains(r#"<w:pStyle w:val="CodeBlock"/>"#));
+    for slot in ["ascii", "hAnsi"] {
+        assert_eq!(latin_font(code_style, slot), "Zed Sans");
+        assert_eq!(
+            latin_font(run_containing(xml, "StyledProse"), slot),
+            "New Computer Modern"
+        );
+        assert_eq!(
+            latin_font(run_containing(inline, "inlineToken"), slot),
+            "Zed Sans"
+        );
+    }
+    for (token, color) in [
+        ("def", "D73948"),
+        ("blockToken", "4B69C6"),
+        ("return", "D73948"),
+    ] {
+        let paragraph = paragraph_containing(xml, token);
+        assert!(paragraph.contains(r#"<w:pStyle w:val="CodeBlock"/>"#));
+        let run = run_containing(paragraph, token);
+        // Direct formatting takes priority, but a size matching CodeBlock is inherited.
+        if run.contains("<w:sz ") {
+            assert!(run.contains(r#"<w:sz w:val="18"/>"#), "{run}");
+        }
+        for slot in ["ascii", "hAnsi"] {
+            assert_eq!(latin_font(run, slot), latin_font(code_style, slot), "{run}");
+        }
+        assert!(
+            run.contains(&format!(r#"<w:color w:val="{color}"/>"#)),
+            "{run}"
+        );
+    }
+}
+
+#[test]
+fn ordered_font_fallback_uses_available_face_before_missing_tail() {
+    use typst::World as _;
+
+    let path = crate::common::fixture_path("ordered_font_fallback");
+    let fonts = std::path::PathBuf::from("../../tests/fonts");
+    let world = tydocx_core::TydocxWorld::with_font_dirs(&path, &[fonts]).unwrap();
+    let doc = tydocx_core::convert::convert(&world, &tydocx_core::ConvertOptions::default())
+        .unwrap()
+        .document;
+    let package = fixture_package_from_document(&doc);
+    let xml = package.part_text("word/document.xml");
+    let run = run_containing(xml, "Ж");
+    assert!(run.contains(r#"w:ascii="Libertinus Serif""#), "{run}");
+    assert!(!xml.contains("TyDocx Missing Tail"), "{xml}");
+
+    // This also tests the actual East Asian slot on systems with the thesis font.
+    if world.book().contains_family("simsun") {
+        let run = run_containing(xml, "感谢模板。");
+        assert!(
+            run.contains(r#"w:eastAsia="宋体""#) || run.contains(r#"w:eastAsia="SimSun""#),
+            "{run}"
+        );
+        assert!(!xml.contains("TyDocx Missing CJK Tail"), "{xml}");
+    }
+}
+
+#[test]
+fn mixed_font_covers_splits_conflicting_ranges_of_one_text_element() {
+    let xml = fixture_doc_xml("mixed_font_covers");
+    for (text, expected) in [
+        ("A", "Libertinus Serif"),
+        ("—", "New Computer Modern"),
+        ("B", "Libertinus Serif"),
+    ] {
+        let run = run_containing(&xml, text);
+        assert!(run.contains(&format!(r#"w:ascii="{expected}""#)), "{run}");
+        if text == "—" {
+            assert!(
+                run.contains(&format!(r#"w:eastAsia="{expected}""#)),
+                "{run}"
+            );
+        }
     }
 }
 

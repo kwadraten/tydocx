@@ -11,6 +11,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
+
 use crate::common;
 
 /// Whitespace-insensitive comparison text: the writer inserts spaces at run
@@ -96,10 +98,14 @@ sum(1 for _ in doc.paragraphs)
 #[test]
 fn conformance_fingerprint_is_deterministic_and_id_agnostic() {
     for fixture in ["general_elements", "issue_nested_table_alignment"] {
-        let a = tydocx_ooxml::canonical::canonical_fingerprint(&common::fixture_doc_xml(fixture))
-            .unwrap();
-        let b = tydocx_ooxml::canonical::canonical_fingerprint(&common::fixture_doc_xml(fixture))
-            .unwrap();
+        let fingerprint = || {
+            tydocx_ooxml::canonical::canonical_fingerprint(&common::fixture_doc_xml_uncached(
+                fixture,
+            ))
+            .unwrap()
+        };
+        let a = fingerprint();
+        let b = fingerprint();
         assert_eq!(a, b, "{fixture}: fingerprint must be deterministic");
     }
 }
@@ -122,113 +128,121 @@ const EXPECTED_COMPILE_ERRORS: &[&str] = &[
 /// to a named generated/degraded construct.
 #[test]
 fn conformance_paragraph_census() {
-    let mut failures = Vec::new();
-    for fixture in common::all_fixtures() {
-        if EXPECTED_COMPILE_ERRORS.contains(&fixture.as_str()) {
-            continue;
-        }
-        let (ir, outcome) = common::fixture_ir_and_outcome(&fixture);
-        let package = common::fixture_package_from_document(&outcome.document);
-        // `document.xml` paragraphs are the strict half of the census: they
-        // must trace to the IR. IR texts may legitimately land in other
-        // parts — footnote bodies (sourced from the companion
-        // `PagedDocument`) go to `word/footnotes.xml` — so the IR -> output
-        // check accepts any word part as a landing zone. Paragraphs in
-        // non-document parts are the converse named source
-        // (`paged-footnote-body`, `page-furniture`) and skip tracing.
-        let mut body_paras: Vec<String> = Vec::new();
-        let mut all_part_paras: Vec<String> = Vec::new();
-        for part in package.part_names() {
-            if !part.starts_with("word/") || !part.ends_with(".xml") {
-                continue;
+    let failures = common::all_fixtures()
+        .par_iter()
+        .map(|fixture| {
+            let mut failures = Vec::new();
+            if EXPECTED_COMPILE_ERRORS.contains(&fixture.as_str()) {
+                return failures;
             }
-            let texts = tydocx_ooxml::canonical::paragraph_texts(package.part_text(part))
-                .unwrap_or_default();
-            if part == "word/document.xml" {
-                body_paras = texts;
-            } else {
-                all_part_paras.extend(texts);
-            }
-        }
-        let texts = common::ir::ir_texts(&ir);
-        let out_joined = normalize(&format!(
-            "{}\n{}",
-            body_paras.join("\n"),
-            all_part_paras.join("\n")
-        ));
-        let out_paras = &body_paras;
-        // Bibliography entry bodies are IR content too: they used to render
-        // only out-of-band (Word's bibliography field), but the visible
-        // entry cache now also emits them as document paragraphs.
-        let ir_joined = normalize(&format!(
-            "{}\n{}",
-            texts.paragraphs.join("\n"),
-            texts.out_of_band.join("\n")
-        ));
-
-        // IR -> output: every non-empty IR paragraph reaches the package.
-        for para in &texts.paragraphs {
-            let text = normalize(para);
-            if text.is_empty() || out_joined.contains(&text) {
-                continue;
-            }
-            // The paragraph's text may be a strict subset of an output
-            // paragraph (a generated prefix was prepended).
-            if out_paras.iter().any(|out| {
-                let out = normalize(out);
-                out.contains(&text) && out.len() >= text.len()
-            }) {
-                continue;
-            }
-            failures.push(format!("{fixture}: IR paragraph dropped: {text:?}"));
-        }
-        // `out_of_band` texts (bibliography bodies) are excluded above: they
-        // render from `customXml/sources.xml` inside Word — a named
-        // degradation of this backend, not a drop.
-
-        // output -> IR: every non-empty output paragraph traces to IR text,
-        // possibly after stripping generated fragments: a TOC entry is its
-        // heading title (IR text) plus a generated page number, so one
-        // generated prefix and/or suffix may be stripped.
-        for out in out_paras {
-            let text = normalize(out);
-            if text.is_empty() || ir_joined.contains(&text) {
-                continue;
-            }
-            let mut candidates = vec![text.as_str()];
-            for generated in &texts.generated {
-                let frag = normalize(generated);
-                if frag.is_empty() {
+            let fixture = fixture.as_str();
+            let (ir, outcome) = common::fixture_ir_and_outcome(fixture);
+            let package = common::fixture_package_from_document(&outcome.document);
+            // `document.xml` paragraphs are the strict half of the census: they
+            // must trace to the IR. IR texts may legitimately land in other
+            // parts — footnote bodies (sourced from the companion
+            // `PagedDocument`) go to `word/footnotes.xml` — so the IR -> output
+            // check accepts any word part as a landing zone. Paragraphs in
+            // non-document parts are the converse named source
+            // (`paged-footnote-body`, `page-furniture`) and skip tracing.
+            let mut body_paras: Vec<String> = Vec::new();
+            let mut all_part_paras: Vec<String> = Vec::new();
+            for part in package.part_names() {
+                if !part.starts_with("word/") || !part.ends_with(".xml") {
                     continue;
                 }
-                if let Some(rest) = text.strip_prefix(frag.as_str()) {
-                    candidates.push(rest);
-                }
-                if let Some(rest) = text.strip_suffix(frag.as_str()) {
-                    candidates.push(rest);
+                let texts = tydocx_ooxml::canonical::paragraph_texts(package.part_text(part))
+                    .unwrap_or_default();
+                if part == "word/document.xml" {
+                    body_paras = texts;
+                } else {
+                    all_part_paras.extend(texts);
                 }
             }
-            let mut paired = candidates.clone();
-            for base in candidates {
+            let texts = common::ir::ir_texts(&ir);
+            let out_joined = normalize(&format!(
+                "{}\n{}",
+                body_paras.join("\n"),
+                all_part_paras.join("\n")
+            ));
+            let out_paras = &body_paras;
+            // Bibliography entry bodies are IR content too: they used to render
+            // only out-of-band (Word's bibliography field), but the visible
+            // entry cache now also emits them as document paragraphs.
+            let ir_joined = normalize(&format!(
+                "{}\n{}",
+                texts.paragraphs.join("\n"),
+                texts.out_of_band.join("\n")
+            ));
+
+            // IR -> output: every non-empty IR paragraph reaches the package.
+            for para in &texts.paragraphs {
+                let text = normalize(para);
+                if text.is_empty() || out_joined.contains(&text) {
+                    continue;
+                }
+                // The paragraph's text may be a strict subset of an output
+                // paragraph (a generated prefix was prepended).
+                if out_paras.iter().any(|out| {
+                    let out = normalize(out);
+                    out.contains(&text) && out.len() >= text.len()
+                }) {
+                    continue;
+                }
+                failures.push(format!("{fixture}: IR paragraph dropped: {text:?}"));
+            }
+            // `out_of_band` texts (bibliography bodies) are excluded above: they
+            // render from `customXml/sources.xml` inside Word — a named
+            // degradation of this backend, not a drop.
+
+            // output -> IR: every non-empty output paragraph traces to IR text,
+            // possibly after stripping generated fragments: a TOC entry is its
+            // heading title (IR text) plus a generated page number, so one
+            // generated prefix and/or suffix may be stripped.
+            for out in out_paras {
+                let text = normalize(out);
+                if text.is_empty() || ir_joined.contains(&text) {
+                    continue;
+                }
+                let mut candidates = vec![text.as_str()];
                 for generated in &texts.generated {
                     let frag = normalize(generated);
                     if frag.is_empty() {
                         continue;
                     }
-                    if let Some(rest) = base.strip_prefix(frag.as_str()) {
-                        paired.push(rest);
+                    if let Some(rest) = text.strip_prefix(frag.as_str()) {
+                        candidates.push(rest);
                     }
-                    if let Some(rest) = base.strip_suffix(frag.as_str()) {
-                        paired.push(rest);
+                    if let Some(rest) = text.strip_suffix(frag.as_str()) {
+                        candidates.push(rest);
                     }
                 }
+                let mut paired = candidates.clone();
+                for base in candidates {
+                    for generated in &texts.generated {
+                        let frag = normalize(generated);
+                        if frag.is_empty() {
+                            continue;
+                        }
+                        if let Some(rest) = base.strip_prefix(frag.as_str()) {
+                            paired.push(rest);
+                        }
+                        if let Some(rest) = base.strip_suffix(frag.as_str()) {
+                            paired.push(rest);
+                        }
+                    }
+                }
+                if paired.iter().any(|c| c.is_empty() || ir_joined.contains(c)) {
+                    continue;
+                }
+                failures.push(format!("{fixture}: untraceable output paragraph: {text:?}"));
             }
-            if paired.iter().any(|c| c.is_empty() || ir_joined.contains(c)) {
-                continue;
-            }
-            failures.push(format!("{fixture}: untraceable output paragraph: {text:?}"));
-        }
-    }
+            failures
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     assert!(
         failures.is_empty(),
         "census failures:\n{}",
@@ -282,16 +296,26 @@ fn conformance_ir_variant_coverage() {
     // properties. Both stay in the `IrInline` vocabulary because `lower`
     // still handles them for the shared IR model.
     const INLINE_UNPRODUCED: &[&str] = &["PageBreak", "Tab"];
-    let mut blocks = BTreeSet::new();
-    let mut inlines = BTreeSet::new();
-    for fixture in common::all_fixtures() {
-        if EXPECTED_COMPILE_ERRORS.contains(&fixture.as_str()) {
-            continue;
-        }
-        let (ir, _) = common::fixture_ir_and_outcome(&fixture);
-        blocks.extend(common::ir::block_variants(&ir));
-        inlines.extend(common::ir::inline_variants(&ir));
-    }
+    let (blocks, inlines) = common::all_fixtures()
+        .par_iter()
+        .map(|fixture| {
+            if EXPECTED_COMPILE_ERRORS.contains(&fixture.as_str()) {
+                return (BTreeSet::new(), BTreeSet::new());
+            }
+            let (ir, _) = common::fixture_ir_and_outcome(fixture);
+            (
+                common::ir::block_variants(&ir),
+                common::ir::inline_variants(&ir),
+            )
+        })
+        .reduce(
+            || (BTreeSet::new(), BTreeSet::new()),
+            |(mut blocks, mut inlines), (next_blocks, next_inlines)| {
+                blocks.extend(next_blocks);
+                inlines.extend(next_inlines);
+                (blocks, inlines)
+            },
+        );
     let missing_blocks: Vec<&&str> = BLOCK_ALL.iter().filter(|b| !blocks.contains(**b)).collect();
     let missing_inlines: Vec<&&str> = INLINE_ALL
         .iter()

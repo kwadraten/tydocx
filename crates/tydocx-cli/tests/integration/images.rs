@@ -57,8 +57,7 @@ fn text_figure_does_not_steal_drawing_raster() {
 #[test]
 fn image_inside_rounded_container_embedded() {
     let doc_xml = fixture_doc_xml("rounded_container_image");
-    let embedded =
-        doc_xml.matches("<a:blip ").count() - doc_xml.matches("<mc:AlternateContent").count();
+    let embedded = doc_xml.matches("<a:blip ").count();
     assert_eq!(
         embedded, 2,
         "both the rounded-container image and the figure image must embed"
@@ -430,4 +429,82 @@ fn image_alt_text_written_to_doc_pr_descr() {
         xml.contains(r#"descr="sample photo""#),
         "alt text should be written to wp:docPr descr"
     );
+}
+
+#[test]
+fn identical_image_bytes_keep_each_occurrences_extent_and_crop() {
+    use tydocx_ooxml::document::{BlockElement, InlineElement, SrcRect};
+
+    let doc = fixture_document("image_occurrences");
+    let images: Vec<_> = doc
+        .body
+        .elements
+        .iter()
+        .filter_map(|element| match element {
+            BlockElement::Paragraph(para) => para.inlines.iter().find_map(|inline| match inline {
+                InlineElement::Image(image) => Some(image),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images.len(), 3);
+    assert!(images[0].svg.is_some());
+    assert!(images.windows(2).all(|pair| pair[0].svg == pair[1].svg));
+    for (image, (w, h, crop)) in images.iter().zip([
+        (20, 20, None),
+        (
+            44,
+            22,
+            Some(SrcRect {
+                l: 0,
+                t: 25_000,
+                r: 0,
+                b: 25_000,
+            }),
+        ),
+        (
+            32,
+            48,
+            Some(SrcRect {
+                l: 16_667,
+                t: 0,
+                r: 16_667,
+                b: 0,
+            }),
+        ),
+    ]) {
+        // All four images come from one invocation span (the helper body), and
+        // the same bytes were already drawn before the first body image in the header.
+        assert!(image.width_emu.abs_diff(w * 12_700) <= 1);
+        assert!(image.height_emu.abs_diff(h * 12_700) <= 1);
+        assert_eq!(image.src_rect, crop);
+    }
+}
+
+#[test]
+fn standalone_images_keep_alignment_without_the_prose_first_line_indent() {
+    let package = fixture_package("image_occurrences");
+    let xml = package.part_text("word/document.xml");
+    let images: Vec<_> = xml
+        .split("</w:p>")
+        .filter(|para| para.contains("<wp:inline "))
+        .collect();
+    assert_eq!(images.len(), 3);
+    // Includes a picture immediately after a heading, with the document-wide
+    // indent set to apply even to the first prose paragraph after a heading.
+    for (paragraph, alignment) in images.into_iter().zip(["left", "center", "right"]) {
+        assert!(
+            paragraph.contains(&format!(r#"<w:jc w:val="{alignment}"/>"#)),
+            "{paragraph}"
+        );
+        assert!(paragraph.contains(r#"w:firstLine="0""#), "{paragraph}");
+        assert!(paragraph.contains(r#"w:firstLineChars="0""#), "{paragraph}");
+    }
+    let prose = common::paragraph_containing(xml, "Ordinary indented prose.");
+    assert!(!prose.contains(r#"w:firstLine="0""#), "{prose}");
+    assert!(!prose.contains(r#"w:firstLineChars="0""#), "{prose}");
+    let styles = package.part_text("word/styles.xml");
+    assert!(styles.contains(r#"w:firstLine="480""#), "{styles}");
+    assert!(styles.contains(r#"w:firstLineChars="200""#), "{styles}");
 }

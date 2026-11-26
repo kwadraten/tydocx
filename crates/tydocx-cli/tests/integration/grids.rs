@@ -11,6 +11,87 @@ fn count(haystack: &str, needle: &str) -> usize {
     haystack.matches(needle).count()
 }
 
+fn rect_fixture_cell<'a>(xml: &'a str, text: &str) -> &'a str {
+    let needle = format!(">{text}</w:t>");
+    assert_eq!(count(xml, &needle), 1, "{text:?} must appear exactly once");
+    xml.split("<w:tc>")
+        .skip(1)
+        .filter_map(|part| part.split_once("</w:tc>").map(|(cell, _)| cell))
+        .find(|cell| cell.contains(&needle))
+        .unwrap_or_else(|| panic!("{text:?} is not inside a Word cell"))
+}
+
+#[test]
+fn grid_cell_rect_flows_in_native_word_cells() {
+    let xml = fixture_doc_xml("grid_cell_rect");
+    for text in [
+        "Plain label",
+        "10304260814203019984",
+        "Spanning value",
+        "Planned value",
+    ] {
+        let cell = rect_fixture_cell(&xml, text);
+        assert!(
+            !cell.contains("<w:drawing>"),
+            "{text:?} must reflow normally"
+        );
+        let (properties, content) = cell.split_once("</w:tcPr>").expect("cell properties");
+        let paragraph = content
+            .trim_start()
+            .strip_prefix("<w:p>")
+            .expect("a paragraph directly inside the cell");
+        let (_, runs) = paragraph
+            .split_once("</w:pPr>")
+            .expect("paragraph properties");
+        let run = runs
+            .trim_start()
+            .strip_prefix("<w:r>")
+            .and_then(|run| run.split_once("</w:r>").map(|(run, _)| run))
+            .expect("a run directly inside the paragraph");
+        assert!(run.contains(&format!(">{text}</w:t>")), "{run}");
+        if text != "Plain label" {
+            let margins = properties
+                .split_once("<w:tcMar>")
+                .expect("rectangle inset")
+                .1;
+            assert!(margins.contains(r#"<w:top w:w="100" w:type="dxa"/>"#));
+            assert!(margins.contains(r#"<w:left w:w="0" w:type="dxa"/>"#));
+            assert!(margins.contains(r#"<w:bottom w:w="20" w:type="dxa"/>"#));
+        }
+    }
+
+    // The fixed-row grid exercises the grid planner; the ordinary grid
+    // exercises the fallback table path with the original colspan.
+    let (generic, planned) = xml.split_once(r#"<w:tblLayout w:type="fixed"/>"#).unwrap();
+    assert!(generic.contains("Spanning value") && !generic.contains("Planned value"));
+    assert!(planned.contains("Planned value") && !planned.contains("Spanning value"));
+    for (text, span) in [("Spanning value", 3), ("Planned value", 2)] {
+        let cell = rect_fixture_cell(&xml, text);
+        assert!(cell.contains(&format!(r#"<w:gridSpan w:val="{span}"/>"#)));
+        assert!(
+            cell.contains(r#"<w:bottom w:val="single" w:sz="4" w:space="0" w:color="13579B"/>"#)
+        );
+    }
+    let aligned = rect_fixture_cell(&xml, "Spanning value");
+    assert!(aligned.contains(r#"<w:vAlign w:val="bottom"/>"#));
+    assert!(aligned.contains(r#"<w:jc w:val="center"/>"#));
+}
+
+#[test]
+fn grid_cell_rect_keeps_drawings_when_the_border_or_geometry_is_not_equivalent() {
+    let xml = fixture_doc_xml("grid_cell_rect");
+    for text in ["Rounded", "Own edge", "Shared edge"] {
+        let cell = rect_fixture_cell(&xml, text);
+        assert!(cell.contains("<w:drawing>"));
+        assert!(cell.contains("<wps:txbx>"));
+        assert!(!cell.contains(r#"w:color="13579B""#));
+    }
+    assert!(rect_fixture_cell(&xml, "Own edge").contains(r#"<w:bottom w:val="single" w:sz="8""#));
+    assert!(rect_fixture_cell(&xml, "Neighbor").contains(r#"<w:top w:val="single" w:sz="8""#));
+    assert_eq!(count(&xml, "<wps:txbx>"), 4);
+    assert_eq!(count(&xml, ">Outside grid</w:t>"), 1);
+}
+
 #[test]
 fn timetable_grid_emits_fixed_layout_table() {
     let xml = fixture_doc_xml("grid_timetable");

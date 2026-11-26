@@ -17,6 +17,7 @@ tydocx-ooxml.workspace = true
 typst.workspace = true
 
 [dev-dependencies]
+rayon = "1.12"
 tydocx-ir.workspace = true
 zip.workspace = true
 # `PagedDocument` moved out of `typst::layout` into the `typst-layout` crate in

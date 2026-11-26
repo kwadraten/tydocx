@@ -585,6 +585,148 @@ fn issue_page_numbering_change_c2_emits_fmt_and_restart() {
     );
 }
 
+fn section_properties(xml: &str) -> Vec<&str> {
+    xml.split("<w:sectPr>")
+        .skip(1)
+        .map(|section| section.split_once("</w:sectPr>").unwrap().0)
+        .collect()
+}
+
+#[test]
+fn odd_openings_and_numbering_restarts_belong_to_their_own_sections() {
+    let package = fixture_package("section_parity_page_footer");
+    let xml = package.part_text("word/document.xml");
+    let settings = package.part_text("word/settings.xml");
+    let properties = section_properties(xml);
+    assert!(settings.contains("<w:mirrorMargins/>"), "{settings}");
+    assert!(
+        !properties[0].contains("oddPage") && !properties[0].contains("footerReference"),
+        "{xml}"
+    );
+    assert!(
+        properties[1].contains("oddPage") && !properties[1].contains("footerReference"),
+        "{xml}"
+    );
+    assert!(
+        properties[3].contains(r#"<w:pgNumType w:fmt="upperRoman" w:start="1"/>"#),
+        "{xml}"
+    );
+    assert!(!properties[3].contains("oddPage"), "{xml}");
+    assert!(
+        properties[5].contains("oddPage") && properties[5].contains("footerReference"),
+        "{xml}"
+    );
+    assert!(!properties[5].contains("w:start="), "{xml}");
+    assert!(
+        properties
+            .last()
+            .unwrap()
+            .contains(r#"<w:pgNumType w:fmt="decimal" w:start="1"/>"#),
+        "{xml}"
+    );
+    assert!(!xml.contains("headerReference"), "{xml}");
+
+    // These three source blanks have their own sections so WPS neither drops a
+    // break beside a section boundary nor omits the PAGE field on a parity filler.
+    assert_eq!(xml.matches('\u{a0}').count(), 3, "{xml}");
+    assert!(!properties[2].contains("footerReference"), "{xml}");
+    for filler in [properties[4], properties[6]] {
+        assert!(
+            filler.contains("footerReference") && !filler.contains("w:start="),
+            "{xml}"
+        );
+    }
+    assert_eq!(xml.matches(r#"w:br w:type="page""#).count(), 1, "{xml}");
+    let footer = package.part_text("word/footer1.xml");
+    assert!(
+        footer.contains(" PAGE ") && footer.contains(r#"w:val="center""#),
+        "{footer}"
+    );
+}
+
+#[test]
+fn a_hidden_numbered_section_uses_an_empty_footer_without_restarting() {
+    let package = fixture_package("section_number_footer_visibility");
+    let xml = package.part_text("word/document.xml");
+    let properties = section_properties(xml);
+    assert!(
+        !xml.contains("oddPage") && !xml.contains("evenPage"),
+        "{xml}"
+    );
+    assert!(
+        !properties[0].contains("footerReference") && !properties[0].contains("pgNumType"),
+        "{xml}"
+    );
+    assert!(
+        properties[1].contains(r#"<w:pgNumType w:fmt="upperRoman" w:start="1"/>"#),
+        "{xml}"
+    );
+    assert!(
+        properties[2].contains(r#"<w:pgNumType w:fmt="upperRoman"/>"#),
+        "{xml}"
+    );
+    let footer_ref = |index: usize| {
+        properties[index]
+            .split_once(r#"w:type="default" r:id=""#)
+            .unwrap()
+            .1
+            .split_once('"')
+            .unwrap()
+            .0
+    };
+    assert_eq!(
+        footer_ref(1),
+        footer_ref(3),
+        "both Roman sections use PAGE: {xml}"
+    );
+    assert_ne!(
+        footer_ref(1),
+        footer_ref(2),
+        "omitting a ref here would inherit PAGE: {xml}"
+    );
+    assert_eq!(
+        footer_ref(1),
+        footer_ref(4),
+        "decimal can share the PAGE field: {xml}"
+    );
+    assert!(
+        properties[4].contains(r#"<w:pgNumType w:fmt="decimal" w:start="1"/>"#),
+        "{xml}"
+    );
+    let rels = package.part_text("word/_rels/document.xml.rels");
+    assert!(
+        rels.split("<Relationship ").any(|rel| {
+            rel.contains(&format!(r#"Id="{}""#, footer_ref(2)))
+                && rel.contains(r#"Target="footer4.xml""#)
+        }),
+        "{rels}"
+    );
+    assert!(!package.part_text("word/footer4.xml").contains(" PAGE "));
+    let footer_distance = |section: &str| {
+        section
+            .split_once(r#"w:footer=""#)
+            .unwrap()
+            .1
+            .split_once('"')
+            .unwrap()
+            .0
+            .parse::<u32>()
+            .unwrap()
+    };
+    assert_ne!(footer_distance(properties[1]), 0, "{xml}");
+    let parity = fixture_package("section_parity_page_footer");
+    let parity_distance = footer_distance(
+        section_properties(parity.part_text("word/document.xml"))
+            .into_iter()
+            .find(|section| section.contains("upperRoman"))
+            .unwrap(),
+    );
+    assert!(
+        footer_distance(properties[1]) > parity_distance,
+        "the 66pt bottom margin must place PAGE further from the bottom than the 50pt margin"
+    );
+}
+
 /// The run that contains `text` carries `<w:b/>` iff `bold` holds.
 fn run_boldness(xml: &str, text: &str) -> Option<bool> {
     let text_at = xml.find(text)?;

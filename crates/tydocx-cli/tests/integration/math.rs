@@ -990,14 +990,22 @@ fn issue_section_equation_numbering_refs() {
     let xml = fixture_doc_xml("issue_section_equation_numbering");
     assert!(xml.contains("Introduction"), "heading should be present");
     assert!(xml.contains("Methods"), "second heading should be present");
-    assert!(
-        xml.matches("<m:oMathPara>").count() >= 3,
-        "should have at least 3 display equations"
-    );
+    let equations: Vec<_> = xml
+        .split("<w:p>")
+        .filter(|p| p.contains("<m:oMath>"))
+        .collect();
+    assert_eq!(equations.len(), 3);
+    for (equation, number) in equations.iter().zip(["(1.1)", "(1.2)", "(2.1)"]) {
+        assert!(
+            equation.contains(&format!("<w:t xml:space=\"preserve\">{number}</w:t>")),
+            "{equation}"
+        );
+    }
     assert!(
         xml.matches("w:bookmarkStart").count() >= 3,
         "labeled equations should produce bookmarks"
     );
+    assert!(xml.contains(" REF eq:newton "), "{xml}");
 }
 
 #[test]

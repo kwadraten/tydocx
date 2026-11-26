@@ -208,8 +208,10 @@ fn block_texts<'a>(
             }
             IrBlock::Bibliography { entries } => {
                 for entry in entries {
-                    if let Some(marker) = &entry.marker {
-                        generated.insert(format!("{marker} "));
+                    if let Some(inlines) = &entry.marker {
+                        let mut marker = String::new();
+                        inline_text(inlines, &mut marker, generated, paragraphs);
+                        generated.insert(marker);
                     }
                     let mut text = String::new();
                     inline_text(&entry.body, &mut text, generated, paragraphs);

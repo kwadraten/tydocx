@@ -2,7 +2,7 @@
 //! citations line). Fixtures live under `tests/fixtures/citation_*`,
 //! `bibliography_prefix_*`, and `ref_*`.
 
-use crate::common::{fixture_doc_xml, fixture_package_with_options};
+use crate::common::{fixture_doc_xml, fixture_package_with_options, paragraph_containing};
 use tydocx_core::{CompatMode, ConvertOptions};
 
 /// `(w:anchor, concatenated w:t)` for every hyperlink in the document part.
@@ -160,14 +160,17 @@ fn bibliography_entries_carry_ieee_markers() {
     // The "[n]" marker is extracted from the entry's own prefix runs — never
     // reconstructed by position.
     let xml = fixture_doc_xml("bibliography_prefix_ieee");
-    assert!(
-        xml.contains("[1] N. Kudo"),
-        "entry must carry its extracted \"[1]\" marker: {xml}"
-    );
-    assert!(
-        xml.contains("[2] J. Smith"),
-        "entry must carry its extracted \"[2]\" marker: {xml}"
-    );
+    assert_numbered_entries(&xml);
+}
+
+fn assert_numbered_entries(xml: &str) {
+    for (author, marker) in [("N. Kudo", "[1]"), ("J. Smith", "[2]")] {
+        let entry = paragraph_containing(xml, author);
+        let (label, body) = entry
+            .split_once("<w:tab/>")
+            .expect("marker and body have separate slots");
+        assert!(label.contains(marker) && body.contains(author), "{entry}");
+    }
 }
 
 #[test]
@@ -194,10 +197,7 @@ fn bibliography_at_c2_emits_plain_paragraphs() {
         !xml.contains("<w:bibliography") && !xml.contains(" BIBLIOGRAPHY "),
         "C2 must not emit the bibliography field/SDT: {xml}"
     );
-    assert!(
-        xml.contains("[1] N. Kudo"),
-        "entries still emit as plain paragraphs: {xml}"
-    );
+    assert_numbered_entries(&xml);
 }
 
 #[test]
@@ -207,12 +207,7 @@ fn bibliography_at_c3_emits_sdt_with_field_cache() {
         xml.contains("<w:bibliography") && xml.contains(" BIBLIOGRAPHY "),
         "C3 should emit the bibliography SDT + BIBLIOGRAPHY field: {xml}"
     );
-    for needle in ["[1] N. Kudo", "[2] J. Smith"] {
-        assert!(
-            xml.contains(needle),
-            "formatted entry missing from the field cache: {needle}"
-        );
-    }
+    assert_numbered_entries(&xml);
 }
 
 #[test]

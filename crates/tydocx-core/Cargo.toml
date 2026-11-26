@@ -28,3 +28,4 @@ base64.workspace = true
 hayagriva.workspace = true
 time.workspace = true
 ttf-parser.workspace = true
+unicode-segmentation = "1"

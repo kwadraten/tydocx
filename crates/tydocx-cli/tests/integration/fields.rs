@@ -621,9 +621,15 @@ fn citations_emit_citation_fields_and_sources() {
 fn external_links_use_the_hyperlink_field_form() {
     for mode in [CompatMode::C2, CompatMode::C3] {
         let doc = part("fields_hyperlink", mode, "word/document.xml");
+        // XML escaping happens once at serialization: the field instruction
+        // contains real quotes, not a literal &quot; in WPS's link target.
         assert!(
-            doc.contains("HYPERLINK &amp;quot;https://example.com&amp;quot;"),
+            doc.contains("HYPERLINK &quot;https://example.com&quot;"),
             "{mode:?}: external links emit the HYPERLINK field: {doc}"
+        );
+        assert!(
+            !doc.contains("&amp;quot;"),
+            "{mode:?}: double escaping: {doc}"
         );
         assert!(
             doc.contains(">the example site<"),

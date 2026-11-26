@@ -464,6 +464,35 @@ fn heading_style<'a>(styles_xml: &'a str, level: u8) -> &'a str {
 }
 
 #[test]
+fn run_size_is_omitted_only_when_the_paragraph_inherits_it() {
+    let fixture = "run_size_inheritance";
+    let styles = fixture_styles_xml(fixture);
+    assert!(heading_style(&styles, 1).contains(r#"<w:sz w:val="36"/>"#));
+    let normal = styles
+        .split_once(r#"w:styleId="Normal""#)
+        .unwrap()
+        .1
+        .split("</w:style>")
+        .next()
+        .unwrap();
+    assert!(normal.contains(r#"<w:sz w:val="22"/>"#));
+
+    let xml = fixture_doc_xml(fixture);
+    let run_of = |text: &str| {
+        xml.split("<w:r>")
+            .filter_map(|tail| tail.split_once("</w:r>").map(|(run, _)| run))
+            .find(|run| run.contains(text))
+            .unwrap_or_else(|| panic!("missing run for {text}"))
+    };
+    assert!(!run_of("Ordinary document text").contains("<w:sz "));
+    assert!(run_of("Declaration size override").contains(r#"<w:sz w:val="30"/>"#));
+    assert!(!run_of("linked title").contains("<w:sz "));
+    // Eleven points matches Normal, not Heading1. Removing this override
+    // based on the document default would silently enlarge the span.
+    assert!(run_of("smaller title").contains(r#"<w:sz w:val="22"/>"#));
+}
+
+#[test]
 fn issue_heading_size_equals_body() {
     // An H2 explicitly set to 10pt, below the 11pt body size (Typst 0.15.1
     // default): the Heading2 style must carry 20 half-points — the size
@@ -515,7 +544,7 @@ fn issue_pageref_field_for_page_counter_reference() {
     // as the cached display text — the same shape as the existing REF field.
     let xml = fixture_doc_xml("issue_pageref");
     assert!(
-        xml.contains("PAGEREF intro"),
+        xml.contains(" PAGEREF intro \\h "),
         "page reference should emit a PAGEREF field:\n{xml}"
     );
     assert!(

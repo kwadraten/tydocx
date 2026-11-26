@@ -8,6 +8,41 @@ use crate::common::{
 use tydocx_core::{CompatMode, ConvertOptions};
 
 #[test]
+fn declaration_grid_and_table_preserve_real_cell_paragraphs() {
+    let xml = fixture_doc_xml("declaration_flow");
+    let cells: Vec<_> = xml
+        .split("<w:tc>")
+        .skip(1)
+        .map(|cell| cell.split("</w:tc>").next().expect("cell body"))
+        .collect();
+    let signature = cells
+        .iter()
+        .find(|cell| cell.contains("Signature:"))
+        .expect("signature cell");
+    assert_eq!(
+        paragraph_texts(signature),
+        ["Signature:", "Record number:", "Date of signature:"]
+    );
+    // Typst collapses the inherited gap at the bottom edge of the cell,
+    // not between the three editable paragraphs.
+    assert!(!paragraph_containing(signature, "Record number:").contains(r#"w:after="0""#));
+    assert!(paragraph_containing(signature, "Date of signature:").contains(r#"w:after="0""#));
+    let styled = cells
+        .iter()
+        .find(|cell| cell.contains("boundary"))
+        .expect("styled cell");
+    // A styled span crosses the parbreak, but must not also split at its edges.
+    assert_eq!(
+        paragraph_texts(styled),
+        [
+            "Cell styled words before a boundary",
+            "Cell second continues here.",
+            "Cell third"
+        ]
+    );
+}
+
+#[test]
 fn three_line_table_is_not_a_boxed_grid() {
     // Regression: a three-line table was emitted as a full grid. See
     // the `edge_three_line_table` fixture.
@@ -107,7 +142,7 @@ fn table_cell_supports_merged_cell_fields() {
         shading: None,
         width_twips: None,
         borders: None,
-        zero_margins: false,
+        margins: None,
     };
     assert_eq!(cell.colspan, 2);
     assert_eq!(cell.vmerge, VMerge::Restart);
@@ -123,7 +158,7 @@ fn table_cell_supports_merged_cell_fields() {
         shading: None,
         width_twips: None,
         borders: None,
-        zero_margins: false,
+        margins: None,
     };
     assert_eq!(cont_cell.vmerge, VMerge::Continue);
 }
@@ -149,7 +184,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         shading: None,
                         width_twips: None,
                         borders: None,
-                        zero_margins: false,
+                        margins: None,
                     },
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -161,7 +196,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         shading: None,
                         width_twips: None,
                         borders: None,
-                        zero_margins: false,
+                        margins: None,
                     },
                 ],
             },
@@ -179,7 +214,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         shading: None,
                         width_twips: None,
                         borders: None,
-                        zero_margins: false,
+                        margins: None,
                     },
                     TableCell {
                         paragraphs: vec![Paragraph::new()],
@@ -191,7 +226,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         shading: None,
                         width_twips: None,
                         borders: None,
-                        zero_margins: false,
+                        margins: None,
                     },
                 ],
             },

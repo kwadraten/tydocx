@@ -4,8 +4,14 @@
 
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+mod fixture_cache;
 pub mod ir;
+pub(crate) mod wps;
+
+pub use self::fixture_cache::fixture_ir_and_outcome;
+use self::fixture_cache::{ConversionPath, converted_fixture};
 
 /// The path to `tests/fixtures/<fixture>.typ`.
 pub fn fixture_path(fixture: &str) -> PathBuf {
@@ -14,21 +20,7 @@ pub fn fixture_path(fixture: &str) -> PathBuf {
 
 /// Convert `tests/fixtures/<fixture>.typ` and return the public document model.
 pub fn fixture_document(fixture: &str) -> tydocx_ooxml::Document {
-    fixture_document_with_font_dirs(fixture, &[])
-}
-
-/// Convert `tests/fixtures/<fixture>.typ` through the LEGACY path
-/// (`convert_legacy`) and return the public document model.
-///
-/// Retargeted tests use this: assertions that pin legacy-only behavior
-/// (Paged recovery, bibliography entries, figure rasterization, section
-/// breaks, `#line` rules) run against the path that implements it, until
-/// the IR path covers the registered gap. See `docs/fallback-registry.md`.
-pub fn fixture_document_legacy(fixture: &str) -> tydocx_ooxml::Document {
-    let world = tydocx_core::TydocxWorld::new(&fixture_path(fixture)).unwrap();
-    tydocx_core::convert::convert_legacy(&world, &tydocx_core::ConvertOptions::default())
-        .unwrap()
-        .document
+    fixture_document_with_options(fixture, &tydocx_core::ConvertOptions::default())
 }
 
 /// Convert a fixture and return both its world and public document model.
@@ -53,8 +45,9 @@ pub fn fixture_outcome_with_options(
     fixture: &str,
     options: &tydocx_core::ConvertOptions,
 ) -> tydocx_core::ConvertOutcome {
-    let world = tydocx_core::TydocxWorld::new(&fixture_path(fixture)).unwrap();
-    tydocx_core::convert::convert(&world, options).unwrap()
+    converted_fixture(fixture, &[], options, ConversionPath::Modern)
+        .outcome
+        .clone()
 }
 
 /// Convert `tests/fixtures/<fixture>.typ` with explicit options and return
@@ -85,32 +78,10 @@ pub fn fixture_document_with_font_dirs_and_options(
     font_dirs: &[PathBuf],
     options: &tydocx_core::ConvertOptions,
 ) -> tydocx_ooxml::Document {
-    let world =
-        tydocx_core::TydocxWorld::with_font_dirs(&fixture_path(fixture), font_dirs).unwrap();
-    tydocx_core::convert::convert(&world, options)
-        .unwrap()
+    converted_fixture(fixture, font_dirs, options, ConversionPath::Modern)
+        .outcome
         .document
-}
-
-/// Compile `tests/fixtures/<fixture>.typ` once and return both the patched
-/// IR (what `lower` actually consumed) and the full conversion outcome.
-pub fn fixture_ir_and_outcome(
-    fixture: &str,
-) -> (tydocx_ir::IrDocument, tydocx_core::ConvertOutcome) {
-    let world = tydocx_core::TydocxWorld::new(&fixture_path(fixture)).unwrap();
-    let docx_doc = typst::compile::<tydocx_core::convert::DocxDocument>(&world)
-        .output
-        .unwrap();
-    let paged = typst::compile::<typst_layout::PagedDocument>(&world)
-        .output
-        .ok();
-    let (outcome, ir) = tydocx_core::convert::export_ir_with_ir(
-        &docx_doc,
-        paged.as_ref(),
-        &world,
-        &tydocx_core::ConvertOptions::default(),
-    );
-    (ir, outcome)
+        .clone()
 }
 
 /// Every `tests/fixtures/**/*.typ` name, relative without the extension, in
@@ -135,8 +106,9 @@ pub fn all_fixtures() -> Vec<String> {
 }
 
 /// The parts produced by one fixture conversion.
+#[derive(Clone)]
 pub struct FixturePackage {
-    parts: Vec<(String, Vec<u8>)>,
+    parts: Arc<[(String, Vec<u8>)]>,
     byte_len: usize,
 }
 
@@ -166,13 +138,20 @@ impl FixturePackage {
 
 /// Convert `tests/fixtures/<fixture>.typ` and return all package parts.
 pub fn fixture_package(fixture: &str) -> FixturePackage {
-    fixture_package_from_document(&fixture_document(fixture))
+    fixture_package_with_options(fixture, &tydocx_core::ConvertOptions::default())
 }
 
 /// Convert `tests/fixtures/<fixture>.typ` through the LEGACY path and
-/// return all package parts (see `fixture_document_legacy`).
+/// return all package parts. Use this to pin legacy-only behavior registered
+/// in `docs/fallback-registry.md`.
 pub fn fixture_package_legacy(fixture: &str) -> FixturePackage {
-    fixture_package_from_document(&fixture_document_legacy(fixture))
+    converted_fixture(
+        fixture,
+        &[],
+        &tydocx_core::ConvertOptions::default(),
+        ConversionPath::Legacy,
+    )
+    .package()
 }
 
 /// Convert a fixture with explicit options and return all package parts.
@@ -180,7 +159,7 @@ pub fn fixture_package_with_options(
     fixture: &str,
     options: &tydocx_core::ConvertOptions,
 ) -> FixturePackage {
-    fixture_package_from_document(&fixture_document_with_options(fixture, options))
+    converted_fixture(fixture, &[], options, ConversionPath::Modern).package()
 }
 
 /// Package a converted fixture document and return all parts.
@@ -197,7 +176,10 @@ pub fn fixture_package_from_document(doc: &tydocx_ooxml::Document) -> FixturePac
         part.read_to_end(&mut bytes).unwrap();
         parts.push((part.name().to_owned(), bytes));
     }
-    FixturePackage { parts, byte_len }
+    FixturePackage {
+        parts: parts.into(),
+        byte_len,
+    }
 }
 
 /// Convert `tests/fixtures/<fixture>.typ` and return the named docx part.
@@ -207,12 +189,17 @@ pub fn fixture_part(fixture: &str, part: &str) -> String {
 
 /// Convert `tests/fixtures/<fixture>.typ` with extra font directories loaded
 /// (e.g. `tests/fonts` for a variable-font fixture) and return the named docx
-/// part. Both this and `fixture_part` build on `fixture_document*` and
-/// `fixture_package_from_document`, so there is one conversion pipeline.
+/// part.
 pub fn fixture_part_with_font_dirs(fixture: &str, part: &str, font_dirs: &[PathBuf]) -> String {
-    fixture_package_from_document(&fixture_document_with_font_dirs(fixture, font_dirs))
-        .part_text(part)
-        .to_owned()
+    converted_fixture(
+        fixture,
+        font_dirs,
+        &tydocx_core::ConvertOptions::default(),
+        ConversionPath::Modern,
+    )
+    .package()
+    .part_text(part)
+    .to_owned()
 }
 
 /// Convert `tests/fixtures/<fixture>.typ` and return `word/document.xml`.
@@ -220,8 +207,16 @@ pub fn fixture_doc_xml(fixture: &str) -> String {
     fixture_part(fixture, "word/document.xml")
 }
 
+/// Render with a fresh world for tests that check determinism or the live clock.
+pub fn fixture_doc_xml_uncached(fixture: &str) -> String {
+    let (_, document) = fixture_document_with_world(fixture);
+    fixture_package_from_document(&document)
+        .part_text("word/document.xml")
+        .to_owned()
+}
+
 /// Convert `tests/fixtures/<fixture>.typ` through the LEGACY path and
-/// return `word/document.xml` (see `fixture_document_legacy`).
+/// return `word/document.xml`.
 pub fn fixture_doc_xml_legacy(fixture: &str) -> String {
     fixture_package_legacy(fixture)
         .part_text("word/document.xml")
@@ -264,6 +259,10 @@ pub fn paragraph_texts(doc_xml: &str) -> Vec<String> {
             let mut rest = block;
             while let Some(o) = rest.find("<w:t") {
                 let after = &rest[o..];
+                if !matches!(after.as_bytes().get(4), Some(b'>' | b' ')) {
+                    rest = &after[4..];
+                    continue;
+                }
                 if let Some(gt) = after.find('>') {
                     let content = &after[gt + 1..];
                     if let Some(close) = content.find("</w:t>") {

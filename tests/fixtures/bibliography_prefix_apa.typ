@@ -3,4 +3,4 @@
 // back to positional "[n]" text.
 A citation @kudo2020 and another @smith2019.
 
-#bibliography("citation_shared.bib", style: "apa")
+#bibliography("citation_shared.bib", style: "apa", title: none)

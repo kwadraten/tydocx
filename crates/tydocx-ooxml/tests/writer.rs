@@ -1,4 +1,6 @@
 mod tests {
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
     use std::io::Cursor;
     use tydocx_ooxml::*;
 
@@ -19,6 +21,36 @@ mod tests {
     fn zip_has_entry(buf: &[u8], name: &str) -> bool {
         let archive = zip::ZipArchive::new(Cursor::new(buf)).unwrap();
         archive.file_names().any(|n| n == name)
+    }
+
+    fn child_names(xml: &str, parent: &str) -> Vec<String> {
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(e) if e.name().as_ref() == parent.as_bytes() => break,
+                Event::Eof => panic!("missing {parent}: {xml}"),
+                _ => {}
+            }
+        }
+        let mut names = Vec::new();
+        let mut depth = 0;
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(e) => {
+                    if depth == 0 {
+                        names.push(String::from_utf8(e.name().as_ref().to_vec()).unwrap());
+                    }
+                    depth += 1;
+                }
+                Event::Empty(e) if depth == 0 => {
+                    names.push(String::from_utf8(e.name().as_ref().to_vec()).unwrap());
+                }
+                Event::End(_) if depth == 0 => return names,
+                Event::End(_) => depth -= 1,
+                Event::Eof => panic!("unclosed {parent}: {xml}"),
+                _ => {}
+            }
+        }
     }
 
     // ── Existing tests ──────────────────────────────────────────────────
@@ -194,6 +226,48 @@ mod tests {
             xml.contains(r#"<w:pStyle w:val="Normal"/>"#),
             "expected pStyle Normal in: {xml}"
         );
+    }
+
+    #[test]
+    fn paragraph_properties_follow_schema_and_keep_after_and_exact_line_spacing() {
+        // A bottom border and fill belong after style/keep/numbering, and
+        // CT_PPr puts spacing before indent. Setting only after-spacing
+        // must not discard the separately authored exact line height.
+        let mut doc = Document::new();
+        let mut para = document::Paragraph {
+            style: Some(document::ParagraphStyle::Normal),
+            keep_next: true,
+            keep_lines: true,
+            list_info: Some(document::ListInfo { id: 1, level: 0 }),
+            horizontal_rule: true,
+            shading: Some("ABCDEF".into()),
+            tab_stops: vec![750],
+            spacing_after: Some(96),
+            line_twips: Some(240),
+            left_indent: Some(120),
+            alignment: Some(document::Alignment::Right),
+            ..document::Paragraph::default()
+        };
+        para.add_run("paragraph");
+        doc.add_paragraph(para);
+
+        let xml = read_zip_entry(&build_docx(&doc), "word/document.xml");
+        assert_eq!(
+            child_names(&xml, "w:pPr"),
+            [
+                "w:pStyle",
+                "w:keepNext",
+                "w:keepLines",
+                "w:numPr",
+                "w:pBdr",
+                "w:shd",
+                "w:tabs",
+                "w:spacing",
+                "w:ind",
+                "w:jc",
+            ]
+        );
+        assert!(xml.contains(r#"<w:spacing w:after="96" w:line="240" w:lineRule="exact"/>"#));
     }
 
     // ── 3. Alignment ────────────────────────────────────────────────────
@@ -463,7 +537,7 @@ mod tests {
         };
         let mut fn_para = document::Paragraph::new();
         fn_para.add_hyperlink_body(
-            "https://example.com".to_string(),
+            "https://example.com/脚注?q=\"image\"&keep=1".to_string(),
             vec![document::InlineElement::Image(image(1))],
         );
         fn_para.add_image(image(2));
@@ -476,6 +550,20 @@ mod tests {
         let buf = build_docx(&doc);
         let fn_xml = read_zip_entry(&buf, "word/footnotes.xml");
         let rels = read_zip_entry(&buf, "word/_rels/footnotes.xml.rels");
+        let (_, link) = fn_xml
+            .split_once(r#"<w:hyperlink r:id="rIdHyperlink1">"#)
+            .unwrap();
+        assert!(
+            link.split_once("</w:hyperlink>")
+                .unwrap()
+                .0
+                .contains(r#"r:embed="rId1""#)
+        );
+        assert!(rels.contains(concat!(
+            r#"<Relationship Id="rIdHyperlink1" "#,
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" "#,
+            r#"Target="https://example.com/%E8%84%9A%E6%B3%A8?q=%22image%22&amp;keep=1" TargetMode="External"/>"#,
+        )));
         let embeds: Vec<&str> = fn_xml
             .split("r:embed=\"")
             .skip(1)
@@ -503,6 +591,8 @@ mod tests {
             "linked and plain images must point at their own media: {rels}"
         );
         let doc_xml = read_zip_entry(&buf, "word/document.xml");
+        let doc_rels = read_zip_entry(&buf, "word/_rels/document.xml.rels");
+        assert!(!doc_rels.contains("rIdHyperlink"));
         assert!(
             !doc_xml.contains("r:embed"),
             "this document embeds images only inside its footnote: {doc_xml}"
@@ -511,28 +601,28 @@ mod tests {
 
     // ── 12. Table borders ───────────────────────────────────────────────
 
-    #[test]
-    fn table_produces_tbl_borders() {
-        let mut doc = Document::new();
-        let cell = document::TableCell {
+    fn auto_table(rows: &[&[u32]]) -> document::Table {
+        let cell = |colspan| document::TableCell {
             paragraphs: vec![],
             content: Vec::new(),
-            colspan: 1,
+            colspan,
             vmerge: document::VMerge::None,
             width_pct: None,
             vertical_align: None,
             shading: None,
             width_twips: None,
             borders: None,
-            zero_margins: false,
+            margins: None,
         };
-        let row = document::TableRow {
-            cells: vec![cell],
-            height_twips: None,
-            is_header: false,
-        };
-        let table = document::Table {
-            rows: vec![row],
+        document::Table {
+            rows: rows
+                .iter()
+                .map(|spans| document::TableRow {
+                    cells: spans.iter().copied().map(cell).collect(),
+                    height_twips: None,
+                    is_header: false,
+                })
+                .collect(),
             width_pct: None,
             border_size: None,
             borders: None,
@@ -541,11 +631,20 @@ mod tests {
             col_widths_twips: None,
             alignment: None,
             float: None,
-        };
-        doc.add_table(table);
+        }
+    }
+
+    #[test]
+    fn table_produces_tbl_borders() {
+        let mut doc = Document::new();
+        doc.add_table(auto_table(&[&[1, 1]]));
 
         let buf = build_docx(&doc);
         let xml = read_zip_entry(&buf, "word/document.xml");
+        assert_eq!(child_names(&xml, "w:tbl"), ["w:tblPr", "w:tblGrid", "w:tr"]);
+        assert_eq!(child_names(&xml, "w:tblGrid"), ["w:gridCol", "w:gridCol"]);
+        assert_eq!(xml.matches("<w:gridCol/>").count(), 2);
+        assert!(!xml.contains("w:tblLayout"));
         assert!(
             xml.contains("<w:tblBorders>"),
             "expected w:tblBorders in: {xml}"
@@ -560,6 +659,133 @@ mod tests {
         );
     }
 
+    #[test]
+    fn auto_table_grid_counts_spanned_columns_across_rows() {
+        // Neither cell count nor the first row's width is the grid size.
+        let mut doc = Document::new();
+        doc.add_table(auto_table(&[&[], &[1, 1], &[3, 1]]));
+        let xml = read_zip_entry(&build_docx(&doc), "word/document.xml");
+        assert_eq!(xml.matches("<w:gridCol/>").count(), 4);
+        assert!(!xml.contains("w:tblLayout"));
+        assert!(xml.contains(r#"<w:gridSpan w:val="3"/>"#));
+        assert!(xml.contains(r#"<w:tcW w:w="3750" w:type="pct"/>"#));
+    }
+
+    #[test]
+    fn auto_table_grid_is_bounded_for_overflowing_public_spans() {
+        for (spans, columns) in [([1, 1], 2), ([u32::MAX, 1], 63)] {
+            let mut doc = Document::new();
+            doc.add_table(auto_table(&[&spans]));
+            let xml = read_zip_entry(&build_docx(&doc), "word/document.xml");
+            assert_eq!(xml.matches("<w:gridCol/>").count(), columns);
+            assert_eq!(child_names(&xml, "w:tr"), ["w:tc", "w:tc"]);
+            assert!(xml.len() < 4096, "unbounded grid: {} bytes", xml.len());
+            if columns == 63 {
+                // A giant gridSpan would let the reader expand the grid again,
+                // even if the writer emitted only 63 explicit grid columns.
+                assert!(xml.contains(r#"<w:gridSpan w:val="62"/>"#));
+                assert!(!xml.contains(&u32::MAX.to_string()));
+            } else {
+                assert_eq!(
+                    xml.matches(r#"<w:tcW w:w="2500" w:type="pct"/>"#).count(),
+                    2
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_table_grid_widths_are_not_auto_capped() {
+        let mut doc = Document::new();
+        let mut table = auto_table(&[&[1, 1]]);
+        table.col_widths_twips = Some(vec![240; 64]);
+        doc.add_table(table);
+        let xml = read_zip_entry(&build_docx(&doc), "word/document.xml");
+        assert_eq!(xml.matches(r#"<w:gridCol w:w="240"/>"#).count(), 64);
+        assert!(xml.contains(r#"<w:tblLayout w:type="fixed"/>"#));
+    }
+
+    #[test]
+    fn empty_auto_tables_have_a_grid_without_inventing_columns() {
+        for rows in [&[][..], &[&[][..]][..]] {
+            let mut doc = Document::new();
+            doc.add_table(auto_table(rows));
+            let xml = read_zip_entry(&build_docx(&doc), "word/document.xml");
+            assert!(xml.contains("<w:tblGrid/>"));
+            assert!(!xml.contains("w:gridCol"));
+            assert!(!xml.contains("w:tblLayout"));
+        }
+    }
+
+    #[test]
+    fn floating_fixed_table_keeps_schema_order_without_forbidding_overlap() {
+        // A TableFloat may represent an intentional absolute overlay. Do not
+        // set an overlap policy without that information in the model.
+        let mut doc = Document::new();
+        doc.add_table(document::Table {
+            rows: vec![document::TableRow {
+                cells: vec![document::TableCell {
+                    paragraphs: vec![],
+                    content: vec![],
+                    colspan: 2,
+                    vmerge: document::VMerge::None,
+                    width_pct: None,
+                    vertical_align: None,
+                    shading: None,
+                    width_twips: Some(1600),
+                    borders: None,
+                    margins: None,
+                }],
+                height_twips: None,
+                is_header: false,
+            }],
+            width_pct: None,
+            border_size: None,
+            borders: None,
+            cell_margins: Some(document::TableCellMargins {
+                top: 30,
+                left: 60,
+                bottom: 90,
+                right: 120,
+            }),
+            width_twips: Some(1600),
+            col_widths_twips: Some(vec![600, 1000]),
+            alignment: None,
+            float: Some(document::TableFloat {
+                x_twips: -40,
+                y_twips: 480,
+                distance_twips: 90,
+            }),
+        });
+        let xml = read_zip_entry(&build_docx(&doc), "word/document.xml");
+        assert_eq!(child_names(&xml, "w:tbl"), ["w:tblPr", "w:tblGrid", "w:tr"]);
+        assert_eq!(
+            child_names(&xml, "w:tblPr"),
+            [
+                "w:tblpPr",
+                "w:tblW",
+                "w:tblBorders",
+                "w:tblLayout",
+                "w:tblCellMar"
+            ]
+        );
+        let (position, _) = xml
+            .split_once("<w:tblpPr ")
+            .unwrap()
+            .1
+            .split_once("/>")
+            .unwrap();
+        assert!(!position.contains("w:overlap"));
+        assert!(position.contains(r#"w:tblpX="-40" w:tblpY="480""#));
+        for side in ["left", "right", "top", "bottom"] {
+            assert!(position.contains(&format!(r#"w:{side}FromText="90""#)));
+        }
+        assert!(!xml.contains("w:tblOverlap"));
+        assert!(xml.contains(r#"<w:tblLayout w:type="fixed"/>"#));
+        assert!(xml.contains(r#"<w:gridCol w:w="600"/>"#));
+        assert!(xml.contains(r#"<w:gridCol w:w="1000"/>"#));
+    }
+
     // ── 13. Settings.xml ────────────────────────────────────────────────
 
     #[test]
@@ -567,21 +793,42 @@ mod tests {
         let doc = Document::new();
         let buf = build_docx(&doc);
         let xml = read_zip_entry(&buf, "word/settings.xml");
-        assert!(
-            xml.contains("<w:footnotePr>"),
-            "expected w:footnotePr in settings.xml: {xml}"
-        );
-        assert!(
-            xml.contains("<w:compat>"),
-            "expected w:compat in settings.xml: {xml}"
-        );
-        assert!(
-            xml.contains("<w:themeFontLang"),
-            "expected w:themeFontLang in settings.xml: {xml}"
+        // CT_Settings places math defaults before theme font language.
+        assert_eq!(
+            child_names(&xml, "w:settings"),
+            ["w:footnotePr", "w:compat", "m:mathPr", "w:themeFontLang"]
         );
         assert!(
             xml.contains(r#"w:eastAsia="zh-CN""#),
             "expected zh-CN in themeFontLang: {xml}"
+        );
+    }
+
+    #[test]
+    fn settings_disable_automatic_hyphenation_using_document_property() {
+        let mut doc = Document::new();
+        doc.style.suppress_auto_hyphens = true;
+        doc.mirror_margins = true;
+        doc.even_and_odd_headers = true;
+        doc.update_fields = true;
+        let xml = read_zip_entry(&build_docx(&doc), "word/settings.xml");
+
+        // w:suppressAutoHyphens is paragraph-only. In CT_Settings the
+        // document-wide switch belongs before even/odd headers.
+        assert!(xml.contains(r#"<w:autoHyphenation w:val="0"/>"#));
+        assert!(!xml.contains("w:suppressAutoHyphens"));
+        assert_eq!(
+            child_names(&xml, "w:settings"),
+            [
+                "w:mirrorMargins",
+                "w:autoHyphenation",
+                "w:evenAndOddHeaders",
+                "w:updateFields",
+                "w:footnotePr",
+                "w:compat",
+                "m:mathPr",
+                "w:themeFontLang",
+            ]
         );
     }
 
@@ -623,6 +870,67 @@ mod tests {
             xml.contains(r#"<w:outlineLvl w:val="0"/>"#),
             "expected outlineLvl 0 for Heading1: {xml}"
         );
+    }
+
+    #[test]
+    fn style_properties_keep_schema_order_for_inherited_formatting() {
+        let xml = read_zip_entry(&build_docx(&Document::new()), "word/styles.xml");
+        let normal = normal_style(&xml);
+        assert_eq!(child_names(normal, "w:style"), ["w:name", "w:pPr", "w:rPr"]);
+        assert_eq!(
+            child_names(normal, "w:pPr"),
+            ["w:widowControl", "w:spacing", "w:ind", "w:jc"]
+        );
+        assert_eq!(
+            child_names(heading1_style(&xml), "w:pPr"),
+            ["w:widowControl", "w:spacing", "w:ind", "w:outlineLvl"]
+        );
+        assert_eq!(
+            child_names(style_by_id(&xml, "CodeBlock"), "w:pPr"),
+            ["w:shd", "w:spacing", "w:ind"]
+        );
+        assert_eq!(
+            child_names(&xml, "w:pPr"),
+            [
+                "w:kinsoku",
+                "w:wordWrap",
+                "w:overflowPunct",
+                "w:topLinePunct",
+                "w:autoSpaceDE",
+                "w:autoSpaceDN"
+            ]
+        );
+    }
+
+    #[test]
+    fn deep_headings_reference_defined_styles_with_their_own_outline_levels() {
+        let mut doc = Document::new();
+        doc.style.heading_sizes = [60, 50, 40, 30, 26];
+        for level in 6..=9 {
+            let mut para = document::Paragraph {
+                style: Some(document::ParagraphStyle::Heading(level)),
+                ..document::Paragraph::default()
+            };
+            para.add_run("deep heading");
+            doc.add_paragraph(para);
+        }
+        let buf = build_docx(&doc);
+        let styles = read_zip_entry(&buf, "word/styles.xml");
+        let body = read_zip_entry(&buf, "word/document.xml");
+        // These headings inherit level 5's font size, not its outline level.
+        // A missing style silently turns the paragraph into body text.
+        let h5 = style_by_id(&styles, "Heading5");
+        for level in 6..=9 {
+            let id = format!("Heading{level}");
+            assert!(body.contains(&format!(r#"<w:pStyle w:val="{id}"/>"#)));
+            let style = style_by_id(&styles, &id);
+            assert!(style.contains(&format!(r#"<w:outlineLvl w:val="{}"/>"#, level - 1)));
+            assert_eq!(
+                style.split_once("<w:rPr>").unwrap().1,
+                h5.split_once("<w:rPr>").unwrap().1
+            );
+            assert!(style.contains(r#"<w:sz w:val="26"/>"#));
+        }
     }
 
     #[test]
@@ -737,15 +1045,17 @@ mod tests {
         );
     }
 
-    /// Extract the default `<w:style ... w:styleId="Normal"> … </w:style>` block.
     fn normal_style(xml: &str) -> &str {
+        style_by_id(xml, "Normal")
+    }
+
+    fn style_by_id<'a>(xml: &'a str, id: &str) -> &'a str {
         let start = xml
-            .find(r#"w:styleId="Normal""#)
-            .expect("Normal style present");
+            .find(&format!(r#"w:styleId="{id}""#))
+            .unwrap_or_else(|| panic!("missing style {id}"));
         let begin = xml[..start].rfind("<w:style").expect("style open tag");
-        let end = xml[begin..]
-            .find("</w:style>")
-            .map_or(xml.len(), |e| begin + e + "</w:style>".len());
+        let end =
+            xml[begin..].find("</w:style>").expect("style close tag") + begin + "</w:style>".len();
         &xml[begin..end]
     }
 
@@ -810,14 +1120,7 @@ mod tests {
 
     /// Extract the `<w:style ... w:styleId="Heading1"> … </w:style>` block.
     fn heading1_style(xml: &str) -> &str {
-        let start = xml
-            .find(r#"w:styleId="Heading1""#)
-            .expect("Heading1 style present");
-        let begin = xml[..start].rfind("<w:style").expect("style open tag");
-        let end = xml[begin..]
-            .find("</w:style>")
-            .map_or(xml.len(), |e| begin + e + "</w:style>".len());
-        &xml[begin..end]
+        style_by_id(xml, "Heading1")
     }
 
     // ── 22. Numbered equation ──────────────────────────────────────────
@@ -1210,25 +1513,19 @@ mod tests {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
         para.add_hyperlink(
-            "https://example.com".to_string(),
+            "https://example.com/?a=1&b=%22".to_string(),
             vec![document::Run::new("click here")],
         );
         doc.add_paragraph(para);
 
         let buf = build_docx(&doc);
         let xml = read_zip_entry(&buf, "word/document.xml");
-        assert!(
-            xml.contains("w:fldSimple"),
-            "expected w:fldSimple in: {xml}"
-        );
-        assert!(
-            xml.contains("HYPERLINK"),
-            "expected HYPERLINK in instrText: {xml}"
-        );
-        assert!(
-            xml.contains("https://example.com"),
-            "expected URL in: {xml}"
-        );
+        // XML escapes the field delimiters once. WPS must see actual quotes
+        // in the field code, not the literal text `&quot;` in the address.
+        assert!(xml.contains(
+            r#"<w:fldSimple w:instr="HYPERLINK &quot;https://example.com/?a=1&amp;b=%22&quot;">"#
+        ));
+        assert!(!xml.contains("&amp;quot;"));
         assert!(
             xml.contains("click here"),
             "expected display text in: {xml}"
@@ -1241,6 +1538,192 @@ mod tests {
             xml.contains(r#"<w:u w:val="single"/>"#),
             "expected underline in: {xml}"
         );
+    }
+
+    #[test]
+    fn external_hyperlink_relationship_encodes_url_and_escapes_xml_separately() {
+        let mut doc = Document::new();
+        let mut para = document::Paragraph::new();
+        para.add_hyperlink(
+            "https://example.com/路径?q=\"café\"&keep=x%2Fy#frag".into(),
+            vec![document::Run::new("special target")],
+        );
+        doc.add_paragraph(para);
+
+        let buf = build_docx(&doc);
+        let xml = read_zip_entry(&buf, "word/document.xml");
+        let rels = read_zip_entry(&buf, "word/_rels/document.xml.rels");
+        let (_, link) = xml
+            .split_once(r#"<w:hyperlink r:id="rIdHyperlink1">"#)
+            .unwrap();
+        let (body, _) = link.split_once("</w:hyperlink>").unwrap();
+        assert!(body.contains("special target"));
+        assert!(body.contains(r#"<w:color w:val="0563C1"/>"#));
+        assert!(body.contains(r#"<w:u w:val="single"/>"#));
+        assert!(!xml.contains("w:fldSimple"));
+        // URL percent-encoding must preserve existing escapes and reserved
+        // delimiters. The XML layer then escapes only the literal ampersand.
+        assert!(rels.contains(concat!(
+            r#"<Relationship Id="rIdHyperlink1" "#,
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" "#,
+            r#"Target="https://example.com/%E8%B7%AF%E5%BE%84?q=%22caf%C3%A9%22&amp;keep=x%2Fy#frag" TargetMode="External"/>"#,
+        )));
+    }
+
+    #[test]
+    fn malformed_percent_and_non_host_brackets_use_encoded_relationship_targets() {
+        // Existing escapes stay byte-for-byte intact, and brackets in IPv6
+        // literals do not make path, query, fragment, or userinfo brackets safe.
+        let cases = [
+            (
+                "https://example.com/100%?bad=%Q1&short=%2&good=x%2Fy",
+                "https://example.com/100%25?bad=%25Q1&amp;short=%252&amp;good=x%2Fy",
+            ),
+            (
+                "https://example.com/path[1]?q=[a]#[f]",
+                "https://example.com/path%5B1%5D?q=%5Ba%5D#%5Bf%5D",
+            ),
+            (
+                "https://user[1]@[2001:db8::1]:8443/path[2]?q=[a]",
+                "https://user%5B1%5D@[2001:db8::1]:8443/path%5B2%5D?q=%5Ba%5D",
+            ),
+            ("//[::ffff:192.0.2.1]/test%", "//[::ffff:192.0.2.1]/test%25"),
+            (
+                "https://example.com//[::1]",
+                "https://example.com//%5B::1%5D",
+            ),
+        ];
+        for (url, expected) in cases {
+            let mut doc = Document::new();
+            let mut para = document::Paragraph::new();
+            para.add_hyperlink(url.into(), vec![document::Run::new("linked")]);
+            doc.add_paragraph(para);
+            let buf = build_docx(&doc);
+            let xml = read_zip_entry(&buf, "word/document.xml");
+            let rels = read_zip_entry(&buf, "word/_rels/document.xml.rels");
+            assert!(
+                xml.contains(r#"<w:hyperlink r:id="rIdHyperlink1">"#),
+                "{xml}"
+            );
+            assert!(!xml.contains("w:fldSimple"));
+            assert!(rels.contains(&format!(
+                concat!(
+                    r#"<Relationship Id="rIdHyperlink1" "#,
+                    r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" "#,
+                    r#"Target="{}" TargetMode="External"/>"#,
+                ),
+                expected,
+            )), "{rels}");
+        }
+    }
+
+    #[test]
+    fn valid_ipv6_uri_keeps_the_simple_hyperlink_field() {
+        let mut doc = Document::new();
+        let mut para = document::Paragraph::new();
+        para.add_hyperlink(
+            "https://[2001:db8::1]:8080/x%2F".into(),
+            vec![document::Run::new("IPv6")],
+        );
+        doc.add_paragraph(para);
+        let buf = build_docx(&doc);
+        let xml = read_zip_entry(&buf, "word/document.xml");
+        assert!(xml.contains(
+            r#"<w:fldSimple w:instr="HYPERLINK &quot;https://[2001:db8::1]:8080/x%2F&quot;">"#
+        ));
+        let rels = read_zip_entry(&buf, "word/_rels/document.xml.rels");
+        assert!(!rels.contains("rIdHyperlink"));
+    }
+
+    #[test]
+    fn header_and_footer_keep_top_level_hyperlinks_and_own_relationships() {
+        let mut header = document::Paragraph::new();
+        header.add_hyperlink_body(
+            "https://example.com/header[1]".into(),
+            vec![
+                document::InlineElement::Text(document::Run::new("header link")),
+                document::InlineElement::Image(document::ImageData {
+                    svg: None,
+                    bytes: vec![0x89, 0x50, 0x4E, 0x47],
+                    format: document::ImageFormat::Png,
+                    width_emu: 914_400,
+                    height_emu: 457_200,
+                    src_rect: None,
+                    alt: None,
+                }),
+            ],
+        );
+        let mut footer = document::Paragraph::new();
+        footer.add_hyperlink(
+            "https://example.com/footer%".into(),
+            vec![document::Run::new("footer link")],
+        );
+        let mut doc = Document::new();
+        doc.header = Some(document::HeaderFooter {
+            paragraphs: vec![header],
+        });
+        doc.footer = Some(document::HeaderFooter {
+            paragraphs: vec![footer],
+        });
+        let buf = build_docx(&doc);
+        for (part, text, target, other) in [
+            ("header1", "header link", "header%5B1%5D", "footer%25"),
+            ("footer1", "footer link", "footer%25", "header%5B1%5D"),
+        ] {
+            let xml = read_zip_entry(&buf, &format!("word/{part}.xml"));
+            let rels = read_zip_entry(&buf, &format!("word/_rels/{part}.xml.rels"));
+            assert_bound_prefixes(&xml);
+            let (_, link) = xml
+                .split_once(r#"<w:hyperlink r:id="rIdHyperlink1">"#)
+                .unwrap();
+            let (body, _) = link.split_once("</w:hyperlink>").unwrap();
+            assert!(body.contains(&format!(r#"<w:t xml:space="preserve">{text}</w:t>"#)));
+            if part == "header1" {
+                assert!(body.contains(r#"r:embed="rId1""#));
+                assert!(rels.contains(r#"relationships/image" Target="media/image1.png"/>"#));
+            }
+            assert!(rels.contains(&format!(
+                concat!(
+                    r#"<Relationship Id="rIdHyperlink1" "#,
+                    r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" "#,
+                    r#"Target="https://example.com/{}" TargetMode="External"/>"#,
+                ),
+                target,
+            )), "{rels}");
+            assert!(!rels.contains(other));
+        }
+    }
+
+    #[test]
+    fn footnote_with_only_an_external_relationship_writes_its_own_rels_part() {
+        let mut doc = Document::new();
+        let mut body = document::Paragraph::new();
+        body.add_hyperlink(
+            "https://example.com/α".into(),
+            vec![document::Run::new("body")],
+        );
+        let mut note = document::Paragraph::new();
+        note.add_hyperlink(
+            "https://example.com/β".into(),
+            vec![document::Run::new("note")],
+        );
+        let id = doc.add_footnote(vec![note]);
+        body.add_footnote_ref(id);
+        doc.add_paragraph(body);
+
+        let buf = build_docx(&doc);
+        for (part, target, other) in [
+            ("document", "%CE%B1", "%CE%B2"),
+            ("footnotes", "%CE%B2", "%CE%B1"),
+        ] {
+            let xml = read_zip_entry(&buf, &format!("word/{part}.xml"));
+            assert!(xml.contains(r#"<w:hyperlink r:id="rIdHyperlink1">"#));
+            let rels = read_zip_entry(&buf, &format!("word/_rels/{part}.xml.rels"));
+            assert!(rels.contains(&format!(
+                r#"Target="https://example.com/{target}" TargetMode="External""#
+            )));
+            assert!(!rels.contains(other));
+        }
     }
 
     // ── 28. Page break ──────────────────────────────────────────────────

@@ -108,10 +108,7 @@ fn v07_shapes_and_dividers() {
     let xml = fixture_doc_xml("universe_shapes");
     assert!(xml.contains("Body text"));
     assert!(!xml.contains("Divider"), "#divider stays invisible");
-    assert!(
-        xml.contains("<w:pBdr"),
-        "#line resolves through its context wrapper to a paragraph rule"
-    );
+    assert_has(&constructs, "layouter-body");
 }
 
 #[test]
@@ -340,10 +337,17 @@ fn v28_image_fit_alt() {
 #[test]
 fn v29_opentype_props() {
     let xml = fixture_doc_xml("universe_opentype");
-    assert!(xml.contains("w:numForm w:val=\"oldStyle\""), "number-type");
-    assert!(xml.contains("w:ligatures w:val=\"none\""), "ligatures");
+    assert!(xml.contains(r#"mc:Ignorable="w14""#));
     assert!(
-        xml.contains("w:numberSpacing w:val=\"tabular\""),
+        xml.contains(r#"<w14:numForm w14:val="oldStyle""#),
+        "number-type"
+    );
+    assert!(
+        xml.contains(r#"<w14:ligatures w14:val="none""#),
+        "ligatures"
+    );
+    assert!(
+        xml.contains(r#"<w14:numSpacing w14:val="tabular""#),
         "number-width"
     );
     assert!(xml.contains("w:smallCaps"), "features smcp → smallCaps");

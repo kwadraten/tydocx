@@ -14,9 +14,11 @@
 
 = Introduction
 $ E = m c^2 $ <eq:einstein>
-$ F = m a $ <eq:newton>
+#block[
+  $ F = m a $ <eq:newton>
+]
 
 = Methods
 $ integral_0^infinity e^(-x) dif x = 1 $ <eq:integral>
 
-See @eq:einstein and @eq:integral.
+See @eq:einstein, @eq:newton, and @eq:integral.

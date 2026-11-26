@@ -129,10 +129,7 @@ golden_test!(golden_edge_complex_table, "edge_complex_table");
 golden_test!(golden_formatted_footnote, "formatted_footnote");
 golden_test!(golden_edge_term_list, "edge_term_list");
 golden_test!(golden_edge_deep_nested_list, "edge_deep_nested_list");
-// Retargeted to the legacy path (step 2): the bibliography entries are a
-// registered IR gap — regenerating would bake the empty bibliography field
-// into the snapshot. See docs/fallback-registry.md.
-golden_test_legacy!(golden_bibliography_basic, "bibliography_basic");
+golden_test!(golden_bibliography_basic, "bibliography_basic");
 // Retargeted to the legacy path (step 2): the IR path re-evaluates the
 // theorem counter in fragments and reads its final value, so both theorems
 // render as "Theorem 2"; regenerating would bake the wrong numbers into the

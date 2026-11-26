@@ -2633,6 +2633,7 @@ name = "tydocx"
 version = "0.2.0"
 dependencies = [
  "clap",
+ "rayon",
  "time",
  "tydocx-core",
  "tydocx-ir",
@@ -2668,6 +2669,7 @@ dependencies = [
  "typst-svg",
  "typst-syntax",
  "typst-utils",
+ "unicode-segmentation",
 ]
 
 [[package]]

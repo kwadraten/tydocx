@@ -204,6 +204,54 @@ fn code_block_style_has_background_shading() {
     );
 }
 
+#[test]
+fn pad_vertical_insets_survive_as_outer_paragraph_spacing() {
+    // Typst's vertical #pad insets are visible outside the padded body. Word
+    // expresses that geometry as spacing on the first/last body paragraph;
+    // dropping it collapses the padded block onto its neighbours. The explicit
+    // w:after also has to carry Normal's gap because an override does not add
+    // to the inherited value.
+    let xml = fixture_doc_xml("render_pad_vertical");
+    let padded = paragraph_containing(&xml, "Padded text.");
+    assert!(
+        padded.contains(r#"<w:spacing w:before="240" w:after="470""#),
+        "12pt/18pt padding plus the inherited 5.5pt paragraph gap must become 240/470 twips:\n{padded}"
+    );
+    assert!(
+        padded.contains(r#"w:left="160""#) && padded.contains(r#"w:right="120""#),
+        "the horizontal padding must remain intact alongside the vertical fix:\n{padded}"
+    );
+    let nested = paragraph_containing(&xml, "Nested padded text.");
+    assert!(
+        nested.contains(r#"<w:spacing w:before="240" w:after="300""#),
+        "the block's explicit below replaces the weak gap, but not the padding:\n{nested}"
+    );
+    let mixed = paragraph_containing(&xml, "Paragraph after a leading table.");
+    assert!(
+        !mixed.contains("w:before=") && mixed.contains(r#"<w:spacing w:after="550""#),
+        "a leading table must not push the top inset into the following paragraph:\n{mixed}"
+    );
+}
+
+#[test]
+fn pad_weak_paragraph_gap_is_trimmed_only_at_the_explicit_block_boundary() {
+    let xml = fixture_doc_xml("render_pad_vertical");
+    // The 30pt paragraph gap is weak. Between these blocks Typst uses only the
+    // declared below and physical insets; an earlier explicit gap stays intact.
+    for (text, twips) in [
+        ("Explicit gap before B.", 300),
+        ("Two physical bottom insets.", 340),
+        ("Explicit inner gap.", 200),
+        ("Trailing padded paragraph.", 320),
+    ] {
+        let paragraph = paragraph_containing(&xml, text);
+        assert!(
+            paragraph.contains(&format!(r#"w:after="{twips}""#)),
+            "wrong after-spacing for {text:?}:\n{paragraph}"
+        );
+    }
+}
+
 // ── Smoke tests: style / general / edge fixtures convert without panic ──
 
 macro_rules! smoke_test {
@@ -517,6 +565,51 @@ fn superscript_marker_size_does_not_leak_to_body_reference() {
         doc_xml.contains(r#"<w:vertAlign w:val="superscript"/>"#),
         "the affiliation #super[1] must remain a superscript"
     );
+}
+
+#[test]
+fn local_text_size_does_not_inherit_a_different_normal_size() {
+    let package = fixture_package("scoped_text_size_multipage");
+    let styles = package.part_text("word/styles.xml");
+    let doc_defaults = styles
+        .split_once("<w:docDefaults>")
+        .unwrap()
+        .1
+        .split("</w:docDefaults>")
+        .next()
+        .unwrap();
+    let normal = styles
+        .split_once(r#"w:styleId="Normal""#)
+        .unwrap()
+        .1
+        .split("</w:style>")
+        .next()
+        .unwrap();
+    // The opening pages determine the existing Normal size. Preserve that style
+    // and its layout measurements; the later 12pt runs must override it.
+    assert!(doc_defaults.contains(r#"<w:sz w:val="30"/>"#));
+    assert!(normal.contains(r#"<w:sz w:val="30"/>"#), "{normal}");
+    let xml = package.part_text("word/document.xml");
+    for (text, half_points) in [
+        ("Cover size probe", 52),
+        ("Declaration size probe", 30),
+        ("Abstract title probe", 36),
+        ("Abstract detail probe", 24),
+        ("Body size probe", 24),
+        ("Acknowledgement size probe", 24),
+        ("Unstyled size probe", 22),
+    ] {
+        let run = xml
+            .split("<w:r>")
+            .skip(1)
+            .filter_map(|tail| tail.split_once("</w:r>").map(|(run, _)| run))
+            .find(|run| run.contains(text))
+            .unwrap_or_else(|| panic!("missing run containing {text}"));
+        let effective_size = run.split_once(r#"<w:sz w:val=""#).map_or(30, |(_, tail)| {
+            tail.split('"').next().unwrap().parse().unwrap()
+        });
+        assert_eq!(effective_size, half_points, "{text}: {run}");
+    }
 }
 
 #[test]
@@ -1103,6 +1196,51 @@ fn issue_v_vertical_space_becomes_spacing_before() {
 }
 
 #[test]
+fn declaration_local_paragraph_metrics_do_not_change_the_font_or_global_spacing() {
+    let xml = fixture_doc_xml("declaration_flow");
+    let body = paragraph_containing(&xml, "Ledger number 101");
+    // Libertinus Serif's 0.658em cap height plus the declared 2.42em
+    // leading, both at 15pt, yields a 46.17pt line pitch (923 twips).
+    assert!(
+        body.contains(r#"w:line="923" w:lineRule="atLeast""#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"w:firstLine="600""#) && body.contains(r#"w:firstLineChars="200""#),
+        "{body}"
+    );
+    let title = paragraph_containing(&xml, "Declaration of authorship");
+    assert!(title.contains(r#"<w:sz w:val="48"/>"#), "{title}");
+    assert!(!body.contains(r#"<w:sz w:val="48""#), "{body}");
+
+    // 3em inter-paragraph gap minus the 1em + 2pt already in the line pitch.
+    let first = paragraph_containing(&xml, "Scoped first paragraph.");
+    assert!(
+        first.contains(r#"w:after="560" w:line="537" w:lineRule="atLeast""#),
+        "{first}"
+    );
+    assert!(!first.contains("Scoped second paragraph."), "{first}");
+    let tall = paragraph_containing(&xml, "With a tall inline image");
+    assert!(
+        tall.contains(r#"w:line="537" w:lineRule="atLeast""#),
+        "{tall}"
+    );
+    assert!(tall.contains("<wp:inline"), "{tall}");
+
+    let ordinary = paragraph_containing(&xml, "Ordinary ");
+    assert!(!ordinary.contains(r#"w:line="#), "{ordinary}");
+    assert!(
+        ordinary.contains("<w:b/>") && ordinary.contains("<w:color "),
+        "{ordinary}"
+    );
+    assert!(
+        ordinary.contains("on a new source line in the same paragraph."),
+        "{ordinary}"
+    );
+    assert!(!ordinary.contains("<w:br"), "{ordinary}");
+}
+
+#[test]
 fn issue_h_horizontal_space_becomes_tracked_space() {
     let doc_xml = fixture_doc_xml("issue_h_horizontal_space");
     assert!(
@@ -1145,10 +1283,13 @@ fn issue_tracking_becomes_run_spacing() {
 fn issue_hyphenate_false_suppresses_auto_hyphens() {
     let package = fixture_package("issue_hyphenate_false");
     let settings = package.part_text("word/settings.xml");
+    // w:suppressAutoHyphens is a paragraph property, not a CT_Settings child.
+    // The document-wide switch is autoHyphenation with an explicit false value.
     assert!(
-        settings.contains("<w:suppressAutoHyphens/>"),
-        "#set text(hyphenate: false) must emit w:suppressAutoHyphens:\n{settings}"
+        settings.contains(r#"<w:autoHyphenation w:val="0"/>"#),
+        "#set text(hyphenate: false) must disable document auto-hyphenation:\n{settings}"
     );
+    assert!(!settings.contains("w:suppressAutoHyphens"));
 }
 
 /// Paragraph-local `par` overrides: a paragraph whose own `StyleChain`

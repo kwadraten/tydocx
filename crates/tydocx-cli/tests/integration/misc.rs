@@ -1,6 +1,9 @@
 //! Tests that don't fit a more specific area.
 
-use crate::common::{fixture_doc_xml, fixture_document, fixture_package, fixture_styles_xml};
+use crate::common::{
+    fixture_doc_xml, fixture_doc_xml_uncached, fixture_document, fixture_package,
+    fixture_styles_xml,
+};
 
 #[test]
 fn italic_text_produces_w_i_element() {
@@ -156,10 +159,10 @@ fn show_rule_italic_color() {
 /// conversion in one test genuinely exercises different iteration orders.)
 #[test]
 fn doc_title_conversion_is_deterministic() {
-    let first = fixture_doc_xml("doc_title");
+    let first = fixture_doc_xml_uncached("doc_title");
     for _ in 0..8 {
         assert_eq!(
-            fixture_doc_xml("doc_title"),
+            fixture_doc_xml_uncached("doc_title"),
             first,
             "doc_title output must be byte-identical across runs"
         );
@@ -217,7 +220,7 @@ fn issue_today_is_real_date_not_fixed() {
         now.month() as u8,
         now.day()
     );
-    let xml = fixture_doc_xml("issue_today_real_date");
+    let xml = fixture_doc_xml_uncached("issue_today_real_date");
     assert!(
         xml.contains(&expected),
         "document should contain today's date {expected}, but did not (fixed placeholder?)"

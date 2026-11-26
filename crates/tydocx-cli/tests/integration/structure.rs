@@ -5,7 +5,92 @@ use crate::common::{
     fixture_package, fixture_package_from_document, fixture_package_with_options,
     paragraph_containing, paragraph_texts,
 };
+use std::collections::HashMap;
 use tydocx_core::{CompatMode, ConvertOptions};
+
+pub(super) fn assert_navigation_targets(xml: &str) {
+    fn attribute<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
+        attrs
+            .split_once(&format!(" {name}=\""))?
+            .1
+            .split_once('"')
+            .map(|(value, _)| value)
+    }
+
+    fn tags<'a>(xml: &'a str, opening: &str) -> impl Iterator<Item = (&'a str, &'a str)> {
+        xml.split(opening)
+            .skip(1)
+            .filter_map(|tail| tail.split_once('>'))
+    }
+
+    let mut counts = HashMap::new();
+    for (tag, _) in tags(xml, "<w:bookmarkStart") {
+        let name = attribute(tag, "w:name").expect("bookmark name");
+        *counts.entry(name).or_insert(0) += 1;
+    }
+    let check = |target: &str| {
+        assert_eq!(
+            counts.get(target).copied(),
+            Some(1),
+            "{target}: navigation target must have exactly one bookmark in {xml}"
+        );
+    };
+    for (tag, _) in tags(xml, "<w:hyperlink") {
+        if let Some(anchor) = attribute(tag, "w:anchor") {
+            check(anchor);
+        }
+    }
+    let instructions = tags(xml, "<w:instrText")
+        .filter_map(|(_, tail)| tail.split_once("</w:instrText>").map(|(code, _)| code))
+        .chain(tags(xml, "<w:fldSimple").filter_map(|(tag, _)| attribute(tag, "w:instr")));
+    for code in instructions {
+        let mut words = code.split_ascii_whitespace();
+        if words.next() == Some("PAGEREF") {
+            check(words.next().expect("PAGEREF target"));
+        }
+    }
+}
+
+#[test]
+fn declaration_explicit_breaks_and_vertical_space_precede_the_native_grid() {
+    let xml = fixture_doc_xml("declaration_flow");
+    for (first, second) in [
+        ("Declaration of authorship", "Statement of integrity"),
+        ("Explicit first", "Explicit second"),
+    ] {
+        let paragraph = paragraph_containing(&xml, first);
+        let (_, after_first) = paragraph
+            .split_once(&format!("{first}</w:t>"))
+            .expect("first line");
+        let (_, after_break) = after_first
+            .split_once("<w:br/>")
+            .expect("editable soft break");
+        assert!(
+            after_break.contains(&format!("{second}</w:t>")),
+            "{paragraph}"
+        );
+        assert_eq!(paragraph.matches("<w:br").count(), 1, "{paragraph}");
+    }
+    let body = paragraph_containing(&xml, "Ledger number 101");
+    assert!(body.contains(r#"w:before="960""#), "{body}");
+    // The authored 76pt is additive to the surrounding block's flow gap
+    // (1.2em - 0.65em at 15pt), not lost or folded into the 46.17pt pitch.
+    assert!(body.contains(r#"w:after="1685""#), "{body}");
+    let (_, after) = xml.split_once(body).expect("body paragraph");
+    let after = after
+        .trim_start()
+        .strip_prefix("</w:p>")
+        .expect("end of paragraph");
+    assert!(after.trim_start().starts_with("<w:tbl>"), "{after}");
+
+    // The negative inter-block gap cannot become unsigned w:before/w:after.
+    assert!(
+        fixture_outcome("declaration_flow")
+            .degradations
+            .iter()
+            .any(|item| item.construct == "v-negative-space" && item.span.is_some())
+    );
+}
 
 #[test]
 fn toc_produces_field_code() {
@@ -1067,15 +1152,14 @@ fn issue_odd_pagebreak_then_set_page_keeps_parity_and_margins() {
         1,
         "exactly one oddPage section break:\n{doc_xml}"
     );
-    assert_eq!(
-        doc_xml.matches(r#"<w:pgMar w:top="1417""#).count(),
-        1,
-        "the oddPage break ends the first section, so it carries that section's margins (Typst default 2.5cm), not the new ones:\n{doc_xml}"
+    let (previous, opened) = doc_xml.split_once("</w:sectPr>").unwrap();
+    assert!(
+        previous.contains(r#"<w:pgMar w:top="1417""#) && !previous.contains("oddPage"),
+        "the first sectPr retains the initial margins, not the next section's start type:\n{previous}"
     );
-    assert_eq!(
-        doc_xml.matches(r#"<w:pgMar w:top="1134""#).count(),
-        1,
-        "the following 2cm margins belong to the new section's own sectPr:\n{doc_xml}"
+    assert!(
+        opened.contains(r#"<w:pgMar w:top="1134""#) && opened.contains("oddPage"),
+        "the body-final sectPr records how the new section opened and its 2cm margins:\n{opened}"
     );
     assert!(doc_xml.contains("Second page."));
 }
@@ -1083,6 +1167,7 @@ fn issue_odd_pagebreak_then_set_page_keeps_parity_and_margins() {
 #[test]
 fn toc_field_cache_lists_heading_entries_with_page_refs() {
     let xml = fixture_doc_xml("toc_test");
+    assert_navigation_targets(&xml);
     assert!(
         xml.contains("PAGEREF"),
         "TOC entries should carry a PAGEREF field"
@@ -1102,17 +1187,8 @@ fn toc_entries_link_to_bookmarks_written_before_outline() {
     // cached TOC entry links to — bookmarks are pre-allocated by heading
     // position, not minted while the outline collects.
     let doc_xml = fixture_doc_xml("toc_headings_before_outline");
-    let bookmark = |name: &str| doc_xml.contains(&format!("w:name=\"{name}\""));
-    for page_ref in doc_xml
-        .split("PAGEREF ")
-        .skip(1)
-        .map(|rest| rest.split(' ').next().unwrap())
-    {
-        assert!(
-            bookmark(page_ref),
-            "PAGEREF {page_ref} must resolve to a bookmark: {doc_xml}"
-        );
-    }
+    assert!(doc_xml.contains("PAGEREF "), "{doc_xml}");
+    assert_navigation_targets(&doc_xml);
 }
 
 #[test]
@@ -1127,6 +1203,7 @@ fn toc_level_filter_emits_its_entries() {
         outcome.degradations
     );
     let doc_xml = fixture_doc_xml("toc_level_filter");
+    assert_navigation_targets(&doc_xml);
     let toc_start = doc_xml.find("Top Level").expect("outline title");
     let body_start = doc_xml[toc_start..]
         .find("w:pStyle w:val=\"Heading1\"")
@@ -1148,6 +1225,7 @@ fn toc_level_filter_emits_its_entries() {
 #[test]
 fn toc_figure_outline_caches_entries() {
     let doc_xml = fixture_doc_xml("toc_figure_entries");
+    assert_navigation_targets(&doc_xml);
     assert!(
         doc_xml.contains("TOC \\h \\z \\c"),
         "figure outlines use the \\c switch: {doc_xml}"
@@ -1163,6 +1241,7 @@ fn toc_figure_outline_caches_entries() {
 #[test]
 fn toc_default_depth_covers_every_level() {
     let doc_xml = fixture_doc_xml("toc_depth");
+    assert_navigation_targets(&doc_xml);
     assert!(
         doc_xml.contains("&quot;1-255&quot;"),
         "the default depth reaches every level: {doc_xml}"
@@ -1177,6 +1256,7 @@ fn toc_default_depth_covers_every_level() {
 #[test]
 fn toc_cached_page_numbers_follow_page_numbering() {
     let doc_xml = fixture_doc_xml("toc_roman_pages");
+    assert_navigation_targets(&doc_xml);
     let toc_start = doc_xml.find("Contents").expect("outline title");
     let body_start = doc_xml[toc_start..]
         .find("w:pStyle w:val=\"Heading1\"")
@@ -1196,8 +1276,125 @@ fn toc_cached_page_numbers_follow_page_numbering() {
 }
 
 #[test]
+fn toc_cached_rows_use_restarted_page_numbers_and_section_width() {
+    let xml = fixture_doc_xml("toc_logical_pages");
+    assert_navigation_targets(&xml);
+    let rows: Vec<_> = xml
+        .split("</w:p>")
+        .filter(|para| para.contains(" PAGEREF "))
+        .collect();
+    // The cover has different margins and no page number. The TOC is on
+    // Roman I, its first target is on II, and the main matter restarts at 1.
+    let expected = [
+        ("Front target", "II", "front-target"),
+        ("Main target", "1", "main-target"),
+        ("Inner target", "2", "outline-target-0"),
+        ("Final target", "3", "outline-target-1"),
+    ];
+    assert_eq!(rows.len(), expected.len());
+    for (index, (para, (title, page, target))) in rows.iter().zip(expected).enumerate() {
+        let row = para.rsplit_once("<w:p>").expect("TOC paragraph").1;
+        let (props, runs) = row
+            .trim_start()
+            .strip_prefix("<w:pPr>")
+            .expect("every TOC row starts with pPr")
+            .split_once("</w:pPr>")
+            .expect("end of pPr");
+        assert_eq!(runs.contains(" TOC "), index == 0, "{row}");
+        // Tab positions are relative to the text area's left edge, not
+        // the entry's indentation: (420 − 52 − 58) pt at all three levels.
+        assert!(
+            props.contains("<w:tabs>")
+                && props.contains(r#"<w:tab w:val="right" w:pos="6200" w:leader="dot"/>"#)
+                && props.contains(r#"w:firstLine="0""#)
+                && props.contains(r#"w:firstLineChars="0""#),
+            "{props}"
+        );
+        assert!(runs.contains(title) && runs.contains("<w:tab/>"), "{runs}");
+        let result = runs
+            .split_once(&format!(" PAGEREF {target} "))
+            .expect("PAGEREF to the expected target")
+            .1;
+        assert!(result.contains(&format!(">{page}</w:t>")), "{result}");
+        assert_eq!(
+            xml.matches(&format!(r#"w:name="{target}""#)).count(),
+            1,
+            "{target} should have exactly one bookmark"
+        );
+    }
+    assert!(xml.contains(" REF front-target \\h "));
+}
+
+#[test]
+fn toc_cached_rows_have_one_internal_link_for_title_tab_and_page() {
+    let package = fixture_package("toc_row_navigation");
+    let xml = package.part_text("word/document.xml");
+    assert_navigation_targets(xml);
+    let rels = package.part_text("word/_rels/document.xml.rels");
+    assert!(!rels.contains("TargetMode=\"External\""), "{rels}");
+    let rows: Vec<_> = xml
+        .split("</w:p>")
+        .filter(|para| para.contains(" PAGEREF "))
+        .collect();
+    let expected = [
+        ("Top-level destination", "2", "outer"),
+        ("Linked heading title", "3", "inner"),
+    ];
+    assert_eq!(rows.len(), expected.len());
+    for (index, (row, (title, number, target))) in rows.iter().zip(expected).enumerate() {
+        let row = row.rsplit_once("<w:p>").expect("TOC paragraph").1.trim();
+        let (props, runs) = row.split_once("</w:pPr>").expect("TOC row properties");
+        assert!(props.starts_with("<w:pPr>") && props.contains(r#"w:leader="dot""#));
+        assert_eq!(props.contains(r#"w:left="240""#), index == 1, "{row}");
+        let field_chars = |part: &str| {
+            part.split(r#"w:fldCharType=""#)
+                .skip(1)
+                .filter_map(|s| s.split_once('"'))
+                .map(|(kind, _)| kind.to_owned())
+                .collect::<Vec<_>>()
+        };
+        // WPS needs the standards-defined visited-link flag to recognize the
+        // cached anchor. The nested PAGEREF's switch would add a second link
+        // over the number; the outer TOC still requests links on refresh.
+        let wrapper = format!(r#"<w:hyperlink w:anchor="{target}" w:history="1">"#);
+        let (prefix, link) = runs.split_once(&wrapper).expect("one anchored row");
+        if index == 0 {
+            assert!(
+                prefix.contains(r#" TOC \o &quot;1-2&quot; \h "#),
+                "{prefix}"
+            );
+            assert_eq!(field_chars(prefix), ["begin", "separate"]);
+        } else {
+            assert!(prefix.trim().is_empty(), "{prefix}");
+        }
+        let (link, tail) = link.split_once("</w:hyperlink>").expect("link end in row");
+        assert!(tail.trim().is_empty() && !link.contains("<w:hyperlink"));
+        // The linked title from the child's actual heading must not get its
+        // own nested hyperlink in the cache. Only the row owns navigation.
+        let (text, page_ref) = link.split_once("<w:tab/>").expect("linked leader");
+        assert!(text.contains(title), "{text}");
+        assert!(page_ref.contains(&format!(" PAGEREF {target} </w:instrText>")));
+        assert!(page_ref.contains(&format!(">{number}</w:t>")));
+        assert_eq!(field_chars(page_ref), ["begin", "separate", "end"]);
+        assert_eq!(xml.matches(&format!(r#"w:name="{target}""#)).count(), 1);
+    }
+    let trailing = xml
+        .split_once(rows[1])
+        .expect("last row")
+        .1
+        .split("</w:p>")
+        .nth(1)
+        .expect("TOC closing paragraph");
+    assert_eq!(trailing.matches("<w:fldChar ").count(), 1);
+    assert!(trailing.contains(r#"w:fldCharType="end""#));
+    assert!(xml.contains(r#"<w:hyperlink w:anchor="outer">"#));
+    assert!(xml.contains(" REF inner \\h ") && xml.contains(" REF outer \\h "));
+}
+
+#[test]
 fn toc_entries_indent_by_level() {
     let doc_xml = fixture_doc_xml("toc_level_indent");
+    assert_navigation_targets(&doc_xml);
     let toc_start = doc_xml.find("Contents").expect("outline title");
     let body_start = doc_xml[toc_start..]
         .find("w:pStyle w:val=\"Heading1\"")
@@ -1222,6 +1419,24 @@ fn toc_entries_indent_by_level() {
     assert_eq!(
         indent_of("Gamma"),
         None,
-        "level-1 entries need no indent: {toc}"
+        "level-1 entries suppress the body first-line indent without a left indent: {toc}"
     );
+    assert!(paragraph_containing(toc, "Gamma").contains(r#"w:firstLine="0""#));
+}
+#[test]
+fn bibliography_outline_points_to_the_unique_visible_title() {
+    let xml = crate::common::fixture_doc_xml("bibliography_show");
+    let instruction = xml
+        .split_once(" PAGEREF ")
+        .and_then(|(_, tail)| tail.split_whitespace().next())
+        .expect("bibliography title has a native outline page reference");
+    let bookmark = format!(r#"w:name="{instruction}""#);
+    assert_eq!(xml.matches(&bookmark).count(), 1, "{xml}");
+    let heading = paragraph_containing(&xml, "Register:");
+    assert_eq!(
+        paragraph_texts(&format!("{heading}</w:p>")),
+        ["Register: Research register"]
+    );
+    assert!(heading.contains(&bookmark), "{heading}");
+    assert!(heading.contains(r#"<w:jc w:val="center"/>"#), "{heading}");
 }

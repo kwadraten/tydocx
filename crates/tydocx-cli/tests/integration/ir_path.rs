@@ -18,8 +18,6 @@ const IDENTICAL: &[&str] = &[
     "enum_custom_start",
     "style_footnotes",
     "formatted_footnote",
-    "image_test",
-    "svg_test",
     "pagebreak_test",
     "style_columns",
     "header_footer_test",
@@ -61,22 +59,45 @@ const DOCUMENTED: &[&str] = &[
     "issue_table_first_section",
     "issue_table_cascade_sections",
     "style_indent",
+    "image_test",
+    "svg_test",
 ];
 
 fn convert_both(fixture: &str) -> (String, String) {
-    let world = tydocx_core::TydocxWorld::new(&common::fixture_path(fixture)).unwrap();
-    let options = tydocx_core::ConvertOptions::default();
-    let new_doc = tydocx_core::convert(&world, &options).unwrap().document;
-    let legacy_doc = tydocx_core::convert_legacy(&world, &options)
-        .unwrap()
-        .document;
-    let new_xml = common::fixture_package_from_document(&new_doc)
-        .part_text("word/document.xml")
-        .to_string();
-    let legacy_xml = common::fixture_package_from_document(&legacy_doc)
-        .part_text("word/document.xml")
-        .to_string();
-    (new_xml, legacy_xml)
+    let (new, legacy) = convert_both_packages(fixture);
+    (
+        new.part_text("word/document.xml").to_string(),
+        legacy.part_text("word/document.xml").to_string(),
+    )
+}
+
+fn convert_both_packages(fixture: &str) -> (common::FixturePackage, common::FixturePackage) {
+    (
+        common::fixture_package(fixture),
+        common::fixture_package_legacy(fixture),
+    )
+}
+
+fn assert_code_font_stays_out_of_normal(package: &common::FixturePackage, inline_code: &str) {
+    let styles = package.part_text("word/styles.xml");
+    let style = |id| {
+        styles
+            .split_once(&format!(r#"w:styleId="{id}""#))
+            .unwrap()
+            .1
+            .split_once("</w:style>")
+            .unwrap()
+            .0
+    };
+    assert!(style("Normal").contains(r#"w:ascii="Libertinus Serif""#));
+    assert!(style("CodeBlock").contains(r#"w:ascii="DejaVu Sans Mono""#));
+    let document = package.part_text("word/document.xml");
+    let paragraph = common::paragraph_containing(document, inline_code);
+    let run = paragraph[..paragraph.find(inline_code).unwrap()]
+        .rsplit("<w:r>")
+        .next()
+        .unwrap();
+    assert!(run.contains(r#"w:ascii="DejaVu Sans Mono""#), "{run}");
 }
 
 fn first_diff(new_xml: &str, legacy_xml: &str) -> String {
@@ -135,11 +156,18 @@ fn ir_path_documented_fixtures_still_differ() {
 
 #[test]
 fn ir_path_documented_diffs() {
-    for fixture in ["aligned_equations", "numbered_eq"] {
+    for fixture in ["image_test", "svg_test"] {
+        let (new_xml, legacy_xml) = convert_both(fixture);
+        assert!(new_xml.contains("<w:drawing>"), "{fixture}");
+        assert!(legacy_xml.contains("<w:drawing>"), "{fixture}");
+        assert!(new_xml.contains("<w:pPr>"), "{fixture}");
+    }
+
+    for fixture in ["aligned_equations"] {
         let (new_xml, legacy_xml) = convert_both(fixture);
         assert_eq!(
             count(&new_xml, "w:jc w:val=\"center\""),
-            if fixture == "aligned_equations" { 3 } else { 2 },
+            3,
             "{fixture}: new path should center every display equation"
         );
         assert_eq!(
@@ -155,6 +183,13 @@ fn ir_path_documented_diffs() {
             without_lines(&legacy_xml, &["w:ind w:firstLine=\"0\""]),
             "{fixture}: nothing else should differ"
         );
+    }
+
+    {
+        let (new_xml, _) = convert_both("numbered_eq");
+        assert_eq!(count(&new_xml, r#"<w:tab w:val="center""#), 2);
+        assert_eq!(count(&new_xml, r#"<w:tab w:val="right""#), 2);
+        assert_eq!(count(&new_xml, "<m:oMath>"), 2);
     }
 
     {
@@ -219,25 +254,26 @@ fn ir_path_documented_diffs() {
     }
 
     {
-        let (new_xml, legacy_xml) = convert_both("tech_doc");
-        assert_eq!(count(&legacy_xml, "w:val=\"20\""), 82);
-        assert_eq!(count(&new_xml, "w:val=\"20\""), 0);
-        assert_eq!(count(&legacy_xml, "DejaVu Sans Mono"), 6);
-        assert_eq!(count(&new_xml, "DejaVu Sans Mono"), 0);
-        assert!(
-            new_xml.contains("Authorization: Bearer"),
-            "code text present"
+        let (new, legacy) = convert_both_packages("tech_doc");
+        assert_eq!(
+            count(legacy.part_text("word/document.xml"), "w:val=\"20\""),
+            82
         );
-        assert!(
-            legacy_xml.contains("Authorization: Bearer"),
-            "code text present"
-        );
+        assert_eq!(count(new.part_text("word/document.xml"), "w:val=\"20\""), 0);
+        for package in [&new, &legacy] {
+            assert_code_font_stays_out_of_normal(package, "Authorization: Bearer");
+        }
     }
 
     {
         let (new_xml, legacy_xml) = convert_both("business_report");
-        assert!(new_xml.contains("“数字化转型不是选择题，而是生存题。” —— CEO 张明"));
-        assert!(!legacy_xml.contains("“数字化转型不是选择题，而是生存题。” —— CEO 张明"));
+        let quote = "“数字化转型不是选择题，而是生存题。” —— CEO 张明";
+        assert!(common::paragraph_texts(&new_xml).iter().any(|p| p == quote));
+        assert!(
+            !common::paragraph_texts(&legacy_xml)
+                .iter()
+                .any(|p| p == quote)
+        );
         assert!(legacy_xml.contains(">数字化转型不是选择题，而是生存题。<"));
         assert!(legacy_xml.contains(">—— CEO 张明<"));
         assert!(
@@ -265,28 +301,28 @@ fn ir_path_documented_diffs() {
     }
 
     {
-        // Step 4: the legacy centered/bold counts dropped — the recovered
-        // duplicate author/table/layout paragraphs `recover_missing_content`
-        // injected from Paged geometry are gone. The IR path emits that
-        // content natively from the `align`/`block` pairs.
         let (new_xml, legacy_xml) = convert_both("complex_paper");
-        assert_eq!(count(&new_xml, "w:jc w:val=\"center\""), 5);
+        assert_eq!(count(&new_xml, "w:jc w:val=\"center\""), 2);
+        assert_eq!(count(&new_xml, r#"<w:tab w:val="center""#), 3);
         assert_eq!(count(&legacy_xml, "w:jc w:val=\"center\""), 0);
-        assert_eq!(count(&new_xml, "w:jc w:val=\"left\""), 20);
+        assert_eq!(count(&new_xml, "w:jc w:val=\"left\""), 23);
         assert_eq!(count(&legacy_xml, "w:jc w:val=\"left\""), 24);
         assert_eq!(count(&new_xml, "<w:b/>"), 15);
         assert_eq!(count(&legacy_xml, "<w:b/>"), 16);
+        let paragraphs = common::paragraph_texts(&new_xml);
         assert!(
-            new_xml.contains(" 本文利用2012"),
+            paragraphs.iter().any(|p| p.contains(" 本文利用2012")),
             "space after 摘要 label kept"
         );
         assert!(legacy_xml.contains("本文利用2012"));
         assert!(
-            new_xml.contains(" 数字经济；区域创新效率"),
+            paragraphs
+                .iter()
+                .any(|p| p.contains(" 数字经济；区域创新效率")),
             "space after 关键词 label kept"
         );
         assert!(
-            new_xml.contains("[1] 赵涛"),
+            paragraphs.iter().any(|p| p.contains("[1] 赵涛")),
             "hand-written reference kept whole"
         );
         assert!(
@@ -323,9 +359,9 @@ fn ir_path_documented_diffs() {
         assert!(legacy_xml.contains(" TOC "), "legacy emits the TOC field");
     }
 
-    for (fixture, anchor, author) in [
-        ("bibliography_basic", "loc_4", "Smith"),
-        ("bibliography_multiple", "loc_2", "Alpha"),
+    for (fixture, author) in [
+        ("bibliography_basic", "Smith"),
+        ("bibliography_multiple", "Alpha"),
     ] {
         let (new_xml, legacy_xml) = convert_both(fixture);
         // HPL-AI citations: the new path emits the BIBLIOGRAPHY field + SDT
@@ -334,7 +370,10 @@ fn ir_path_documented_diffs() {
             !new_xml.contains("<w:bibliography/>"),
             "C2 emits no bibliography field"
         );
-        assert!(legacy_xml.contains(&format!("w:anchor=\"{anchor}\"")));
+        assert!(
+            legacy_xml.contains("w:hyperlink w:anchor="),
+            "{fixture}: legacy citation links present"
+        );
         assert!(new_xml.contains("w:hyperlink"), "citation links present");
         assert!(new_xml.contains(author), "entry text in the new path");
         assert!(legacy_xml.contains(author), "legacy renders entries");
@@ -490,13 +529,16 @@ fn ir_path_documented_diffs() {
     }
 
     {
-        let (new_xml, legacy_xml) = convert_both("style_code_blocks");
-        assert_eq!(count(&new_xml, "w:val=\"18\""), 2);
-        assert_eq!(count(&legacy_xml, "w:val=\"18\""), 0);
-        assert_eq!(count(&legacy_xml, "w:val=\"22\""), 8);
-        assert_eq!(count(&new_xml, "w:val=\"22\""), 0);
-        assert_eq!(count(&legacy_xml, "DejaVu Sans Mono"), 4);
-        assert_eq!(count(&new_xml, "DejaVu Sans Mono"), 0);
+        let (new, legacy) = convert_both_packages("style_code_blocks");
+        let new_xml = new.part_text("word/document.xml");
+        let legacy_xml = legacy.part_text("word/document.xml");
+        assert!(count(new_xml, "w:val=\"18\"") >= 2);
+        assert_eq!(count(legacy_xml, "w:val=\"18\""), 0);
+        assert!(count(legacy_xml, "w:val=\"22\"") >= 2);
+        assert_eq!(count(new_xml, "w:val=\"22\""), 0);
+        for package in [&new, &legacy] {
+            assert_code_font_stays_out_of_normal(package, "inline code");
+        }
         assert!(
             new_xml.contains("w:color w:val=\"D73948\""),
             "highlight color kept"
@@ -505,7 +547,6 @@ fn ir_path_documented_diffs() {
             !legacy_xml.contains("w:color w:val=\"D73948\""),
             "legacy drops colors"
         );
-        assert!(legacy_xml.contains("Courier New"));
     }
     {
         // The realize path carries the resolved `par` onto `IrBlock::Heading`

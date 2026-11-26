@@ -19,6 +19,12 @@
           <w:right w:w="100" w:type="dxa"/>
         </w:tblCellMar>
       </w:tblPr>
+      <w:tblGrid>
+        <w:gridCol/>
+        <w:gridCol/>
+        <w:gridCol/>
+        <w:gridCol/>
+      </w:tblGrid>
       <w:tr>
         <w:tc>
           <w:tcPr>
@@ -176,7 +182,7 @@
       <w:footnotePr>
       </w:footnotePr>
       <w:pgSz w:w="11906" w:h="16838"/>
-      <w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417"/>
+      <w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417" w:header="720" w:footer="720" w:gutter="0"/>
     </w:sectPr>
   </w:body>
 </w:document>

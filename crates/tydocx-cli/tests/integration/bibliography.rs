@@ -2,7 +2,8 @@
 
 use crate::common::{
     fixture_doc_xml, fixture_doc_xml_legacy, fixture_document, fixture_outcome_with_options,
-    fixture_package, fixture_package_with_options, fixture_styles_xml, paragraph_containing,
+    fixture_package, fixture_package_from_document, fixture_package_with_options,
+    fixture_styles_xml, paragraph_containing,
 };
 use std::path::PathBuf;
 
@@ -181,18 +182,139 @@ fn bibliography_display_text_present() {
 
 #[test]
 fn bibliography_section_heading_present() {
-    // The "Bibliography" string only exists inside the C3 bibliography SDT
-    // (pStyle + sdt markers); C2's plain paragraphs carry no section markup.
-    let xml = fixture_package_with_options(
-        "bibliography_basic",
-        &tydocx_core::ConvertOptions::new(tydocx_core::CompatMode::C3),
-    )
-    .part_text("word/document.xml")
-    .to_owned();
-    // The bibliography section heading should be present
+    let xml = fixture_doc_xml("bibliography_basic");
     assert!(
-        xml.contains("Bibliography"),
-        "expected Bibliography heading text"
+        crate::common::paragraph_texts(&xml)
+            .into_iter()
+            .any(|text| text == "Bibliography"),
+        "the actual heading is visible even without a BIBLIOGRAPHY field: {xml}"
+    );
+}
+
+#[test]
+fn bibliography_without_title_or_marker_does_not_invent_either() {
+    let outcome = crate::common::fixture_outcome("bibliography_prefix_apa");
+    let package = crate::common::fixture_package_from_document(&outcome.document);
+    let xml = package.part_text("word/document.xml");
+    assert!(!xml.contains("Heading1"), "{xml}");
+    let entry = paragraph_containing(xml, "Kudo, N.");
+    assert!(
+        entry.contains("w:hanging") && !entry.contains("<w:tab/>"),
+        "{entry}"
+    );
+    assert!(
+        !outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "bibliography-display"),
+        "{:?}",
+        outcome.degradations
+    );
+}
+
+#[test]
+fn bibliography_uses_paged_cell_display_and_preserves_sources() {
+    for mode in [tydocx_core::CompatMode::C2, tydocx_core::CompatMode::C3] {
+        let options = tydocx_core::ConvertOptions::new(mode);
+        let outcome = fixture_outcome_with_options("bibliography_show", &options);
+        let package = fixture_package_from_document(&outcome.document);
+        let xml = package.part_text("word/document.xml");
+        let article = paragraph_containing(xml, "Rewritten article");
+        let book = paragraph_containing(xml, "Rewritten book");
+        assert!(
+            article.contains("[i]") && book.contains("[WIDE-12]"),
+            "{xml}"
+        );
+        assert!(article.contains("Rewritten article [S]"), "{article}");
+        assert!(article.contains("https://example.org/literal"), "{article}");
+        assert!(article.contains(r#"<w:wordWrap w:val="0"/>"#), "{article}");
+        assert!(!book.contains("<w:wordWrap"), "{book}");
+        let link = article
+            .split_once("<w:hyperlink r:id=")
+            .and_then(|(_, rest)| rest.split_once("</w:hyperlink>"))
+            .map(|(link, _)| link)
+            .expect("real source link should stay clickable");
+        assert!(
+            link.contains("Live destination") && link.contains("375A20"),
+            "{link}"
+        );
+        assert!(!link.contains("<w:u") && !link.contains("0563C1"), "{link}");
+        assert!(!link.contains("https://example.org/literal"), "{link}");
+        let rels = package.part_text("word/_rels/document.xml.rels");
+        assert!(
+            rels.contains("https://example.org/live")
+                && !rels.contains("https://example.org/literal"),
+            "{rels}"
+        );
+        assert!(
+            !xml.contains("An Example Article") && !xml.contains(" BIBLIOGRAPHY "),
+            "{xml}"
+        );
+        for id in ["bib-0", "bib-1"] {
+            assert!(xml.contains(&format!("w:anchor=\"{id}\"")), "{xml}");
+            assert_eq!(xml.matches(&format!("w:name=\"{id}\"")).count(), 1, "{xml}");
+        }
+        let sources = package.part_text("customXml/item1.xml");
+        assert!(
+            sources.contains("An Example Article") && sources.contains("knuth1997"),
+            "{sources}"
+        );
+        assert!(
+            !outcome
+                .degradations
+                .iter()
+                .any(|d| d.construct == "bibliography-display"),
+            "{:?}",
+            outcome.degradations
+        );
+    }
+}
+
+#[test]
+fn bibliography_marker_and_continuation_share_the_body_tab_stop() {
+    let xml = fixture_doc_xml("bibliography_show");
+    let mut stops = Vec::new();
+    for text in ["Rewritten article", "Rewritten book"] {
+        let paragraph = paragraph_containing(&xml, text);
+        let attr = |prefix| {
+            paragraph
+                .split_once(prefix)
+                .and_then(|(_, rest)| rest.split('"').next())
+                .expect("bibliography must have explicit tab and indent")
+        };
+        let tab = attr(r#"<w:tab w:val="left" w:pos=""#);
+        assert_eq!(tab, attr(r#"w:left=""#), "{paragraph}");
+        assert_eq!(tab, attr(r#"w:hanging=""#), "{paragraph}");
+        assert!(
+            tab.parse::<u32>().unwrap() > 0 && paragraph.contains("<w:tab/>"),
+            "{paragraph}"
+        );
+        stops.push(tab);
+    }
+    assert_eq!(
+        stops[0], stops[1],
+        "both rows should use the widest measured marker column"
+    );
+}
+
+#[test]
+fn unsupported_cell_display_retains_csl_and_reports_why() {
+    let outcome = crate::common::fixture_outcome("bibliography_show_fallback");
+    let package = crate::common::fixture_package_from_document(&outcome.document);
+    let xml = package.part_text("word/document.xml");
+    assert!(
+        xml.contains("Register") && xml.contains("An Example Article"),
+        "{xml}"
+    );
+    assert!(xml.contains("Supported display in the other row."), "{xml}");
+    assert!(!xml.contains("The Art of Computer Programming"), "{xml}");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "bibliography-display"),
+        "{:?}",
+        outcome.degradations
     );
 }
 
