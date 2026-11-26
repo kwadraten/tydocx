@@ -342,7 +342,7 @@ pub(super) fn write_paragraph<W: Write>(
                 }
                 // Emit section break (w:sectPr inside w:pPr)
                 if let Some(section) = &para.section_break {
-                    write_section_break(ppr, section, ctx.parts)?;
+                    write_section_break(ppr, section, ctx)?;
                 }
                 Ok(())
             })?;

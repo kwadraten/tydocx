@@ -1,4 +1,4 @@
-use tydocx_ooxml::document::{HeaderFooter, PageNumberFooters, PageNumberFormat};
+use tydocx_ooxml::document::{HeaderFooter, PageNumberFooters, PageNumberFormat, SectionHeaderSet};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GeometryInput {
@@ -23,4 +23,5 @@ pub struct GeometryInput {
     pub mirror_margins: bool,
     /// `w:titlePg` — page 1's margin-zone content differed from the rest.
     pub title_page: bool,
+    pub section_headers: Vec<SectionHeaderSet>,
 }

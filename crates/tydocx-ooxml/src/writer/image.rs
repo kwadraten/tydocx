@@ -29,20 +29,20 @@ pub(super) fn collect_images(doc: &Document) -> Vec<&ImageData> {
 }
 
 /// Images inside each header/footer part, in part order
-/// (header default/even/first, then footer default/even/first). Each entry is
+/// (`Document::header_parts`, then footer default/even/first). Each entry is
 /// that part's image list in encounter order; the media numbering continues
 /// the document-wide sequence while the relationships live in the part's own
 /// `word/_rels/headerN.xml.rels` / `word/_rels/footerN.xml.rels`.
 pub(super) fn collect_header_footer_images(doc: &Document) -> Vec<Vec<&ImageData>> {
     let mut parts = Vec::new();
-    for hf in [
-        &doc.header,
-        &doc.header_even,
-        &doc.header_first,
-        &doc.footer,
-        &doc.footer_even,
-        &doc.footer_first,
-    ] {
+    for (_, hf) in doc.header_parts() {
+        let mut images = Vec::new();
+        for para in &hf.paragraphs {
+            collect_images_from_para(para, &mut images);
+        }
+        parts.push(images);
+    }
+    for hf in [&doc.footer, &doc.footer_even, &doc.footer_first] {
         let mut images = Vec::new();
         if let Some(hf) = hf {
             for para in &hf.paragraphs {

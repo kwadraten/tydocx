@@ -9,43 +9,45 @@ use super::paragraph::write_paragraph;
 use super::table::write_table;
 use super::{DocParts, RelKind, WriteCtx};
 use crate::document::{
-    BlockElement, Document, DocumentStyle, PageNumberFormat, PageSettings, SectionBreak,
-    SectionBreakType,
+    BlockElement, Document, DocumentStyle, HeaderPartRefs, PageNumberFormat, PageSettings,
+    SectionBreak, SectionBreakType,
 };
 
-/// Write `w:headerReference`/`w:footerReference` for every header/footer part
-/// the document carries. `include_first` adds the `w:type="first"` references,
-/// which are only meaningful on a `w:titlePg` section.
-fn write_header_footer_refs<W: Write>(
+fn write_header_refs<W: Write>(
     w: &mut Writer<W>,
     parts: &DocParts,
+    refs: HeaderPartRefs,
     include_first: bool,
 ) -> io::Result<()> {
-    for (slot, kind, tag) in [
-        (1_u8, "default", "w:headerReference"),
-        (2, "even", "w:headerReference"),
-        (3, "first", "w:headerReference"),
+    for (num, kind) in [
+        (refs.default, "default"),
+        (refs.even, "even"),
+        (refs.first, "first"),
     ] {
-        if slot == 3 && !include_first {
+        if kind == "first" && !include_first {
             continue;
         }
-        if let Some(rid) = parts.rel_id(RelKind::Header(slot)) {
-            w.create_element(tag)
+        if let Some(rid) = num.and_then(|n| parts.rel_id(RelKind::Header(n))) {
+            w.create_element("w:headerReference")
                 .with_attribute(("w:type", kind))
                 .with_attribute(("r:id", rid.as_str()))
                 .write_empty()?;
         }
     }
-    for (slot, kind, tag) in [
-        (1_u8, "default", "w:footerReference"),
-        (2, "even", "w:footerReference"),
-        (3, "first", "w:footerReference"),
-    ] {
+    Ok(())
+}
+
+fn write_footer_refs<W: Write>(
+    w: &mut Writer<W>,
+    parts: &DocParts,
+    include_first: bool,
+) -> io::Result<()> {
+    for (slot, kind) in [(1_u8, "default"), (2, "even"), (3, "first")] {
         if slot == 3 && !include_first {
             continue;
         }
         if let Some(rid) = parts.rel_id(RelKind::Footer(slot)) {
-            w.create_element(tag)
+            w.create_element("w:footerReference")
                 .with_attribute(("w:type", kind))
                 .with_attribute(("r:id", rid.as_str()))
                 .write_empty()?;
@@ -156,8 +158,16 @@ pub(super) fn generate_document_xml(
                 &SectionTail {
                     page_numbering: doc.page_numbering.as_ref(),
                     page_number_start: doc.page_number_start,
-                    title_page: doc.title_page && is_single_section,
+                    title_page: doc
+                        .section_headers
+                        .last()
+                        .map_or(doc.title_page && is_single_section, |set| set.title_page),
                     section_type: doc.final_section_type,
+                    header_refs: ctx
+                        .header_refs
+                        .get(doc.section_headers.len())
+                        .copied()
+                        .unwrap_or_default(),
                 },
             )?;
             Ok(())
@@ -174,6 +184,7 @@ struct SectionTail<'a> {
     page_number_start: Option<u32>,
     title_page: bool,
     section_type: Option<SectionBreakType>,
+    header_refs: HeaderPartRefs,
 }
 
 fn write_section_properties<W: Write>(
@@ -184,7 +195,8 @@ fn write_section_properties<W: Write>(
     tail: &SectionTail<'_>,
 ) -> io::Result<()> {
     writer.create_element("w:sectPr").write_inner_content(|w| {
-        write_header_footer_refs(w, parts, tail.title_page)?;
+        write_header_refs(w, parts, tail.header_refs, tail.title_page)?;
+        write_footer_refs(w, parts, tail.title_page)?;
         write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
         // CT_SectPr orders w:type between footnotePr and pgSz; omitted
         // means nextPage.
@@ -272,10 +284,19 @@ fn write_section_page_settings<W: Write>(
 pub(super) fn write_section_break<W: Write>(
     writer: &mut Writer<W>,
     section: &SectionBreak,
-    parts: &DocParts,
+    ctx: &WriteCtx<'_>,
 ) -> io::Result<()> {
+    let header_refs = match section.header_set {
+        Some(set) => ctx
+            .header_refs
+            .get(usize::try_from(set).unwrap_or(usize::MAX))
+            .copied()
+            .unwrap_or_default(),
+        None => ctx.header_refs.first().copied().unwrap_or_default(),
+    };
     writer.create_element("w:sectPr").write_inner_content(|w| {
-        write_header_footer_refs(w, parts, section.title_page)?;
+        write_header_refs(w, ctx.parts, header_refs, section.title_page)?;
+        write_footer_refs(w, ctx.parts, section.title_page)?;
         let break_val = section.break_type.ooxml_value();
         w.create_element("w:type")
             .with_attribute(("w:val", break_val))

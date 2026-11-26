@@ -5,7 +5,9 @@ use std::io::{Seek, Write};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
-use crate::document::{BlockElement, CellContent, Document, DocumentStyle, ImageData, Table};
+use crate::document::{
+    BlockElement, CellContent, Document, DocumentStyle, HeaderPartRefs, ImageData, Table,
+};
 use crate::styles;
 
 mod citation;
@@ -57,14 +59,8 @@ impl DocParts {
             relationships.push(RelKind::Numbering);
         }
         relationships.push(RelKind::Settings);
-        if doc.header.is_some() {
-            relationships.push(RelKind::Header(1));
-        }
-        if doc.header_even.is_some() {
-            relationships.push(RelKind::Header(2));
-        }
-        if doc.header_first.is_some() {
-            relationships.push(RelKind::Header(3));
+        for (slot, _) in doc.header_parts() {
+            relationships.push(RelKind::Header(slot));
         }
         if doc.footer.is_some() || doc.page_number_footers.default {
             relationships.push(RelKind::Footer(1));
@@ -93,6 +89,13 @@ impl DocParts {
         self.relationships.contains(&kind)
     }
 
+    fn header_slots(&self) -> impl Iterator<Item = u8> + '_ {
+        self.relationships.iter().filter_map(|kind| match kind {
+            RelKind::Header(slot) => Some(*slot),
+            _ => None,
+        })
+    }
+
     /// The `rId` for this part (1-based position in `document.xml.rels`).
     fn rel_id(&self, kind: RelKind) -> Option<String> {
         self.relationships
@@ -117,6 +120,7 @@ struct WriteCtx<'a> {
     /// `wp:docPr` ids for anchored shape drawings. Starts high so it cannot
     /// collide with the 1-based image `docPr` ids in the same part.
     shape_id_counter: &'a Cell<usize>,
+    header_refs: &'a [HeaderPartRefs],
 }
 
 /// Write a Document to a .docx file (ZIP archive) into the given writer.
@@ -125,6 +129,10 @@ struct WriteCtx<'a> {
 /// Returns an error if XML serialization or ZIP writing fails.
 pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<dyn Error>> {
     let parts = DocParts::new(doc);
+    let header_refs: Vec<HeaderPartRefs> = (0..=u32::try_from(doc.section_headers.len())
+        .unwrap_or(u32::MAX))
+        .map(|set| doc.section_header_refs(set))
+        .collect();
     let images = collect_images(doc);
     let footnote_images = collect_footnote_images(doc);
     let hf_images = collect_header_footer_images(doc);
@@ -150,6 +158,7 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
         image_counter: &image_counter,
         citation_id_counter: &citation_id_counter,
         shape_id_counter: &shape_id_counter,
+        header_refs: &header_refs,
     };
 
     let mut zip = ZipWriter::new(writer);
@@ -296,27 +305,19 @@ fn write_header_footer_parts<W: Write + Seek>(
     hf_image_base: usize,
 ) -> Result<(), Box<dyn Error>> {
     let mut media_offset = hf_image_base;
-    for (i, (slot, content)) in [
-        (1_u8, &doc.header),
-        (2, &doc.header_even),
-        (3, &doc.header_first),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    let header_parts = doc.header_parts();
+    for (i, (slot, header)) in header_parts.iter().enumerate() {
         let part_images = hf_images.get(i).map_or(&[][..], Vec::as_slice);
-        if let Some(header) = content {
-            let part = PartCtx::new(part_images.to_vec());
-            zip.start_file(format!("word/header{slot}.xml"), options)?;
+        let part = PartCtx::new(part_images.to_vec());
+        zip.start_file(format!("word/header{slot}.xml"), options)?;
+        zip.write_all(&xml_part(|w| {
+            generate_header_xml(w, header, &doc.style, &part.ctx(ctx))
+        })?)?;
+        if !part_images.is_empty() {
+            zip.start_file(format!("word/_rels/header{slot}.xml.rels"), options)?;
             zip.write_all(&xml_part(|w| {
-                generate_header_xml(w, header, &doc.style, &part.ctx(ctx))
+                generate_part_image_rels(w, part_images, media_offset)
             })?)?;
-            if !part_images.is_empty() {
-                zip.start_file(format!("word/_rels/header{slot}.xml.rels"), options)?;
-                zip.write_all(&xml_part(|w| {
-                    generate_part_image_rels(w, part_images, media_offset)
-                })?)?;
-            }
         }
         media_offset += part_images.len();
     }
@@ -329,7 +330,9 @@ fn write_header_footer_parts<W: Write + Seek>(
     .into_iter()
     .enumerate()
     {
-        let part_images = hf_images.get(i + 3).map_or(&[][..], Vec::as_slice);
+        let part_images = hf_images
+            .get(i + header_parts.len())
+            .map_or(&[][..], Vec::as_slice);
         if generated {
             zip.start_file(format!("word/footer{slot}.xml"), options)?;
             zip.write_all(&xml_part(generate_page_number_footer_xml)?)?;

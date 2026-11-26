@@ -168,13 +168,11 @@ pub(super) fn generate_content_types(
                 .with_attribute(("PartName", "/word/settings.xml"))
                 .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"))
                 .write_empty()?;
-            for slot in 1_u8..=3 {
-                if parts.has(RelKind::Header(slot)) {
-                    w.create_element("Override")
-                        .with_attribute(("PartName", format!("/word/header{slot}.xml").as_str()))
-                        .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"))
-                        .write_empty()?;
-                }
+            for slot in parts.header_slots() {
+                w.create_element("Override")
+                    .with_attribute(("PartName", format!("/word/header{slot}.xml").as_str()))
+                    .with_attribute(("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"))
+                    .write_empty()?;
             }
             for slot in 1_u8..=3 {
                 if parts.has(RelKind::Footer(slot)) {

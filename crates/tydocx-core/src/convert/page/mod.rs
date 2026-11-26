@@ -24,7 +24,8 @@ pub use hanging_indent::{ParHangingRule, collect_par_hanging_indent_rules};
 pub use language::{canonicalize_font_names, localize_cjk_fonts};
 pub use margin::{
     MarginZone, MarginsPt, ZoneParts, detect_multi_format_page_numbering, detect_page_numbering,
-    extract_page_settings, extract_zone_parts, page_number_format_from_declaration,
+    extract_page_settings, extract_zone_parts, extract_zone_parts_in,
+    page_number_format_from_declaration,
 };
 pub use reachable::{collect_reachable_source_texts, extract_import_paths};
 pub use run_style::apply_styles_from_paged;

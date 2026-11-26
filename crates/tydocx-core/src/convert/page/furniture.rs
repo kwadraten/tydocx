@@ -1138,39 +1138,50 @@ fn plan_layer(
 /// that do not exist yet. Runs after part propagation so real header/footer
 /// content is already in every slot.
 pub fn attach(plan: &FurniturePlan, doc: &mut Document) {
-    for (slot, anchors) in [
-        (&mut doc.header, &plan.header_default),
-        (&mut doc.header_even, &plan.header_even),
-        (&mut doc.header_first, &plan.header_first),
-    ] {
+    let mut defaults = vec![&mut doc.header];
+    let mut evens = vec![&mut doc.header_even];
+    for set in &mut doc.section_headers {
+        defaults.push(&mut set.default);
+        evens.push(&mut set.even);
+    }
+    for (slots, anchors) in [(defaults, &plan.header_default), (evens, &plan.header_even)] {
         if anchors.is_empty() {
             continue;
         }
-        let part = slot.get_or_insert_with(|| HeaderFooter {
-            paragraphs: Vec::new(),
-        });
-        for (anchor, behind) in anchors {
-            let mut float = anchor.float.clone();
-            float.behind_doc = *behind;
-            float.z_order = u32::try_from(
-                part.paragraphs
-                    .iter()
-                    .filter(|p| {
-                        p.inlines
-                            .iter()
-                            .any(|i| matches!(i, InlineElement::AnchoredFloat(_)))
-                    })
-                    .count(),
-            )
-            .unwrap_or(u32::MAX)
-            .saturating_add(1);
-            let mut anchor_para = Paragraph::new();
-            anchor_para.mark_size_half_pt = Some(2);
-            anchor_para
-                .inlines
-                .push(InlineElement::AnchoredFloat(float));
-            part.paragraphs.push(anchor_para);
+        for slot in slots {
+            attach_anchors(slot, anchors);
         }
+    }
+    if !plan.header_first.is_empty() {
+        attach_anchors(&mut doc.header_first, &plan.header_first);
+    }
+}
+
+fn attach_anchors(slot: &mut Option<HeaderFooter>, anchors: &[(FurnAnchor, bool)]) {
+    let part = slot.get_or_insert_with(|| HeaderFooter {
+        paragraphs: Vec::new(),
+    });
+    for (anchor, behind) in anchors {
+        let mut float = anchor.float.clone();
+        float.behind_doc = *behind;
+        float.z_order = u32::try_from(
+            part.paragraphs
+                .iter()
+                .filter(|p| {
+                    p.inlines
+                        .iter()
+                        .any(|i| matches!(i, InlineElement::AnchoredFloat(_)))
+                })
+                .count(),
+        )
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+        let mut anchor_para = Paragraph::new();
+        anchor_para.mark_size_half_pt = Some(2);
+        anchor_para
+            .inlines
+            .push(InlineElement::AnchoredFloat(float));
+        part.paragraphs.push(anchor_para);
     }
 }
 

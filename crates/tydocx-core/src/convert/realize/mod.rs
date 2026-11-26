@@ -496,6 +496,7 @@ pub fn export_ir_with_ir(
         options.compat,
         &mut degradations,
     );
+    let section_ranges = paged_doc.and_then(|paged| section_page_ranges(&ir.sections, paged));
     apply_headers_and_footers(
         paged_doc,
         world,
@@ -503,6 +504,7 @@ pub fn export_ir_with_ir(
         options.compat,
         &mut degradations,
         &place::place_location_hashes(&ir.body),
+        section_ranges.as_deref(),
     );
     let section_break = !ir.sections.is_empty();
     if options.compat == CompatMode::C1 {
@@ -544,6 +546,7 @@ pub fn export_ir_with_ir(
         even_and_odd_headers: tmp.even_and_odd_headers,
         mirror_margins: tmp.mirror_margins,
         title_page: tmp.title_page,
+        section_headers: tmp.section_headers.clone(),
     };
 
     if let Some(paged) = paged_doc {
@@ -586,6 +589,30 @@ pub fn export_ir_with_ir(
     }
 
     (ConvertOutcome::new(doc, degradations), ir)
+}
+
+fn section_page_ranges(
+    sections: &[tydocx_ir::IrSection],
+    paged: &PagedDocument,
+) -> Option<Vec<std::ops::Range<usize>>> {
+    if sections.is_empty() {
+        return None;
+    }
+    let page_count = paged.pages().len();
+    let mut ranges = Vec::with_capacity(sections.len() + 1);
+    let mut start = 0usize;
+    for section in sections {
+        let page = section
+            .start_location
+            .and_then(|hash| paged.introspector().page(Location::new(hash)))?
+            .get()
+            .saturating_sub(1)
+            .max(start);
+        ranges.push(start..page);
+        start = page;
+    }
+    ranges.push(start..page_count);
+    Some(ranges)
 }
 
 fn assign_numbering_starts(
