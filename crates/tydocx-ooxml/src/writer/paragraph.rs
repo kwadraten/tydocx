@@ -42,7 +42,7 @@ pub(super) fn write_paragraph<W: Write>(
             )
         });
         let has_hanging = para.hanging_indent.is_some();
-        let has_hrule = para.horizontal_rule;
+        let has_hrule = para.horizontal_rule.is_some();
         let has_tab_stops = !para.tab_stops.is_empty();
         let has_spacing = para.spacing_before.is_some()
             || para.spacing_after.is_some()
@@ -68,14 +68,26 @@ pub(super) fn write_paragraph<W: Write>(
         {
             w.create_element("w:pPr").write_inner_content(|ppr| {
                 // Horizontal rule: emit bottom border
-                if has_hrule {
+                if let Some(rule) = &para.horizontal_rule {
                     ppr.create_element("w:pBdr").write_inner_content(|bdr| {
-                        bdr.create_element("w:bottom")
-                            .with_attribute(("w:val", "single"))
-                            .with_attribute(("w:sz", "6"))
-                            .with_attribute(("w:space", "1"))
-                            .with_attribute(("w:color", "auto"))
-                            .write_empty()?;
+                        let bottom = bdr.create_element("w:bottom");
+                        if rule.sz_eighths == 0 {
+                            bottom
+                                .with_attribute(("w:val", "nil"))
+                                .with_attribute(("w:space", "1"))
+                                .write_empty()?;
+                        } else {
+                            let sz = rule.sz_eighths.to_string();
+                            bottom
+                                .with_attribute(("w:val", "single"))
+                                .with_attribute(("w:sz", sz.as_str()))
+                                .with_attribute(("w:space", "1"))
+                                .with_attribute((
+                                    "w:color",
+                                    rule.color_hex.as_deref().unwrap_or("auto"),
+                                ))
+                                .write_empty()?;
+                        }
                         Ok(())
                     })?;
                 }

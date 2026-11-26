@@ -238,3 +238,84 @@ fn c3_draws_the_same_shapes_as_c2() {
         "C3 draws every C2 shape"
     );
 }
+
+#[test]
+fn oversized_line_draws_instead_of_collapsing_to_rule() {
+    let xml = fixture_doc_xml("line_rules");
+    let drawings = drawings(&xml);
+    let wide = drawing_with(&drawings, r#"wp:extent cx="5760000""#);
+    assert!(
+        wide.contains("<a:custGeom>"),
+        "a 200% line is a custGeom drawing, not a column-width rule:\n{wide}"
+    );
+}
+
+#[test]
+fn full_width_rule_keeps_the_declared_stroke() {
+    let xml = fixture_doc_xml("line_rules");
+    assert!(
+        xml.contains(r#"<w:bottom w:val="single" w:sz="16" w:space="1" w:color="FF4136"/>"#),
+        "the 2pt red rule keeps its resolved stroke on w:pBdr:\n{xml}"
+    );
+    assert!(
+        xml.contains(r#"<w:bottom w:val="single" w:sz="8" w:space="1" w:color="000000"/>"#),
+        "the default 1pt rule keeps its resolved stroke on w:pBdr:\n{xml}"
+    );
+}
+
+#[test]
+fn dashed_and_offset_lines_draw_instead_of_ruling() {
+    let xml = fixture_doc_xml("line_rules");
+    let drawings = drawings(&xml);
+    let dashed = drawing_with(&drawings, "<a:custDash>");
+    assert!(
+        dashed.contains(r#"wp:extent cx="2880000" cy="12700""#),
+        "the dashed 100% line draws padded to its stroke width:\n{dashed}"
+    );
+    let offset = drawing_with(&drawings, r#"wp:extent cx="3168000""#);
+    assert!(
+        offset.contains(r#"<a:pt x="288000" y="6350"/>"#),
+        "the 10%-offset line keeps its start inside the extent:\n{offset}"
+    );
+}
+
+#[test]
+fn gradient_and_round_cap_lines_draw_instead_of_ruling() {
+    let xml = fixture_doc_xml("line_rules");
+    assert_eq!(
+        xml.matches("<w:pBdr>").count(),
+        2,
+        "only the solid flat-cap 100% lines fold to w:pBdr:\n{xml}"
+    );
+    let drawings = drawings(&xml);
+    let padded = drawings
+        .iter()
+        .filter(|d| d.contains(r#"wp:extent cx="2880000" cy="19050""#))
+        .count();
+    assert_eq!(
+        padded, 2,
+        "the gradient and round-cap 100% lines draw padded to their 1.5pt stroke"
+    );
+    let outcome = crate::common::fixture_outcome("line_rules");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "shape" && d.message.contains("non-solid stroke paint")),
+        "the gradient-stroke line reports its dropped paint: {:?}",
+        outcome.degradations
+    );
+}
+
+#[test]
+fn negative_vspace_reports_a_degradation() {
+    let outcome = crate::common::fixture_outcome("line_rules");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "v-negative-space"),
+        "#v(-2pt) between the wide lines reports a spacing degradation: {:?}",
+        outcome.degradations
+    );
+}

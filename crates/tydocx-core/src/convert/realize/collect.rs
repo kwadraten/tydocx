@@ -23,9 +23,9 @@ use typst_library::layout::grid::Celled;
 use typst_library::layout::grid::GridCell;
 use typst_library::layout::grid::resolve::{Cell, CellGrid, Entry, Line, LinePosition};
 use typst_library::layout::{
-    Abs, AlignElem, Angle, Axes, BlockBody, BlockElem, BoxElem, ColbreakElem, ColumnsElem,
-    GridChild, GridElem, GridFooter, GridHeader, GridItem, HAlignment, HideElem, Length, Margin,
-    MoveElem, PadElem, PageElem, PagebreakElem, Parity, PlaceElem, Region, Rel, RepeatElem,
+    Abs, AlignElem, Axes, BlockBody, BlockElem, BoxElem, ColbreakElem, ColumnsElem, GridChild,
+    GridElem, GridFooter, GridHeader, GridItem, HAlignment, HideElem, Length, Margin, MoveElem,
+    PadElem, PageElem, PagebreakElem, Parity, PlaceElem, Ratio, Region, Rel, RepeatElem,
     RotateElem, ScaleElem, Sides, Size, Sizing, SkewElem, Spacing, StackChild, StackElem,
     VAlignment, VElem,
 };
@@ -47,13 +47,15 @@ use typst_library::visualize::{
 };
 use typst_syntax::Source;
 use typst_syntax::Span;
+use typst_utils::Numeric;
 
 use super::inline::{
     FootnoteMarker, InlineCtx, alignment_from_styles, collect_inlines, collect_paragraph,
-    image_inline, par_style_from_styles, smart_quotes_for, spacing_twips,
+    hanging_indent_from_styles, image_inline, par_style_from_styles, smart_quotes_for,
+    spacing_twips,
 };
 use super::page;
-use super::shape::resolve_shape;
+use super::shape::{block_container_width_pt, border_rule, resolve_shape, visible_line_geometry};
 use super::style::{StyleDefaults, defaults_from_root, monospace_families, run_from_styles};
 use super::with_fragment;
 use crate::convert::table_align::paint_to_shd_hex;
@@ -118,6 +120,7 @@ pub struct Collector<'a> {
     /// The `\@` picture `document.date` renders in its kind-dependent auto
     /// format, resolved from `DocumentInfo::date` before collection.
     doc_date_picture: Option<&'static str>,
+    container_pt: Option<f64>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -234,6 +237,7 @@ pub fn collect_document(
         one_sided_asymmetric_margins: false,
         two_sided_margins: false,
         doc_date_picture: info.date_picture,
+        container_pt: None,
         _marker: std::marker::PhantomData,
     };
     collector.pass_one(pairs, engine, locator)?;
@@ -628,11 +632,13 @@ impl Collector<'_> {
             ]);
         }
         if inner.to_packed::<TableElem>().is_some() {
-            return Ok(vec![self.collect_table(inner, styles, engine, locator)?]);
+            return Ok(vec![
+                self.collect_table(inner, group, styles, engine, locator)?,
+            ]);
         }
         if inner.to_packed::<GridElem>().is_some() {
             return Ok(vec![
-                self.collect_grid_elem(inner, styles, engine, locator)?,
+                self.collect_grid_elem(inner, group, styles, engine, locator)?,
             ]);
         }
         if let Some(list) = inner.to_packed::<ListElem>() {
@@ -768,7 +774,9 @@ impl Collector<'_> {
         match image_inline(image, styles, engine, &mut ctx) {
             Some(inline) => vec![IrBlock::Paragraph(IrParagraph {
                 inlines: vec![inline],
+                alignment: alignment_from_styles(styles),
                 par: par_style_from_styles(styles),
+                hanging_indent: hanging_indent_from_styles(styles),
                 ..IrParagraph::default()
             })],
             None => Vec::new(),
@@ -848,10 +856,14 @@ impl Collector<'_> {
         }
         if let Some(block) = content.to_packed::<BlockElem>() {
             if let Some(body) = block_body_content(block, styles) {
-                let mut blocks = self.collect_content_blocks(body, styles, engine, locator)?;
-                apply_block_props(&mut blocks, block, styles);
-                report_block_aspects(block, styles, content.span(), &mut self.degradations);
-                return Ok(blocks);
+                return self.collect_scoped_block(
+                    block,
+                    body,
+                    styles,
+                    engine,
+                    locator,
+                    content.span(),
+                );
             }
             return self.collect_layouter_block(content, styles, engine, locator);
         }
@@ -1068,7 +1080,13 @@ impl Collector<'_> {
         if let Some(block) = content.to_packed::<BlockElem>() {
             return match block.body.as_option() {
                 Some(Some(BlockBody::Content(body))) => {
-                    self.collect_body_blocks(body, list_ctx, styles, engine, locator)
+                    let saved = self.container_pt;
+                    if let Smart::Custom(rel) = &block.width.get(styles) {
+                        self.container_pt = Some(block_container_width_pt(rel, saved, styles));
+                    }
+                    let result = self.collect_body_blocks(body, list_ctx, styles, engine, locator);
+                    self.container_pt = saved;
+                    result
                 }
                 _ => Ok(Vec::new()),
             };
@@ -1400,25 +1418,47 @@ impl Collector<'_> {
         let Some((kind, shape_body)) = shape_parts(child) else {
             return Ok(None);
         };
-        // A `#line` with only `length` is a paragraph rule, not a drawing —
-        // keep it on the `horizontal_rule` path (`line_blocks` folded here
-        // when `shape_parts` learned `LineElem`).
-        if kind == IrShapeKind::Line
-            && let Some(line) = child.to_packed::<LineElem>()
-            && line.end.get(styles).is_none()
-            && line.angle.get(styles) == Angle::zero()
-        {
-            return Ok(Some(IrBlock::Paragraph(IrParagraph {
-                horizontal_rule: true,
-                ..IrParagraph::default()
-            })));
+        if kind == IrShapeKind::Line {
+            let span = child.span();
+            let resolved = resolve_shape(child, styles, engine, locator, self.container_pt);
+            if let Some(geometry) = &resolved.geometry {
+                let container_emu = tydocx_ir::pt_to_emu(
+                    self.container_pt
+                        .unwrap_or_else(|| page_content_width_pt(styles)),
+                );
+                if let Some(rule) = border_rule(geometry, container_emu) {
+                    return Ok(Some(IrBlock::Paragraph(IrParagraph {
+                        horizontal_rule: Some(rule),
+                        par: par_style_from_styles(styles),
+                        ..IrParagraph::default()
+                    })));
+                }
+                return Ok(Some(IrBlock::Shape {
+                    kind,
+                    span: span.id().map(|_| span),
+                    body: Vec::new(),
+                    fill_hex: None,
+                    geometry: Some(visible_line_geometry(geometry)),
+                    loss: resolved.loss,
+                    alignment: alignment_from_styles(styles),
+                }));
+            }
+            return Ok(Some(IrBlock::Shape {
+                kind,
+                span: span.id().map(|_| span),
+                body: Vec::new(),
+                fill_hex: None,
+                geometry: None,
+                loss: resolved.loss,
+                alignment: alignment_from_styles(styles),
+            }));
         }
         let body = match shape_body {
             Some(content) => self.collect_content_blocks(&content, styles, engine, locator)?,
             None => Vec::new(),
         };
         let span = child.span();
-        let resolved = resolve_shape(child, styles, engine, locator);
+        let resolved = resolve_shape(child, styles, engine, locator, self.container_pt);
         Ok(Some(IrBlock::Shape {
             kind,
             span: span.id().map(|_| span),
@@ -1473,12 +1513,22 @@ impl Collector<'_> {
             ]);
         }
         if child.to_packed::<TableElem>().is_some() {
-            return Ok(vec![self.collect_table(child, styles, engine, locator)?]);
+            return Ok(vec![self.collect_table(
+                child,
+                &[],
+                styles,
+                engine,
+                locator,
+            )?]);
         }
         if child.to_packed::<GridElem>().is_some() {
-            return Ok(vec![
-                self.collect_grid_elem(child, styles, engine, locator)?,
-            ]);
+            return Ok(vec![self.collect_grid_elem(
+                child,
+                &[],
+                styles,
+                engine,
+                locator,
+            )?]);
         }
         if let Some(list) = child.to_packed::<ListElem>() {
             return Ok(vec![self.collect_list(list, 0, styles, engine, locator)?]);
@@ -1554,10 +1604,14 @@ impl Collector<'_> {
     ) -> SourceResult<Vec<IrBlock>> {
         if let Some(block) = child.to_packed::<BlockElem>() {
             if let Some(body) = block_body_content(block, styles) {
-                let mut blocks = self.collect_content_blocks(body, styles, engine, locator)?;
-                apply_block_props(&mut blocks, block, styles);
-                report_block_aspects(block, styles, child.span(), &mut self.degradations);
-                return Ok(blocks);
+                return self.collect_scoped_block(
+                    block,
+                    body,
+                    styles,
+                    engine,
+                    locator,
+                    child.span(),
+                );
             }
             return self.collect_layouter_block(child, styles, engine, locator);
         }
@@ -1594,6 +1648,33 @@ impl Collector<'_> {
             return Ok(vec![IrBlock::Paragraph(para)]);
         }
         Ok(Vec::new())
+    }
+
+    fn collect_scoped_block(
+        &mut self,
+        block: &Packed<BlockElem>,
+        body: &Content,
+        styles: StyleChain<'_>,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+        span: Span,
+    ) -> SourceResult<Vec<IrBlock>> {
+        let width = block.width.get(styles);
+        let saved = self.container_pt;
+        if let Smart::Custom(rel) = &width {
+            self.container_pt = Some(block_container_width_pt(rel, saved, styles));
+        }
+        let mut blocks = self.collect_content_blocks(body, styles, engine, locator)?;
+        self.container_pt = saved;
+        let width_consumed = width.is_custom()
+            && blocks.iter().any(|b| match b {
+                IrBlock::Table(t) => t.width_pct.is_some(),
+                IrBlock::Grid(g) => g.width_pct.is_some(),
+                _ => false,
+            });
+        apply_block_props(&mut blocks, block, styles);
+        report_block_aspects(block, styles, span, &mut self.degradations, width_consumed);
+        Ok(blocks)
     }
 
     fn collect_heading_elem(
@@ -2222,10 +2303,12 @@ impl Collector<'_> {
     fn collect_table(
         &mut self,
         content: &Content,
+        group: &[Pair<'_>],
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
+        let scoped = heading_inner_styles(group).unwrap_or(styles);
         let Some(table) = content.to_packed::<TableElem>() else {
             self.degradations.push(Degradation {
                 span: None,
@@ -2237,6 +2320,7 @@ impl Collector<'_> {
             return Ok(IrBlock::Table(IrTable {
                 rows: Vec::new(),
                 column_widths_pct: None,
+                width_pct: None,
                 borders: None,
                 gutter: false,
                 cell_margins: None,
@@ -2247,7 +2331,7 @@ impl Collector<'_> {
             && !grid.entries.is_empty()
         {
             return Ok(IrBlock::Table(
-                self.cell_grid_to_table(grid, table, styles, engine, locator)?,
+                self.cell_grid_to_table(grid, table, scoped, engine, locator)?,
             ));
         }
         let mut found: Option<IrBlock> = None;
@@ -2264,10 +2348,11 @@ impl Collector<'_> {
                         && let Some(frag_grid) = frag_table.grid.as_ref()
                         && !frag_grid.entries.is_empty()
                     {
+                        let frag_scoped = heading_inner_styles(pairs).unwrap_or(*frag_styles);
                         found = Some(IrBlock::Table(self.cell_grid_to_table(
                             frag_grid,
                             frag_table,
-                            *frag_styles,
+                            frag_scoped,
                             engine,
                             locator,
                         )?));
@@ -2281,17 +2366,19 @@ impl Collector<'_> {
             return Ok(block);
         }
         Ok(IrBlock::Table(self.unresolved_table_to_table(
-            table, styles, engine, locator,
+            table, scoped, engine, locator,
         )?))
     }
 
     fn collect_grid_elem(
         &mut self,
         content: &Content,
+        group: &[Pair<'_>],
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrBlock> {
+        let scoped = heading_inner_styles(group).unwrap_or(styles);
         let Some(grid) = content.to_packed::<GridElem>() else {
             self.degradations.push(Degradation {
                 span: None,
@@ -2304,6 +2391,7 @@ impl Collector<'_> {
             return Ok(IrBlock::Grid(IrGrid {
                 rows: Vec::new(),
                 column_widths_pct: None,
+                width_pct: None,
                 borders: Some(TableBorders::default()),
                 row_sizes: Vec::new(),
                 col_sizes: Vec::new(),
@@ -2315,7 +2403,7 @@ impl Collector<'_> {
             && !cell_grid.entries.is_empty()
         {
             return Ok(IrBlock::Grid(self.cell_grid_to_grid(
-                cell_grid, grid, content, styles, engine, locator,
+                cell_grid, grid, content, scoped, engine, locator,
             )?));
         }
         let mut found: Option<IrBlock> = None;
@@ -2332,11 +2420,12 @@ impl Collector<'_> {
                         && let Some(frag_cell_grid) = frag_grid.grid.as_ref()
                         && !frag_cell_grid.entries.is_empty()
                     {
+                        let frag_scoped = heading_inner_styles(pairs).unwrap_or(*frag_styles);
                         found = Some(IrBlock::Grid(self.cell_grid_to_grid(
                             frag_cell_grid,
                             frag_grid,
                             inner,
-                            *frag_styles,
+                            frag_scoped,
                             engine,
                             locator,
                         )?));
@@ -2358,6 +2447,7 @@ impl Collector<'_> {
         Ok(IrBlock::Grid(IrGrid {
             rows: Vec::new(),
             column_widths_pct: None,
+            width_pct: None,
             borders: Some(TableBorders::default()),
             row_sizes: Vec::new(),
             col_sizes: Vec::new(),
@@ -2374,12 +2464,15 @@ impl Collector<'_> {
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrTable> {
-        let (mut rows, col_count) = self.cell_grid_rows(grid, false, styles, engine, locator)?;
+        let default_insets = default_cell_margins(&table.inset.get_cloned(styles), styles);
+        let (mut rows, col_count) =
+            self.cell_grid_rows(grid, false, default_insets, styles, engine, locator)?;
         fold_lines_into_cells(&mut rows, grid, &mut self.degradations);
         let column_widths_pct = self.table_column_widths(table, col_count, styles);
         Ok(IrTable {
             rows,
             column_widths_pct,
+            width_pct: self.container_width_pct(styles),
             borders: table_borders_from_grid(grid),
             gutter: table_gutter(table, styles),
             cell_margins: table_cell_margins(table, styles),
@@ -2397,7 +2490,9 @@ impl Collector<'_> {
         locator: &mut SplitLocator,
     ) -> SourceResult<IrGrid> {
         let heights = measure_grid_row_heights(grid, content, styles, engine, locator);
-        let (mut rows, col_count) = self.cell_grid_rows(grid, true, styles, engine, locator)?;
+        let default_insets = default_cell_margins(&grid_elem.inset.get_cloned(styles), styles);
+        let (mut rows, col_count) =
+            self.cell_grid_rows(grid, true, default_insets, styles, engine, locator)?;
         fold_lines_into_cells(&mut rows, grid, &mut self.degradations);
         if let Some(heights) = heights {
             for (row, twips) in rows.iter_mut().zip(heights.iter()) {
@@ -2410,6 +2505,7 @@ impl Collector<'_> {
         Ok(IrGrid {
             rows,
             column_widths_pct,
+            width_pct: self.container_width_pct(styles),
             borders: table_borders_from_grid(grid),
             row_sizes: non_gutter_sizes(&grid.rows, grid.has_gutter),
             col_sizes: non_gutter_sizes(&grid.cols, grid.has_gutter),
@@ -2432,6 +2528,7 @@ impl Collector<'_> {
         &mut self,
         grid: &CellGrid,
         keep_empty: bool,
+        default_insets: Option<TableCellMargins>,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
@@ -2456,9 +2553,12 @@ impl Collector<'_> {
                 let cell_x = if grid.has_gutter { x / 2 } else { x };
                 match grid.entry(x, y) {
                     Some(Entry::Cell(cell)) => {
-                        cells.push(self.resolved_cell_to_ir(
-                            cell, cell_x, is_header, styles, engine, locator,
-                        )?);
+                        let ctx = CellCtx {
+                            x: cell_x,
+                            is_header,
+                            default_insets,
+                        };
+                        cells.push(self.resolved_cell_to_ir(cell, &ctx, styles, engine, locator)?);
                     }
                     Some(Entry::Merged { parent }) => {
                         let parent_row = parent.checked_div(col_count).unwrap_or(rows.len());
@@ -2491,7 +2591,7 @@ impl Collector<'_> {
                                 vmerge: IrVMerge::Continue,
                                 fill_hex: None,
                                 vertical_align: None,
-                                inset_twips: None,
+                                insets: None,
                                 borders: tydocx_ir::IrCellBorders::default(),
                                 borders_declared: tydocx_ir::IrCellBorderFlags::default(),
                             });
@@ -2517,20 +2617,59 @@ impl Collector<'_> {
     fn resolved_cell_to_ir(
         &mut self,
         cell: &Cell,
-        cell_x: usize,
-        is_header: bool,
+        ctx: &CellCtx,
         styles: StyleChain<'_>,
         engine: &mut Engine,
         locator: &mut SplitLocator,
     ) -> SourceResult<IrTableCell> {
         let table_cell = cell.body.to_packed::<TableCell>();
         let grid_cell = cell.body.to_packed::<GridCell>();
-        let (fill_hex, vertical_align, horizontal_align, inset_twips) =
+        let (mut fill_hex, vertical_align, horizontal_align, resolved_insets) =
             cell_style_props(cell, table_cell, grid_cell, styles);
-        let raw_body = table_cell.map_or_else(
+        let mut insets = resolved_insets.filter(|m| Some(*m) != ctx.default_insets);
+        let mut raw_body = table_cell.map_or_else(
             || grid_cell.map_or_else(|| cell.body.clone(), |gc| gc.body.clone()),
             |tc| tc.body.clone(),
         );
+        let mut borders = cell_borders_from_stroke(&cell.stroke);
+        let mut borders_declared = tydocx_ir::IrCellBorderFlags {
+            top: cell.stroke_overridden.top,
+            right: cell.stroke_overridden.right,
+            bottom: cell.stroke_overridden.bottom,
+            left: cell.stroke_overridden.left,
+        };
+        if let Some(rect) = raw_body.to_packed::<RectElem>() {
+            let span = raw_body.span();
+            let folded = fold_rect_cell(rect, styles, &mut borders, &mut borders_declared);
+            if fill_hex.is_none() {
+                fill_hex = folded.fill_hex;
+            }
+            if let Some(rect) = folded.insets {
+                let base = resolved_insets
+                    .or(ctx.default_insets)
+                    .unwrap_or(TableCellMargins {
+                        top: 0,
+                        left: 0,
+                        bottom: 0,
+                        right: 0,
+                    });
+                insets = Some(TableCellMargins {
+                    top: base.top + rect.top,
+                    left: base.left + rect.left,
+                    bottom: base.bottom + rect.bottom,
+                    right: base.right + rect.right,
+                });
+            }
+            for message in folded.losses {
+                self.degradations.push(Degradation {
+                    span: Some(span),
+                    construct: "cell-rect",
+                    action: DegradationAction::Approximated,
+                    message,
+                });
+            }
+            raw_body = folded.body.unwrap_or_default();
+        }
         let mut body = if table_cell.is_some() || grid_cell.is_some() {
             with_fragment(
                 engine,
@@ -2552,12 +2691,12 @@ impl Collector<'_> {
                 }
             }
         }
-        if is_header {
+        if ctx.is_header {
             bold_header_cell_body(&mut body);
         }
         Ok(IrTableCell {
             body,
-            x: cell_x,
+            x: ctx.x,
             colspan: u32::try_from(cell.colspan.get()).unwrap_or(u32::MAX),
             rowspan: u32::try_from(cell.rowspan.get()).unwrap_or(u32::MAX),
             vmerge: if cell.rowspan.get() > 1 {
@@ -2567,14 +2706,9 @@ impl Collector<'_> {
             },
             fill_hex,
             vertical_align,
-            inset_twips,
-            borders: cell_borders_from_stroke(&cell.stroke),
-            borders_declared: tydocx_ir::IrCellBorderFlags {
-                top: cell.stroke_overridden.top,
-                right: cell.stroke_overridden.right,
-                bottom: cell.stroke_overridden.bottom,
-                left: cell.stroke_overridden.left,
-            },
+            insets,
+            borders,
+            borders_declared,
         })
     }
 
@@ -2612,9 +2746,26 @@ impl Collector<'_> {
 
     fn width_ctx(&self, styles: StyleChain<'_>) -> TableWidthCtx {
         TableWidthCtx {
-            content_pt: page_content_width_pt(styles),
+            content_pt: self
+                .container_pt
+                .unwrap_or_else(|| page_content_width_pt(styles)),
             body_font_pt: f64::from(self.defaults.size_half_pt) / 2.0,
         }
+    }
+
+    fn container_width_pct(&self, styles: StyleChain<'_>) -> Option<u32> {
+        let container = self.container_pt?;
+        let page = page_content_width_pt(styles);
+        if page <= 0.0 {
+            return None;
+        }
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a container width is a small positive fraction of the page"
+        )]
+        let pct = (container / page * 5000.0).round().clamp(1.0, 5000.0) as u32;
+        (pct != 5000).then_some(pct)
     }
 
     fn unresolved_table_to_table(
@@ -2672,6 +2823,7 @@ impl Collector<'_> {
         Ok(IrTable {
             rows,
             column_widths_pct,
+            width_pct: self.container_width_pct(styles),
             borders: None,
             gutter: table_gutter(table, styles),
             cell_margins: table_cell_margins(table, styles),
@@ -2699,7 +2851,7 @@ impl Collector<'_> {
             vmerge: IrVMerge::None,
             fill_hex,
             vertical_align: None,
-            inset_twips: None,
+            insets: None,
             borders: IrCellBorders::default(),
             borders_declared: IrCellBorderFlags::default(),
         })
@@ -3484,13 +3636,30 @@ fn table_cell_margins(table: &TableElem, styles: StyleChain<'_>) -> Option<Table
     let Celled::Value(sides) = table.inset.get_cloned(styles) else {
         return None;
     };
+    Some(margins_from_sides(&sides, styles))
+}
+
+fn margins_from_sides(
+    sides: &Sides<Option<Rel<Length>>>,
+    styles: StyleChain<'_>,
+) -> TableCellMargins {
     let side = |side: Option<Rel<Length>>| side.map_or(0, |rel| rel_side_twips(&rel, styles));
-    Some(TableCellMargins {
+    TableCellMargins {
         top: side(sides.top),
         left: side(sides.left),
         bottom: side(sides.bottom),
         right: side(sides.right),
-    })
+    }
+}
+
+fn default_cell_margins(
+    inset: &Celled<Sides<Option<Rel<Length>>>>,
+    styles: StyleChain<'_>,
+) -> Option<TableCellMargins> {
+    match inset {
+        Celled::Value(sides) => Some(margins_from_sides(sides, styles)),
+        _ => None,
+    }
 }
 
 /// Absolute twips for one `Rel<Length>` side (`em` resolved against the current
@@ -3588,8 +3757,11 @@ fn report_block_aspects(
     styles: StyleChain<'_>,
     span: Span,
     degradations: &mut Vec<Degradation>,
+    width_consumed: bool,
 ) {
-    if block.width.get(styles).is_custom() || !block.height.get(styles).is_auto() {
+    if (block.width.get(styles).is_custom() && !width_consumed)
+        || !block.height.get(styles).is_auto()
+    {
         degradations.push(Degradation {
             span: Some(span),
             construct: "block-width",
@@ -4233,17 +4405,21 @@ fn heading_numbers(heading: &HeadingElem) -> Option<String> {
 }
 
 fn heading_inner_styles<'a>(pairs: &[Pair<'a>]) -> Option<StyleChain<'a>> {
+    let mut layouter_block: Option<StyleChain<'a>> = None;
     for (content, pair_styles) in pairs {
-        if let Some(block) = content.to_packed::<BlockElem>()
-            && block_body_content(block, *pair_styles).is_some()
-        {
-            return Some(*pair_styles);
+        if let Some(block) = content.to_packed::<BlockElem>() {
+            if block_body_content(block, *pair_styles).is_some() {
+                return Some(*pair_styles);
+            }
+            if layouter_block.is_none() {
+                layouter_block = Some(*pair_styles);
+            }
         }
         if content.to_packed::<ParElem>().is_some() {
             return Some(*pair_styles);
         }
     }
-    None
+    layouter_block
 }
 
 /// The heading's effective `heading(numbering:)` — element arg first, then
@@ -5249,7 +5425,7 @@ fn cell_style_props(
     Option<String>,
     Option<VerticalAlign>,
     Option<Alignment>,
-    Option<u32>,
+    Option<TableCellMargins>,
 ) {
     let fill_hex = cell.fill.as_ref().and_then(paint_to_shd_hex).or_else(|| {
         table_cell
@@ -5287,23 +5463,24 @@ fn cell_style_props(
             HAlignment::Center => Alignment::Center,
             HAlignment::Right | HAlignment::End => Alignment::Right,
         });
-    let inset_twips = table_cell
-        .and_then(|tc| match tc.inset.get_cloned(styles) {
-            Smart::Custom(sides) => sides
-                .left
-                .map(|rel| rel.abs.at(Abs::pt(11.0)).to_pt() * 20.0),
+    let insets = table_cell
+        .map(|tc| tc.inset.get_cloned(styles))
+        .or_else(|| grid_cell.map(|gc| gc.inset.get_cloned(styles)))
+        .and_then(|smart| match smart {
+            Smart::Custom(sides) => Some(sides),
             Smart::Auto => None,
         })
-        .map(|pt| {
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "insets are small non-negative lengths"
-            )]
-            let twips = pt.round().max(0.0) as u32;
-            twips
+        .map(|sides| TableCellMargins {
+            top: rel_side_twips_opt(sides.top, styles),
+            left: rel_side_twips_opt(sides.left, styles),
+            bottom: rel_side_twips_opt(sides.bottom, styles),
+            right: rel_side_twips_opt(sides.right, styles),
         });
-    (fill_hex, vertical_align, horizontal_align, inset_twips)
+    (fill_hex, vertical_align, horizontal_align, insets)
+}
+
+fn rel_side_twips_opt(side: Option<Rel<Length>>, styles: StyleChain<'_>) -> u32 {
+    side.map_or(0, |rel| rel_side_twips(&rel, styles))
 }
 
 fn ir_border(stroke: &typst_library::visualize::Stroke<Abs>) -> Option<IrBorder> {
@@ -5336,6 +5513,130 @@ fn cell_borders_from_stroke(
         bottom: stroke.bottom.as_ref().and_then(|s| ir_border(s)),
         left: stroke.left.as_ref().and_then(|s| ir_border(s)),
     }
+}
+
+struct CellCtx {
+    x: usize,
+    is_header: bool,
+    default_insets: Option<TableCellMargins>,
+}
+
+struct FoldedRectCell {
+    body: Option<Content>,
+    fill_hex: Option<String>,
+    insets: Option<TableCellMargins>,
+    losses: Vec<String>,
+}
+
+fn fold_rect_cell(
+    rect: &Packed<RectElem>,
+    styles: StyleChain<'_>,
+    borders: &mut IrCellBorders,
+    declared: &mut IrCellBorderFlags,
+) -> FoldedRectCell {
+    let mut losses = Vec::new();
+    let mut non_solid_stroke = false;
+    if let Smart::Custom(sides) = rect.stroke.resolve(styles) {
+        non_solid_stroke |= fold_rect_side(sides.top.as_ref(), &mut borders.top, &mut declared.top);
+        non_solid_stroke |= fold_rect_side(
+            sides.right.as_ref(),
+            &mut borders.right,
+            &mut declared.right,
+        );
+        non_solid_stroke |= fold_rect_side(
+            sides.bottom.as_ref(),
+            &mut borders.bottom,
+            &mut declared.bottom,
+        );
+        non_solid_stroke |=
+            fold_rect_side(sides.left.as_ref(), &mut borders.left, &mut declared.left);
+    }
+    if non_solid_stroke {
+        losses.push(
+            "a cell rect's non-solid stroke paint is not representable; the border keeps the default colour"
+                .to_string(),
+        );
+    }
+    let inset = rect.inset.resolve(styles);
+    let insets = if inset.iter().any(Option::is_some) {
+        Some(TableCellMargins {
+            top: rel_abs_side_twips(inset.top),
+            left: rel_abs_side_twips(inset.left),
+            bottom: rel_abs_side_twips(inset.bottom),
+            right: rel_abs_side_twips(inset.right),
+        })
+    } else {
+        None
+    };
+    if rect
+        .radius
+        .resolve(styles)
+        .iter()
+        .any(|corner| corner.as_ref().is_some_and(|rel| !rel.abs.is_zero()))
+    {
+        losses.push(
+            "a cell rect's rounded corners are not representable; they are dropped".to_string(),
+        );
+    }
+    if rect.outset.resolve(styles).iter().any(Option::is_some) {
+        losses.push("a cell rect's outset is not representable; it is dropped".to_string());
+    }
+    let width_sized = matches!(
+        rect.width.get(styles),
+        Smart::Custom(rel) if !rel.resolve(styles).abs.is_zero()
+    );
+    let height_sized = match rect.height.get(styles) {
+        Sizing::Auto => false,
+        Sizing::Fr(_) => true,
+        Sizing::Rel(rel) => {
+            let resolved = rel.resolve(styles);
+            !resolved.abs.is_zero() || resolved.rel != Ratio::new(1.0)
+        }
+    };
+    if width_sized || height_sized {
+        losses.push(
+            "a cell rect's fixed size is not representable; the cell sizes to its content"
+                .to_string(),
+        );
+    }
+    let fill = rect.fill.get_cloned(styles);
+    let fill_hex = fill.as_ref().and_then(paint_to_shd_hex);
+    if fill.is_some() && fill_hex.is_none() {
+        losses.push(
+            "a cell rect's non-solid fill paint is not representable; the cell is left unshaded"
+                .to_string(),
+        );
+    }
+    FoldedRectCell {
+        body: rect.body.get_cloned(styles),
+        fill_hex,
+        insets,
+        losses,
+    }
+}
+
+fn fold_rect_side(
+    side: Option<&Option<typst_library::visualize::Stroke<Abs>>>,
+    border: &mut Option<IrBorder>,
+    declared: &mut bool,
+) -> bool {
+    match side {
+        Some(Some(stroke)) => {
+            *border = ir_border(stroke);
+            *declared = true;
+            matches!(&stroke.paint, Smart::Custom(paint) if paint_to_shd_hex(paint).is_none())
+        }
+        Some(None) => {
+            *border = None;
+            *declared = true;
+            false
+        }
+        None => false,
+    }
+}
+
+fn rel_abs_side_twips(side: Option<Rel<Abs>>) -> u32 {
+    side.map_or(0, |rel| crate::convert::page::pt_to_twips(rel.abs.to_pt()))
 }
 
 /// The non-gutter boundary index a resolved `Line` draws on: `Before` sits

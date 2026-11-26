@@ -165,6 +165,7 @@ pub(super) fn postprocess_rowspans(raw_rows: Vec<RawTableRow>) -> Table {
                     shading: None,
                     width_twips: None,
                     borders: None,
+                    margins: None,
                     zero_margins: false,
                 });
                 logical_col += colspan as usize;
@@ -276,6 +277,7 @@ pub(super) fn convert_table_row(tr: &HtmlElement, ctx: &mut WalkCtx) -> Option<R
                     shading: None,
                     width_twips: None,
                     borders: None,
+                    margins: None,
                     zero_margins: false,
                 });
                 cell_idx += 1;

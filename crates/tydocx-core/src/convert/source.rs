@@ -463,7 +463,7 @@ pub(super) fn apply_hanging_indent_from_source(world: &TydocxWorld, doc: &mut Do
         };
         if p.list_info.is_some()
             || p.code_block
-            || p.horizontal_rule
+            || p.horizontal_rule.is_some()
             || matches!(p.style, Some(ParagraphStyle::Heading(_)))
         {
             continue;

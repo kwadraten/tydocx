@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 pub use tydocx_ooxml::document::{
     Alignment, AnchoredLine, CitationSource, DocumentStyle, FootnoteFormat, HangingIndent,
-    InlineShape, PageNumberFormat, PageSettings, ParagraphStyle, Run, ShapeCap, ShapeInsets,
-    ShapeJoin, ShapeOutline, ShapePathSeg, ShapeStroke, SrcRect, TableBorders, TableCellMargins,
-    VerticalAlign,
+    InlineShape, PageNumberFormat, PageSettings, ParagraphRule, ParagraphStyle, Run, ShapeCap,
+    ShapeInsets, ShapeJoin, ShapeOutline, ShapePathSeg, ShapeStroke, SrcRect, TableBorders,
+    TableCellMargins, VerticalAlign,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -337,7 +337,7 @@ pub struct IrParagraph {
     pub keep_lines: bool,
     pub keep_next: bool,
     pub code_block: bool,
-    pub horizontal_rule: bool,
+    pub horizontal_rule: Option<ParagraphRule>,
     pub tab_stops: Vec<u32>,
     pub spacing_before: Option<u32>,
     /// `w:spacing w:after` override (twips) — `block(above:|below:|spacing:)`.
@@ -478,8 +478,6 @@ pub struct IrImage {
     pub vector: bool,
     pub non_cover_fit: bool,
     pub alt: Option<String>,
-    /// Original SVG bytes for vector content; emitted as `asvg:svgBlip`
-    /// inside `mc:AlternateContent` with `bytes` (PNG) as the fallback.
     pub svg: Option<Vec<u8>>,
     /// `a:srcRect` crop window derived from the paged frame's clip geometry
     /// (`block/box(clip:)`, `image(fit: "cover")`), filled by the paged patch.
@@ -490,6 +488,7 @@ pub struct IrImage {
 pub struct IrTable {
     pub rows: Vec<IrTableRow>,
     pub column_widths_pct: Option<Vec<u32>>,
+    pub width_pct: Option<u32>,
     pub borders: Option<TableBorders>,
     pub gutter: bool,
     pub cell_margins: Option<TableCellMargins>,
@@ -517,7 +516,7 @@ pub struct IrTableCell {
     pub vmerge: IrVMerge,
     pub fill_hex: Option<String>,
     pub vertical_align: Option<VerticalAlign>,
-    pub inset_twips: Option<u32>,
+    pub insets: Option<TableCellMargins>,
     /// Per-side strokes resolved on the cell, used when a grid's stroke
     /// geometry must be reproduced cell-by-cell rather than as table borders.
     pub borders: IrCellBorders,
@@ -603,6 +602,7 @@ pub struct IrGrid {
     /// whitespace of timetables).
     pub rows: Vec<IrTableRow>,
     pub column_widths_pct: Option<Vec<u32>>,
+    pub width_pct: Option<u32>,
     pub borders: Option<TableBorders>,
     /// Non-gutter track sizings, same length as `rows` / column count.
     pub row_sizes: Vec<IrTrackSize>,

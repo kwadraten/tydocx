@@ -1,17 +1,19 @@
-//! L4 vector preservation: SVG images and drawn figure canvases ship as
-//! real SVG inside `mc:AlternateContent` (`asvg:svgBlip` in the `mc:Choice`),
-//! with the rasterized PNG kept as `mc:Fallback` for consumers without the
-//! SVG extension.
+//! L4 vector preservation: SVG images and drawn figure canvases ship as a
+//! single `a:blip` whose `a:extLst` carries `asvg:svgBlip` (the real vector
+//! bytes), with the rasterized PNG as the `r:embed` for consumers without
+//! the SVG extension — no `mc:AlternateContent` wrapper.
 
 use crate::common::{fixture_doc_xml, fixture_package};
 
 #[test]
-fn svg_image_keeps_vector_choice_with_png_fallback() {
+fn svg_image_keeps_vector_blip_with_png_embed() {
     let xml = fixture_doc_xml("svg_test");
-    assert!(xml.contains("<mc:AlternateContent"));
-    assert!(xml.contains(r#"Requires="asvg""#));
+    assert!(!xml.contains("mc:AlternateContent"));
     assert!(xml.contains("asvg:svgBlip"));
-    assert!(xml.contains("<mc:Fallback>"));
+    let blip = xml.find("<a:blip ").unwrap();
+    let blip_end = xml[blip..].find("</a:blip>").unwrap();
+    let body = &xml[blip..blip + blip_end];
+    assert!(body.contains("<a:extLst>") && body.contains("asvg:svgBlip"));
 
     let package = fixture_package("svg_test");
     let names: Vec<&str> = package.part_names().collect();
@@ -47,7 +49,7 @@ fn drawn_figure_body_embeds_svg_canvas() {
         xml.contains("asvg:svgBlip"),
         "the drawn figure canvas embeds as SVG on the realize path"
     );
-    assert!(xml.contains("<mc:Fallback>"));
+    assert!(!xml.contains("mc:AlternateContent"));
     let package = fixture_package("edge_figure_rasterized");
     let svg = package.part_text("word/media/image1.svg");
     assert!(svg.starts_with("<svg"));
@@ -67,8 +69,8 @@ fn footnote_svg_image_uses_footnote_relationships() {
     let package = fixture_package("footnote_svg_image");
     let footnotes = package.part_text("word/footnotes.xml");
     assert!(
-        footnotes.contains("asvg:svgBlip") && footnotes.contains("<mc:Fallback>"),
-        "the footnote SVG embeds with a PNG fallback inside footnotes.xml"
+        footnotes.contains("asvg:svgBlip") && !footnotes.contains("mc:AlternateContent"),
+        "the footnote SVG embeds as a single blip+extLst inside footnotes.xml"
     );
     let rels = package.part_text("word/_rels/footnotes.xml.rels");
     assert!(

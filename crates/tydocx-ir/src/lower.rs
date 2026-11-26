@@ -1271,6 +1271,7 @@ fn floating_table(
                 shading: None,
                 width_twips: None,
                 borders: Some(CellBorders::default()),
+                margins: None,
                 zero_margins: false,
             }],
             height_twips: None,
@@ -1608,7 +1609,7 @@ fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     out.keep_lines = para.keep_lines;
     out.keep_next = para.keep_next;
     out.code_block = para.code_block;
-    out.horizontal_rule = para.horizontal_rule;
+    out.horizontal_rule.clone_from(&para.horizontal_rule);
     out.tab_stops.clone_from(&para.tab_stops);
     out.spacing_before = para.spacing_before;
     out.spacing_after = para.spacing_after;
@@ -2091,7 +2092,7 @@ fn lower_table(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Table
         .collect();
     Table {
         rows,
-        width_pct: Some(5000),
+        width_pct: Some(table.width_pct.unwrap_or(5000)),
         border_size: None,
         borders: table.borders.clone(),
         cell_margins: table.cell_margins,
@@ -2149,7 +2150,7 @@ fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<Bloc
         .collect();
     vec![BlockElement::Table(Table {
         rows,
-        width_pct: Some(5000),
+        width_pct: Some(grid.width_pct.unwrap_or(5000)),
         border_size: None,
         borders: grid.borders.clone(),
         cell_margins: None,
@@ -2265,6 +2266,7 @@ fn lower_planned_cell(
             shading: cell.fill_hex.clone(),
             width_twips,
             borders,
+            margins: None,
             zero_margins: true,
         },
         PlannedCellKind::VContinue => TableCell {
@@ -2277,6 +2279,7 @@ fn lower_planned_cell(
             shading: cell.fill_hex.clone(),
             width_twips,
             borders,
+            margins: None,
             zero_margins: true,
         },
     }
@@ -2366,6 +2369,7 @@ fn lower_cell(
         // collection). Cells that merely inherit the table's uniform stroke
         // keep `None` and inherit `tblBorders` — the same output as before.
         borders: cell_borders_emitted(&cell.borders, cell.borders_declared),
+        margins: cell.insets,
         zero_margins: false,
     }
 }
@@ -2987,7 +2991,7 @@ mod tests {
                     vmerge: IrVMerge::Restart,
                     fill_hex: Some("DDEEFF".to_owned()),
                     vertical_align: Some(VerticalAlign::Center),
-                    inset_twips: None,
+                    insets: None,
                     borders: IrCellBorders::default(),
                     borders_declared: IrCellBorderFlags::default(),
                 }],
@@ -2995,6 +2999,7 @@ mod tests {
                 is_header: false,
             }],
             column_widths_pct: Some(vec![2500, 2500]),
+            width_pct: None,
             borders: None,
             gutter: false,
             cell_margins: None,

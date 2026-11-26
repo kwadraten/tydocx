@@ -191,9 +191,9 @@ fn ir_path_documented_diffs() {
         // Step 4: the legacy `#line` rule came from
         // `insert_horizontal_rules_from_paged` (deleted); the IR path emits it
         // natively through `line_blocks` from the `LineElem` pair.
-        assert!(!legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""));
+        assert!(!legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"8\""));
         assert!(
-            new_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""),
+            new_xml.contains("w:bottom w:val=\"single\" w:sz=\"8\""),
             "#line resolves through its context wrapper to a paragraph rule"
         );
         assert_eq!(count(&new_xml, "w:val=\"18\""), 6);
@@ -251,9 +251,9 @@ fn ir_path_documented_diffs() {
         let (new_xml, legacy_xml) = convert_both("memo");
         // Step 4: same `insert_horizontal_rules_from_paged` removal as
         // `general_elements` — IR keeps the `#line` rule natively.
-        assert!(!legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""));
+        assert!(!legacy_xml.contains("w:bottom w:val=\"single\" w:sz=\"8\""));
         assert!(
-            new_xml.contains("w:bottom w:val=\"single\" w:sz=\"6\""),
+            new_xml.contains("w:bottom w:val=\"single\" w:sz=\"8\""),
             "#line resolves through its context wrapper to a paragraph rule"
         );
         assert_eq!(count(&new_xml, "<w:tbl>"), 1);
@@ -341,9 +341,8 @@ fn ir_path_documented_diffs() {
     }
 
     {
-        // L4: the drawn canvas embeds on both paths — an SVG choice plus a
-        // PNG fallback inside mc:AlternateContent, extent taken from the
-        // canvas frame.
+        // L4: the drawn canvas embeds on both paths — a single a:blip with
+        // asvg:svgBlip in its extLst, extent taken from the canvas frame.
         let (new_xml, legacy_xml) = convert_both("edge_figure_rasterized");
         assert_eq!(count(&legacy_xml, "asvg:svgBlip"), 1);
         assert_eq!(count(&new_xml, "asvg:svgBlip"), 1);

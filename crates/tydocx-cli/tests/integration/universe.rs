@@ -109,8 +109,8 @@ fn v07_shapes_and_dividers() {
     assert!(xml.contains("Body text"));
     assert!(!xml.contains("Divider"), "#divider stays invisible");
     assert!(
-        xml.contains("<w:pBdr"),
-        "#line resolves through its context wrapper to a paragraph rule"
+        xml.contains(r#"wp:extent cx="2880000" cy="12700""#),
+        "#line(length: 50%) draws a half-width rule, not a full-width border:\n{xml}"
     );
 }
 

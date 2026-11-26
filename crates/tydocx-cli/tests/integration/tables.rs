@@ -107,6 +107,7 @@ fn table_cell_supports_merged_cell_fields() {
         shading: None,
         width_twips: None,
         borders: None,
+        margins: None,
         zero_margins: false,
     };
     assert_eq!(cell.colspan, 2);
@@ -123,6 +124,7 @@ fn table_cell_supports_merged_cell_fields() {
         shading: None,
         width_twips: None,
         borders: None,
+        margins: None,
         zero_margins: false,
     };
     assert_eq!(cont_cell.vmerge, VMerge::Continue);
@@ -149,6 +151,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         shading: None,
                         width_twips: None,
                         borders: None,
+                        margins: None,
                         zero_margins: false,
                     },
                     TableCell {
@@ -161,6 +164,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         shading: None,
                         width_twips: None,
                         borders: None,
+                        margins: None,
                         zero_margins: false,
                     },
                 ],
@@ -179,6 +183,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         shading: None,
                         width_twips: None,
                         borders: None,
+                        margins: None,
                         zero_margins: false,
                     },
                     TableCell {
@@ -191,6 +196,7 @@ fn merged_cell_emits_grid_span_and_vmerge() {
                         shading: None,
                         width_twips: None,
                         borders: None,
+                        margins: None,
                         zero_margins: false,
                     },
                 ],
@@ -1217,5 +1223,100 @@ fn table_line_over_merged_cell_reports_widening() {
     assert!(
         xml.contains("FF4136"),
         "the widened edge still paints the line's stroke: {xml}"
+    );
+}
+
+#[test]
+fn block_scoped_table_sizes_its_table_width() {
+    // `#block(width: 75%)` is the table's container — `w:tblW` takes the
+    // 75% share instead of the page column.
+    let xml = fixture_doc_xml("block_width_table");
+    assert!(
+        xml.contains(r#"<w:tblW w:w="3750" w:type="pct"/>"#),
+        "block(width: 75%) must size w:tblW to the container share:\n{xml}"
+    );
+    let outcome = crate::common::fixture_outcome("block_width_table");
+    assert!(
+        !outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "block-width"),
+        "the consumed block width reports no degradation: {:?}",
+        outcome.degradations
+    );
+}
+
+#[test]
+fn rect_cell_folds_stroke_inset_and_body() {
+    // The cover-page label pattern `table.cell[#rect(stroke: (bottom: …),
+    // inset: …)[…]]` folds the rect onto the cell: bottom edge onto
+    // `tcBorders`, `tcMar` = cell inset + rect inset, plain run body.
+    let xml = fixture_doc_xml("table_rect_cell");
+    assert!(
+        xml.contains(r#"<w:bottom w:val="single" w:sz="8" w:space="0" w:color="000000"/>"#),
+        "the rect's declared bottom stroke lands on tcBorders:\n{xml}"
+    );
+    let mar = xml.matches(r#"<w:top w:w="260" w:type="dxa"/>"#).count();
+    assert_eq!(
+        mar, 2,
+        "cell inset (5pt) + rect inset (8pt) = 260 twips on both cells:\n{xml}"
+    );
+    assert!(
+        !xml.contains("wps:txbx"),
+        "the folded rect emits no text box inside the table:\n{xml}"
+    );
+}
+
+#[test]
+fn rect_cell_gradient_fill_reports_a_loss() {
+    // A gradient-filled cell rect still folds onto the cell (tcBorders,
+    // no `wps:txbx`), but the unrepresentable fill must surface as a
+    // `cell-rect` degradation rather than vanishing silently.
+    let xml = fixture_doc_xml("table_rect_cell");
+    assert_eq!(
+        xml.matches("<w:tcBorders>").count(),
+        3,
+        "all three rect cells fold their bottom stroke onto tcBorders:\n{xml}"
+    );
+    assert!(
+        !xml.contains("wps:txbx"),
+        "the gradient rect folds too — no text box:\n{xml}"
+    );
+    assert!(
+        !xml.contains("<w:shd"),
+        "a gradient fill emits no w:shd:\n{xml}"
+    );
+    let outcome = crate::common::fixture_outcome("table_rect_cell");
+    assert!(
+        outcome
+            .degradations
+            .iter()
+            .any(|d| d.construct == "cell-rect" && d.message.contains("non-solid fill")),
+        "the gradient fill reports a cell-rect degradation: {:?}",
+        outcome.degradations
+    );
+}
+
+#[test]
+fn scoped_text_size_reaches_table_cell_runs() {
+    // `#show table: set text(size: 9pt)` lands on the pairs inside the
+    // table's tag group — the cell runs must carry `w:sz` 18 (9pt), not
+    // inherit the page's 11pt default.
+    let xml = fixture_doc_xml("table_font_size");
+    let tbl_start = xml.find("<w:tbl>").expect("the table is present");
+    let tbl_end = xml[tbl_start..]
+        .find("</w:tbl>")
+        .map(|e| tbl_start + e)
+        .expect("the table closes");
+    let table = &xml[tbl_start..tbl_end];
+    assert_eq!(
+        table.matches(r#"<w:sz w:val="18"/>"#).count(),
+        2,
+        "both cell runs carry the scoped 9pt size:\n{table}"
+    );
+    let body = paragraph_containing(&xml, "Body text stays 11pt.");
+    assert!(
+        !body.contains(r#"<w:sz w:val="18"/>"#),
+        "the 11pt body paragraph is untouched by the table's show-set:\n{body}"
     );
 }

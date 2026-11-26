@@ -524,6 +524,7 @@ mod tests {
             shading: None,
             width_twips: None,
             borders: None,
+            margins: None,
             zero_margins: false,
         };
         let row = document::TableRow {
@@ -1357,7 +1358,10 @@ mod tests {
     fn horizontal_rule_produces_pbdr_bottom() {
         let mut doc = Document::new();
         let mut para = document::Paragraph::new();
-        para.horizontal_rule = true;
+        para.horizontal_rule = Some(document::ParagraphRule {
+            sz_eighths: 6,
+            color_hex: None,
+        });
         doc.add_paragraph(para);
 
         let buf = build_docx(&doc);

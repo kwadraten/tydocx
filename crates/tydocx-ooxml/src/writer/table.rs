@@ -258,7 +258,22 @@ pub(super) fn write_table<W: Write>(
                                     .with_attribute(("w:fill", shading.as_str()))
                                     .write_empty()?;
                             }
-                            if cell.zero_margins {
+                            if let Some(margins) = cell.margins {
+                                tcpr.create_element("w:tcMar").write_inner_content(|mar| {
+                                    for (name, w) in [
+                                        ("w:top", margins.top),
+                                        ("w:left", margins.left),
+                                        ("w:bottom", margins.bottom),
+                                        ("w:right", margins.right),
+                                    ] {
+                                        mar.create_element(name)
+                                            .with_attribute(("w:w", w.to_string().as_str()))
+                                            .with_attribute(("w:type", "dxa"))
+                                            .write_empty()?;
+                                    }
+                                    Ok(())
+                                })?;
+                            } else if cell.zero_margins {
                                 tcpr.create_element("w:tcMar").write_inner_content(|mar| {
                                     for name in ["w:top", "w:left", "w:bottom", "w:right"] {
                                         mar.create_element(name)

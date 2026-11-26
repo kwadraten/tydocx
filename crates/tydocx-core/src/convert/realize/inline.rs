@@ -33,7 +33,7 @@ use typst_syntax::Source;
 use typst_syntax::Span;
 
 use super::collect::{block_body_content, shape_fill_hex, shape_parts, transparent_container_body};
-use super::shape::resolve_shape;
+use super::shape::{resolve_shape, visible_line_geometry};
 use super::style::{StyleDefaults, lower_runs_match, run_from_styles};
 use super::with_fragment;
 use crate::convert::image::hash_bytes;
@@ -474,14 +474,21 @@ fn push_shape_inline(
     } else {
         None
     };
-    let resolved = resolve_shape(content, styles, engine, locator);
+    let resolved = resolve_shape(content, styles, engine, locator, None);
+    let geometry = resolved.geometry.map(|g| {
+        if kind == tydocx_ir::IrShapeKind::Line {
+            visible_line_geometry(&g)
+        } else {
+            g
+        }
+    });
     let Some(body_content) = body else {
         out.push(IrInline::Shape {
             kind,
             span,
             body: Vec::new(),
             fill_hex,
-            geometry: resolved.geometry,
+            geometry,
             loss: resolved.loss,
         });
         ctx.prev_char = Some('\u{FFFC}');
@@ -494,7 +501,7 @@ fn push_shape_inline(
                 span,
                 body: body_inlines,
                 fill_hex,
-                geometry: resolved.geometry,
+                geometry,
                 loss: resolved.loss,
             });
             ctx.prev_char = Some('\u{FFFC}');
@@ -1248,8 +1255,23 @@ pub(crate) fn image_inline(
     engine: &mut Engine,
     ctx: &mut InlineCtx<'_>,
 ) -> Option<IrInline> {
-    let Ok(decoded) = image.decode(engine, styles) else {
-        return None;
+    let span = image.span();
+    let span = span.id().map(|_| span);
+    let decoded = match image.decode(engine, styles) {
+        Ok(decoded) => decoded,
+        Err(diagnostics) => {
+            let detail = diagnostics.first().map_or_else(
+                || "unknown error".to_string(),
+                |diag| diag.message.to_string(),
+            );
+            ctx.degradations.push(Degradation {
+                span,
+                construct: "image-decode",
+                action: DegradationAction::Skipped,
+                message: format!("an image could not be decoded and was skipped: {detail}"),
+            });
+            return None;
+        }
     };
     let vector = matches!(decoded.kind(), ImageKind::Svg(_));
     let (bytes, mime, source_hash, svg) = match decoded.kind() {
@@ -1262,13 +1284,30 @@ pub(crate) fn image_inline(
             } else if is_png(&bytes) {
                 (bytes, Some("image/png".to_string()), source_hash, None)
             } else {
-                let png = reencode_png(&bytes)?;
+                let Some(png) = reencode_png(&bytes) else {
+                    ctx.degradations.push(Degradation {
+                        span,
+                        construct: "image-reencode",
+                        action: DegradationAction::Skipped,
+                        message: "a raster image could not be re-encoded to PNG; skipped"
+                            .to_string(),
+                    });
+                    return None;
+                };
                 (png, Some("image/png".to_string()), source_hash, None)
             }
         }
         ImageKind::Svg(svg_data) => {
             let original = svg_data.data().as_slice();
-            let png = rasterize_svg(original)?;
+            let Some(png) = rasterize_svg(original) else {
+                ctx.degradations.push(Degradation {
+                    span,
+                    construct: "svg-rasterize",
+                    action: DegradationAction::Skipped,
+                    message: "an SVG image could not be rasterized to PNG; skipped".to_string(),
+                });
+                return None;
+            };
             (
                 png,
                 Some("image/png".to_string()),
@@ -1278,7 +1317,7 @@ pub(crate) fn image_inline(
         }
         ImageKind::Pdf(_) => {
             ctx.degradations.push(Degradation {
-                span: None,
+                span,
                 construct: "pdf-image",
                 action: DegradationAction::Skipped,
                 message: "a PDF image has no raster form in the IR path; skipped".to_string(),
@@ -1292,10 +1331,7 @@ pub(crate) fn image_inline(
         width_emu: 0,
         height_emu: 0,
         mime,
-        span: {
-            let span = image.span();
-            span.id().map(|_| span)
-        },
+        span,
         svg,
         vector,
         non_cover_fit: image
