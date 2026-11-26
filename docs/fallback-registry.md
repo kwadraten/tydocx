@@ -40,9 +40,10 @@ calls. They die with it, or are ported earlier if a fixture needs them.
 ### `apply_breaks_from_source`
 - **What:** explicit `#pagebreak()`/`#colbreak()` recovered from the source
   AST for the legacy path. The IR path uses the
-  `PagebreakElem`/`ColbreakElem` pairs and the `FreshPage` state machine in
-  the lowering, so this function serves `export()` only and is deleted with
-  it.
+  `PagebreakElem`/`ColbreakElem` pairs. In single-column page flow a
+  `ColbreakElem` shares the lowering's `PageFlow` state machine with page
+  breaks; inside columns it remains a column break. This function serves
+  `export()` only and is deleted with it.
 
 ### `merge_same_line_paragraphs`
 - **What:** consecutive paragraphs on the same visual line merged, using
@@ -75,18 +76,20 @@ that remain, each because no `StyleChain` or pair carries the value:
   `apply_page_and_style_ir` keeps the reachable-file AST scan as a fill-in
   for unset fields (`issue_import_nested` / `issue_import_parent_dir`).
 - **Declared font spelling** — `FontFamily::new` lowercases the name before
-  it reaches the chain; OOXML and CJK `eastAsia` selection need the
-  declared case (`issue_cjk_*` fixtures, golden font names). `text_font` is
-  left unset by `chain_overrides` and filled by the merge.
+  it reaches the chain; OOXML and CJK `eastAsia` selection need the declared
+  case (`issue_cjk_*` fixtures, golden font names). An explicit root `text_font`
+  is recovered into `chain_overrides`. After lowering, `canonicalize_font_names`
+  prefers the installed font book's canonical family and falls back to literal
+  font declarations in the main file, run-span sources, and reachable local
+  modules when the requested family is unavailable.
 - **`doc.page_numbering`** — the AST `page_numbering` field is the single
   source for the document-level `w:pgNumType` (last-wins, as before). A
   deliberate single-source choice, not a blind spot: the chain sees the
   same declarations but supplies only the `numbering_changed` flag, which
   drives the C1 `page-numbering-change` degradation.
-- **`show heading:` / `show outline.entry:` flags** — whether the rule
-  re-emitted `it` is unobservable in the pairs; `c1_chain_degradations`
-  keeps the narrow `extract_source_style_overrides` call for those two
-  flags.
+- **`show heading:` / `show outline.entry:` flags** — `c1_chain_degradations`
+  keeps the narrow `extract_source_style_overrides` call to report these
+  source declarations. Heading output is collected from pairs instead.
 - **`counter(footnote).update(0)`** — `CounterUpdateElem::key` is private,
   so the chain cannot identify the counter;
   `detect_footnote_restart_each_page` stays.
@@ -118,38 +121,6 @@ Everything else that used to be source-AST on this path — document-global
 bodies — now comes from `StyleChain`s or element identity.
 
 ## Open gaps in the IR path
-
-### Bibliography entries
-- **What:** `collect_bibliography_entries` tries to read the hayagriva
-  entry grid out of the fragment realization (link marker +
-  `BibEntry` pdf-tag body → `bib-N` bookmarks + cached paragraphs inside
-  the `BIBLIOGRAPHY` field). On the corpus (`bibliography_basic`,
-  `bibliography_multiple`) the grid is not surfaced, so entries come back
-  empty: the output carries an empty `<w:bibliography/>` field, no entry
-  paragraphs, and no `w:hyperlink` citation anchors, reported as
-  `bibliography-entries`. `customXml/item1.xml` is emitted correctly.
-  The lowering is correct for a populated entry list; only the entry
-  *extraction* is missing.
-- **Retargeted tests** (all run on `convert_legacy` until this closes):
-  `bibliography_entries_are_not_a_bulleted_list`,
-  `citations_link_to_their_bibliography_entry`,
-  `multiple_bibliographies_render_two_blocks`,
-  `superscript_citation_style_raises_the_marker`, and
-  `golden_bibliography_basic` (regenerating it would bake the empty field
-  into the snapshot).
-- **Delete when:** entries are extracted (fragment pairs, companion Paged
-  frames, or HtmlDocument) and the retargeted tests pass on `convert()`.
-  Anchors will still differ by design (IR `bib-N` vs legacy `loc_N`), so
-  the fixtures stay in `ir_path.rs`'s documented set even then.
-
-### Body-font misdetection on code-dominated documents
-- **What:** the body-font vote counts glyphs, so a document whose code
-  glyphs dominate (`style_code_blocks`) misdetects `Normal` as the
-  monospace face. The legacy path compensates per-run; the IR path's body
-  text inherits the mono face.
-- **Delete when:** monospace-flagged faces are excluded from the body-font
-  vote (with a mono fallback for genuinely mono documents) and
-  `style_code_blocks` matches.
 
 ### Footnote SVG/PDF images
 - **What:** the frame-based patch keeps raster footnote images but skips
@@ -339,11 +310,12 @@ bodies — now comes from `StyleChain`s or element identity.
 
 ### `show heading:` / `show outline.entry:` rules
 - **Current:** reported as `show-heading-rule` /
-  `show-outline-entry-rule` (C1 only); the realized content stands as
-  compiled, so a full rewrite keeps its text but can lose the Heading
-  style / TOC formatting.
-- **C2 target:** realize the show-rule output and detect a re-emitted
-  `HeadingElem`; per-entry styled TOC entries for outline rewrites.
+  `show-outline-entry-rule` (C1 only). The heading tag retains its outline
+  identity. All realized replacement blocks are emitted in order; the
+  block produced by a re-emitted heading keeps its Heading style,
+  numbering, and bookmark. Otherwise the first displayed text block can
+  carry the target without imposing native heading numbering.
+- **C2 target:** per-entry styled TOC entries for outline rewrites.
 
 ### `move`/`rotate`/`scale`/`skew` bodies
 - **Current:** the layouter's rewritten block resolves back to the

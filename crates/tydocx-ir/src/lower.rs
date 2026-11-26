@@ -9,16 +9,17 @@ use tydocx_ooxml::document::{
     VMerge, truncate_bookmark_name,
 };
 
+use crate::cell_rect::{GridRow, generic_grid_allows_bottom};
 use crate::degradation::{Degradation, DegradationAction};
 use crate::geometry::GeometryInput;
 use crate::grid_plan::{MAX_COLUMNS, PlannedCell, PlannedCellKind, PlannedTable, plan_grid};
 use crate::mode::CompatMode;
 use crate::types::{
     Alignment, HangingIndent, InlineShape, IrAnchor, IrBibEntry, IrBlock, IrCaptionSeq,
-    IrCellBorderFlags, IrCellBorders, IrDocument, IrEnum, IrEquation, IrField, IrFootnote, IrGrid,
-    IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList, IrNumberingPattern, IrOutlineEntry,
-    IrParStyle, IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType, IrShapeGeometry, IrShapeKind,
-    IrTable, IrTableCell, IrTableRow, IrVMerge, ParagraphStyle, Run,
+    IrCellBorderFlags, IrCellBorders, IrDocument, IrEnum, IrEquation, IrEquationNumber, IrField,
+    IrFootnote, IrGrid, IrHeadingNumbering, IrImage, IrInline, IrLevelDef, IrList,
+    IrNumberingPattern, IrParStyle, IrParagraph, IrPlaceWrap, IrRaw, IrSectionBreakType,
+    IrShapeGeometry, IrShapeKind, IrTable, IrTableCell, IrTableRow, IrVMerge, ParagraphStyle, Run,
 };
 
 #[derive(Debug, Default)]
@@ -28,6 +29,7 @@ pub struct LowerCtx {
     pub heading_sizes: [u32; 5],
     pub footnote_ids: HashMap<u32, u32>,
     pub next_bookmark_id: u32,
+    pub equation_refs: HashMap<String, (String, Option<String>)>,
     pub degradations: Vec<Degradation>,
     /// Simulated heading-numbering counters per num instance (`numId`), used
     /// to compare Word's expected number against the number Typst rendered —
@@ -36,6 +38,7 @@ pub struct LowerCtx {
     /// Page content width in twips — the width a top-level grid fills, used
     /// to resolve `fr` track widths for fixed-layout tables.
     pub content_width_twips: Option<u32>,
+    pub outline_width_twips: u32,
     /// Whether an unrepresentable heading numbering was already reported.
     pub unmappable_heading_reported: bool,
     /// The Normal style's first-line indent — the comparison baseline for
@@ -146,8 +149,8 @@ pub fn lower(
         compat,
         body_size_half_pt: ir.style.body_size_half_pt,
         heading_sizes: ir.style.heading_sizes,
-        footnote_ids: HashMap::new(),
         next_bookmark_id: doc.bookmark_counter,
+        equation_refs: ir.equation_refs.clone(),
         degradations: Vec::new(),
         heading_counters: HashMap::new(),
         unmappable_heading_reported: false,
@@ -168,7 +171,7 @@ pub fn lower(
             .iter()
             .filter_map(|f| f.label.clone())
             .collect(),
-        next_enum_seq: 0,
+        ..LowerCtx::default()
     };
 
     for footnote in &ir.footnotes {
@@ -224,50 +227,46 @@ pub fn lower(
     (doc, degradations)
 }
 
-/// Sections after the first end the previous section with a `w:sectPr` on
-/// its last paragraph; the final section's settings close the body.
-///
-/// A `w:sectPr` describes the section that *ends* at it: its `w:type`
-/// records how that section started. `lower_body` therefore tracks
-/// `current_section_start` — the start type of the section currently
-/// collecting paragraphs — and stamps it on the break that ends the
-/// section. `IrSection` boundaries always open on a fresh page; a
-/// `#columns` block instead opens and closes `continuous` sections
-/// mid-page, so the ambient section that follows it starts `continuous`
-/// too.
 fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx: &mut LowerCtx) {
     let mut sections = ir.sections.iter().peekable();
+    let scoped = !ir.sections.is_empty();
+    let fallback_numbering = if scoped
+        && (ir.first_numbering.is_some() || ir.sections.iter().any(|s| s.numbering.is_some()))
+    {
+        None
+    } else {
+        geometry.page_numbering
+    };
     let mut state = SectionState {
         settings: ir.page.clone(),
-        numbering: if ir.sections.is_empty() {
-            geometry.page_numbering
+        numbering: if scoped {
+            ir.first_numbering.or(fallback_numbering)
         } else {
-            ir.first_numbering.or(geometry.page_numbering)
+            geometry.page_numbering
         },
+        fallback_numbering,
         numbering_start: geometry.page_number_start,
         start_type: SectionBreakType::NextPage,
     };
-    let mut first_break_emitted = false;
-    // Once a columns block has run, `state.settings` is the ambient
-    // section restored after it — assign the tracked values even when no
-    // `IrSection` exists.
-    let mut columns_lowered = false;
-    let mut page = FreshPage::Armed;
+    let mut title_page = geometry.title_page;
+    let mut page = PageFlow::Start;
+    let mut boundary = None;
     for (index, block) in ir.body.iter().enumerate() {
         while let Some(next) = sections.next_if(|s| s.start_block == index) {
-            if !doc.body.elements.is_empty() {
-                attach_section_break(
-                    &mut doc.body.elements,
-                    state.ending_break(!first_break_emitted && geometry.title_page),
-                    true,
+            boundary = Some(next);
+        }
+        if let IrBlock::PageBreak { weak, to } = block {
+            if let Some(prior) = page.advance(*weak, *to) {
+                open_page(
+                    Some(prior),
+                    boundary.take(),
+                    0,
+                    &mut state,
+                    &mut title_page,
+                    doc,
                 );
-                first_break_emitted = true;
-                page = FreshPage::Unarmed;
             }
-            state.settings = next.settings.clone();
-            state.numbering = next.numbering.or(state.numbering);
-            state.numbering_start = next.numbering_start;
-            state.start_type = SectionBreakType::NextPage;
+            continue;
         }
         if let IrBlock::Columns {
             count,
@@ -276,7 +275,18 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
             ..
         } = block
         {
-            let title_page = !first_break_emitted && geometry.title_page;
+            open_page(
+                page.pending(),
+                boundary.take(),
+                geometry
+                    .numbered_blank_pages
+                    .get(&index)
+                    .copied()
+                    .unwrap_or_default(),
+                &mut state,
+                &mut title_page,
+                doc,
+            );
             lower_columns_block(
                 *count,
                 *gutter_twips,
@@ -286,48 +296,113 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
                 doc,
                 ctx,
             );
-            first_break_emitted = true;
-            columns_lowered = true;
-            page = FreshPage::No;
+            title_page = false;
+            page = PageFlow::Content;
             continue;
         }
-        if let IrBlock::PageBreak { weak, to } = block {
-            let next_transition = match ir.body.get(index + 1) {
-                None | Some(IrBlock::PageBreak { .. }) => true,
-                _ => sections.peek().is_some_and(|s| s.start_block == index + 1),
-            };
-            page = lower_body_break(*weak, *to, page, next_transition, &mut doc.body.elements);
-            continue;
-        }
+        ctx.outline_width_twips =
+            outline_width(boundary.map_or(&state.settings, |next| &next.settings));
         let lowered = lower_block(block, doc, ctx);
         if !lowered.is_empty() {
-            page = FreshPage::No;
+            open_page(
+                page.pending(),
+                boundary.take(),
+                geometry
+                    .numbered_blank_pages
+                    .get(&index)
+                    .copied()
+                    .unwrap_or_default(),
+                &mut state,
+                &mut title_page,
+                doc,
+            );
+            page = PageFlow::Content;
         }
         doc.body.elements.extend(lowered);
     }
-    if !ir.sections.is_empty() || columns_lowered {
-        doc.page_settings = state.settings;
-        doc.page_numbering = state.numbering;
-        doc.page_number_start = state.numbering_start;
+    if let PageFlow::Pending(pending @ PendingPage { strong: true, .. }) = page {
+        open_page(Some(pending), boundary, 0, &mut state, &mut title_page, doc);
     }
-    if columns_lowered {
-        // `nextPage` is OOXML's default — only a continuous start needs a
-        // `w:type` on the body-final sectPr.
-        doc.final_section_type =
-            (state.start_type != SectionBreakType::NextPage).then_some(state.start_type);
-    }
+    doc.page_settings = state.settings;
+    doc.page_numbering = state.numbering;
+    doc.page_number_start = state.numbering_start;
+    doc.final_section_type =
+        (state.start_type != SectionBreakType::NextPage).then_some(state.start_type);
 }
 
-/// The section currently collecting paragraphs in `lower_body` — the
-/// page settings and numbering a closing `w:sectPr` stamps, plus how the
-/// section started (a `nextPage` or `continuous` `w:type`).
 struct SectionState {
     settings: PageSettings,
     numbering: Option<PageNumberFormat>,
+    fallback_numbering: Option<PageNumberFormat>,
     numbering_start: Option<u32>,
     /// How this section opened — the `w:type` written on the break that
     /// ends it.
     start_type: SectionBreakType,
+}
+
+fn open_page(
+    pending: Option<PendingPage>,
+    next: Option<&crate::IrSection>,
+    blank_pages: usize,
+    state: &mut SectionState,
+    title_page: &mut bool,
+    doc: &mut Document,
+) {
+    let parity = pending.and_then(|page| page.parity);
+    if blank_pages > 0 {
+        materialize_blank_pages(blank_pages, state, title_page, &mut doc.body.elements);
+    }
+    if next.is_some() || parity.is_some() || blank_pages > 0 {
+        if !doc.body.elements.is_empty() || parity == Some(IrSectionBreakType::Even) {
+            attach_section_break(
+                &mut doc.body.elements,
+                state.ending_break(*title_page),
+                false,
+            );
+            *title_page = false;
+            state.numbering_start = None;
+            state.start_type = match parity {
+                Some(IrSectionBreakType::Odd) => SectionBreakType::OddPage,
+                Some(IrSectionBreakType::Even) => SectionBreakType::EvenPage,
+                None => SectionBreakType::NextPage,
+            };
+        }
+        if let Some(next) = next {
+            state.settings = next.settings.clone();
+            state.numbering = next.numbering.or(state.fallback_numbering);
+            state.numbering_start = next.numbering_start;
+        }
+    } else if pending.is_some() {
+        push_hard_page_break(&mut doc.body.elements);
+    }
+}
+
+fn materialize_blank_pages(
+    pages: usize,
+    state: &mut SectionState,
+    title_page: &mut bool,
+    elements: &mut Vec<BlockElement>,
+) {
+    while matches!(elements.last(), Some(BlockElement::Paragraph(p))
+    if p.section_break.is_none() && p.inlines.iter().all(|inline| match inline {
+        InlineElement::PageBreak => true,
+        InlineElement::Text(run) => run.text.trim().is_empty(),
+        _ => false,
+    })) {
+        elements.pop();
+    }
+    for _ in 0..pages {
+        attach_section_break(elements, state.ending_break(*title_page), false);
+        *title_page = false;
+        state.numbering_start = None;
+        state.start_type = SectionBreakType::NextPage;
+        let mut spacer = Paragraph::new();
+        spacer.mark_size_half_pt = Some(2);
+        spacer.spacing_before = Some(0);
+        spacer.spacing_after = Some(0);
+        spacer.push_run(Run::new("\u{a0}"));
+        elements.push(BlockElement::Paragraph(spacer));
+    }
 }
 
 impl SectionState {
@@ -363,33 +438,7 @@ fn lower_columns_block(
     // outgoing break ends.
     let mut pending_title_page = title_page;
     if !doc.body.elements.is_empty() {
-        // A page-setting boundary or a previous block's out-break already
-        // stamped a `w:sectPr` on the last paragraph — a paragraph carries
-        // one, so the empty ambient stretch gets a marker rather than
-        // overwriting it. An unstamped odd/even `pagebreak(to:)` keeps
-        // merging normally.
-        let ambient_is_empty = matches!(
-            doc.body.elements.last(),
-            Some(BlockElement::Paragraph(p))
-                if p.section_break.as_ref().is_some_and(|b| {
-                    matches!(
-                        b.break_type,
-                        SectionBreakType::NextPage | SectionBreakType::Continuous
-                    )
-                })
-        );
-        if ambient_is_empty {
-            let mut marker = Paragraph::new();
-            marker.mark_size_half_pt = Some(2);
-            marker.spacing_before = Some(0);
-            marker.spacing_after = Some(0);
-            doc.body.elements.push(BlockElement::Paragraph(marker));
-        }
-        attach_section_break(
-            &mut doc.body.elements,
-            state.ending_break(title_page),
-            false,
-        );
+        attach_section_break(&mut doc.body.elements, state.ending_break(title_page), true);
         // The restart belongs to the OOXML section that began it — the one
         // the in-break just ended. The columns section and the resumed
         // ambient section continue numbering, so they must not re-stamp
@@ -410,10 +459,9 @@ fn lower_columns_block(
         / count;
     let saved_content_width = ctx.content_width_twips;
     ctx.content_width_twips = Some(column_width_twips);
-    for inner in body {
-        let lowered = lower_block(inner, doc, ctx);
-        doc.body.elements.extend(lowered);
-    }
+    ctx.outline_width_twips = outline_width(&col_settings);
+    let lowered = lower_flow(body, doc, ctx);
+    doc.body.elements.extend(lowered);
     ctx.content_width_twips = saved_content_width;
     attach_section_break(
         &mut doc.body.elements,
@@ -432,64 +480,59 @@ fn lower_columns_block(
     state.start_type = SectionBreakType::Continuous;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FreshPage {
-    No,
-    Armed,
-    Unarmed,
+#[derive(Clone, Copy)]
+struct PendingPage {
+    strong: bool,
+    parity: Option<IrSectionBreakType>,
 }
 
-fn lower_body_break(
-    weak: bool,
-    to: Option<IrSectionBreakType>,
-    page: FreshPage,
-    next_transition: bool,
-    elements: &mut Vec<BlockElement>,
-) -> FreshPage {
-    if weak {
-        if page != FreshPage::No || next_transition {
-            return page;
+enum PageFlow {
+    Start,
+    Content,
+    Pending(PendingPage),
+}
+
+impl PageFlow {
+    fn pending(&self) -> Option<PendingPage> {
+        match self {
+            Self::Start | Self::Content => None,
+            Self::Pending(page) => Some(*page),
         }
-        elements.extend(lower_pagebreak(false, to));
-        return FreshPage::Unarmed;
     }
-    if to.is_none() && page == FreshPage::Unarmed {
-        return FreshPage::Armed;
+
+    fn advance(&mut self, weak: bool, to: Option<IrSectionBreakType>) -> Option<PendingPage> {
+        let prior = self.pending();
+        if matches!(self, Self::Start) && weak && to != Some(IrSectionBreakType::Even) {
+            return None;
+        }
+        let blank = !weak && (matches!(self, Self::Start) || prior.is_some_and(|p| p.strong));
+        let parity = if blank {
+            to
+        } else {
+            to.or(prior.and_then(|p| p.parity))
+        };
+        *self = Self::Pending(PendingPage {
+            strong: !weak || prior.is_some_and(|p| p.strong),
+            parity,
+        });
+        blank.then(|| {
+            prior.unwrap_or(PendingPage {
+                strong: true,
+                parity: None,
+            })
+        })
     }
-    elements.extend(lower_pagebreak(false, to));
-    FreshPage::Armed
 }
 
-/// Attach the section-break `w:sectPr` that ends a section to the last
-/// element emitted so far. A trailing paragraph takes the break in its
-/// `w:pPr`; any other trailing element (table, image) leaves the section
-/// boundary itself unmarked, so an empty marker paragraph carries it.
-/// `pop_page_breaks` clears trailing `w:br` page breaks the boundary
-/// subsumes — a `nextPage` transition replaces them; a `continuous`
-/// columns boundary does not, so a `#pagebreak()` beside it is kept.
 fn attach_section_break(
     elements: &mut Vec<BlockElement>,
     section: SectionBreak,
-    pop_page_breaks: bool,
+    can_share_hard_break: bool,
 ) {
-    if let Some(BlockElement::Paragraph(para)) = elements.last_mut() {
-        if pop_page_breaks {
-            while matches!(para.inlines.last(), Some(InlineElement::PageBreak)) {
-                para.inlines.pop();
-            }
-        }
-        if let Some(existing) = &mut para.section_break
-            && matches!(
-                existing.break_type,
-                SectionBreakType::OddPage | SectionBreakType::EvenPage
-            )
-        {
-            existing.page_settings = section.page_settings;
-            existing.title_page = section.title_page;
-            existing.page_numbering = section.page_numbering;
-            existing.page_number_start = section.page_number_start;
-            return;
-        }
+    if let Some(BlockElement::Paragraph(para)) = elements.last_mut()
+        && para.section_break.is_none()
+        && (can_share_hard_break || !matches!(para.inlines.last(), Some(InlineElement::PageBreak)))
+    {
         para.section_break = Some(section);
     } else {
         let mut para = Paragraph::new();
@@ -559,22 +602,7 @@ fn lower_block_in(
         IrBlock::Equation(eq) => lower_equation(eq, ctx),
         IrBlock::Quote { body } => lower_quote(body, doc, ctx),
         IrBlock::Raw(raw) => lower_raw(raw),
-        IrBlock::Outline {
-            title,
-            entries,
-            depth,
-            custom_target,
-            indent_twips_per_level,
-            figure_caption_id,
-        } => lower_outline(
-            title,
-            entries,
-            *depth,
-            *custom_target,
-            *indent_twips_per_level,
-            figure_caption_id.as_deref(),
-            ctx,
-        ),
+        IrBlock::Outline { .. } => lower_outline(block, ctx),
         IrBlock::Bibliography { entries } => lower_bibliography(entries, ctx),
         IrBlock::Place {
             float,
@@ -594,7 +622,7 @@ fn lower_block_in(
             doc,
             ctx,
         ),
-        IrBlock::PageBreak { weak, to } => lower_pagebreak(*weak, *to),
+        IrBlock::PageBreak { .. } => Vec::new(),
         IrBlock::Shape {
             kind,
             span,
@@ -682,11 +710,7 @@ fn lower_nested_columns(
          its content is kept single-column"
             .to_string(),
     );
-    let mut out = Vec::new();
-    for inner in body {
-        out.extend(lower_block(inner, doc, ctx));
-    }
-    out
+    lower_flow(body, doc, ctx)
 }
 
 struct ShapeSpec<'a> {
@@ -757,86 +781,154 @@ fn lower_shape_block(
     out
 }
 
-fn lower_outline(
-    title: &[IrInline],
-    entries: &[IrOutlineEntry],
-    depth: u8,
-    custom_target: bool,
-    indent_twips_per_level: u32,
-    caption_id: Option<&str>,
-    ctx: &mut LowerCtx,
-) -> Vec<BlockElement> {
-    if ctx.compat.is_c1() && custom_target && entries.is_empty() {
-        ctx.degrade(
-            "outline-target",
-            DegradationAction::Skipped,
-            "outline target is not headings; entries are dropped and only the title is kept"
-                .to_string(),
-        );
-    }
+fn outline_width(settings: &PageSettings) -> u32 {
+    let columns = settings.columns.unwrap_or(1).max(1);
+    let gutter = settings.column_spacing.unwrap_or(720);
+    settings
+        .width_twips
+        .saturating_sub(settings.margin_left)
+        .saturating_sub(settings.margin_right)
+        .saturating_sub(gutter.saturating_mul(columns - 1))
+        / columns
+}
+
+fn lower_outline(block: &IrBlock, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+    let IrBlock::Outline {
+        title,
+        title_bookmark,
+        entries,
+        depth,
+        custom_target,
+        indent_twips_per_level,
+        figure_caption_id,
+    } = block
+    else {
+        return Vec::new();
+    };
+    let title_only = *custom_target && entries.is_empty();
     // A heading TOC field would list targets the source did not ask for;
     // with no resolvable entries only the outline's own title survives.
-    if custom_target && entries.is_empty() {
-        let mut para = Paragraph::new();
-        para.inlines = merge_runs(lower_inlines(title, ctx));
-        return vec![BlockElement::Paragraph(para)];
-    }
     let mut out = Vec::new();
-    if !title.is_empty() {
+    if title_only || !title.is_empty() || title_bookmark.is_some() {
         let mut title_para = Paragraph::new();
         title_para.inlines = lower_inlines(title, ctx);
+        if title_only {
+            title_para.inlines = merge_runs(title_para.inlines);
+        }
+        if let Some(name) = title_bookmark {
+            title_para.add_bookmark_wrapping(ctx.next_bookmark(), name.clone());
+        }
         out.push(BlockElement::Paragraph(title_para));
+    }
+    if title_only {
+        if ctx.compat.is_c1() {
+            ctx.degrade(
+                "outline-target",
+                DegradationAction::Skipped,
+                "outline target is not headings; entries are dropped and only the title is kept"
+                    .to_string(),
+            );
+        }
+        return out;
     }
     if !entries.is_empty() {
         let mut entry_paras = Vec::with_capacity(entries.len());
         for entry in entries {
             let mut para = Paragraph::new();
+            para.suppress_indent = true;
             let indent =
                 indent_twips_per_level.saturating_mul(u32::from(entry.level.saturating_sub(1)));
             if indent > 0 {
                 para.left_indent = Some(indent);
             }
-            let mut body: Vec<InlineElement> = lower_inlines(&entry.title, ctx);
-            body.push(InlineElement::Tab);
+            let right_tab = ctx
+                .outline_width_twips
+                .saturating_sub(para.right_indent.unwrap_or_default());
+            if right_tab > indent {
+                para.tab_stops.push(right_tab);
+            }
+            let mut body = lower_inlines(&entry.title, ctx);
             if let Some(target) = &entry.target {
-                body.push(InlineElement::FieldPageRef {
-                    bookmark_name: target.clone(),
+                let target = truncate_bookmark_name(target);
+                let mut result = Vec::with_capacity(body.len() + 2);
+                append_outline_title(body, &mut result);
+                result.push(InlineElement::Tab);
+                result.push(InlineElement::FieldPageRef {
+                    bookmark_name: target.to_owned(),
                     display_text: entry.page_number.clone().unwrap_or_default(),
                 });
                 para.inlines = vec![InlineElement::InternalLink {
-                    anchor: target.clone(),
-                    body,
+                    anchor: target.to_owned(),
+                    body: result,
                 }];
             } else {
+                body.push(InlineElement::Tab);
                 para.inlines = body;
             }
             entry_paras.push(para);
         }
         out.push(BlockElement::TocBlock {
-            max_depth: depth,
-            caption_id: caption_id.map(str::to_string),
+            max_depth: *depth,
+            caption_id: figure_caption_id.clone(),
             paragraphs: entry_paras,
         });
         return out;
     }
     let mut para = Paragraph::new();
-    para.add_toc(depth, caption_id.map(str::to_string));
+    para.add_toc(*depth, figure_caption_id.clone());
     out.push(BlockElement::Paragraph(para));
     out
 }
+
+fn append_outline_title(inlines: Vec<InlineElement>, out: &mut Vec<InlineElement>) {
+    for inline in inlines {
+        match inline {
+            InlineElement::Hyperlink { body, .. } | InlineElement::InternalLink { body, .. } => {
+                append_outline_title(body, out);
+            }
+            InlineElement::FieldRef { display_text, .. }
+            | InlineElement::FieldPageRef { display_text, .. }
+            | InlineElement::Citation { display_text, .. } => {
+                out.push(InlineElement::Text(Run::new(display_text)));
+            }
+            InlineElement::Field {
+                instruction,
+                result,
+            } if instruction.starts_with(" NOTEREF ") => {
+                out.extend(result.into_iter().map(InlineElement::Text));
+            }
+            other => out.push(other),
+        }
+    }
+}
+
+const MAX_HEADING_LEVEL: u8 = 9;
 
 fn lower_heading(
     spec: &HeadingSpec<'_>,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> Vec<BlockElement> {
+    let style_level = spec.level.min(MAX_HEADING_LEVEL);
+    let level_clamped = spec.level != style_level;
+    if level_clamped {
+        ctx.degrade_at(
+            spec.span,
+            "heading-level",
+            DegradationAction::Approximated,
+            format!(
+                "Word supports only {MAX_HEADING_LEVEL} heading levels; level {} uses Heading{style_level}",
+                spec.level
+            ),
+        );
+    }
     let mut para = Paragraph::new();
-    para.style = Some(ParagraphStyle::Heading(spec.level));
+    para.style = Some(ParagraphStyle::Heading(style_level));
     para.alignment = spec.alignment;
     apply_par_overrides(&mut para, spec.par, ctx);
     let num_id = match spec.numbering {
         Some(IrHeadingNumbering::Mappable(pattern))
-            if !ctx.compat.is_c1() && spec.numbering_text.is_some() =>
+            if !level_clamped && !ctx.compat.is_c1() && spec.numbering_text.is_some() =>
         {
             let levels = heading_level_overrides(pattern);
             let (num_id, _) = doc.find_or_allocate_heading_numbering(&levels);
@@ -893,7 +985,7 @@ fn strip_redundant_heading_run(run: &mut Run, style_size: u32) {
 
 /// Build the full `w:lvl` set (ilvl 0..=8) for a heading numbering pattern.
 fn heading_level_overrides(pattern: &IrNumberingPattern) -> Vec<LevelOverride> {
-    (0..9)
+    (0..u32::from(MAX_HEADING_LEVEL))
         .filter_map(|ilvl| {
             let def = numbering_level_def(pattern, ilvl)?;
             Some(LevelOverride {
@@ -1000,29 +1092,55 @@ fn seq_instruction(identifier: &str, system: crate::types::IrNumeralSystem) -> S
 
 fn lower_equation(eq: &IrEquation, ctx: &mut LowerCtx) -> Vec<BlockElement> {
     let mut para = Paragraph::new();
-    para.alignment = Some(Alignment::Center);
-    let equation_number = eq.number.as_ref().map(|number| {
-        if ctx.compat.is_c3()
-            && let Some(seq) = &number.seq
-        {
-            return EquationNumber::Seq {
-                prefix: seq.prefix.clone(),
-                instruction: seq_instruction(&seq.identifier, seq.system),
-                display: seq.numeral.clone(),
-                suffix: seq.suffix.clone(),
-            };
-        }
-        EquationNumber::Text(number.display.clone())
+    para.alignment = Some(if eq.number.is_some() {
+        Alignment::Left
+    } else {
+        Alignment::Center
     });
+    let equation_number = eq
+        .number
+        .as_ref()
+        .map(|number| lower_equation_number(number, &eq.bookmarks, ctx));
     para.inlines.push(InlineElement::Math {
         omml_xml: eq.omml.clone(),
         equation_number,
     });
-    for name in &eq.bookmarks {
-        let id = ctx.next_bookmark();
-        para.add_bookmark_wrapping(id, name.clone());
+    if eq.number.is_none() {
+        for name in &eq.bookmarks {
+            let id = ctx.next_bookmark();
+            para.add_bookmark_wrapping(id, name.clone());
+        }
     }
     vec![BlockElement::Paragraph(para)]
+}
+
+fn lower_equation_number(
+    number: &IrEquationNumber,
+    bookmarks: &[String],
+    ctx: &mut LowerCtx,
+) -> EquationNumber {
+    let seq = number.seq.as_ref().filter(|_| ctx.compat.is_c3());
+    if bookmarks.is_empty() {
+        return seq.map_or_else(
+            || EquationNumber::Text(number.display.clone()),
+            |seq| EquationNumber::Seq {
+                prefix: number.prefix.clone(),
+                instruction: seq_instruction(&seq.identifier, seq.system),
+                display: number.value().to_owned(),
+                suffix: number.suffix.clone(),
+            },
+        );
+    }
+    EquationNumber::Bookmarked {
+        prefix: number.prefix.clone(),
+        display: number.value().to_owned(),
+        instruction: seq.map(|seq| seq_instruction(&seq.identifier, seq.system)),
+        suffix: number.suffix.clone(),
+        bookmarks: bookmarks
+            .iter()
+            .map(|name| (ctx.next_bookmark(), name.clone()))
+            .collect(),
+    }
 }
 
 fn lower_quote(body: &[IrBlock], doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
@@ -1063,22 +1181,77 @@ fn lower_bibliography(entries: &[IrBibEntry], ctx: &mut LowerCtx) -> Vec<BlockEl
     let mut paragraphs = Vec::new();
     for entry in entries {
         let mut para = Paragraph::new();
-        para.hanging_indent = Some(HangingIndent::Default);
+        para.suppress_indent = true;
+        para.hanging_indent = entry.hanging_twips.map(HangingIndent::Twips);
         if let Some(marker) = &entry.marker {
-            para.push_run(Run::new(format!("{marker} ")));
+            para.inlines = lower_inlines(marker, ctx);
+            if let Some(twips) = entry.hanging_twips.filter(|twips| *twips > 0) {
+                para.left_tab_stop = Some(twips);
+                para.inlines.push(InlineElement::Tab);
+            } else if !para.inlines.is_empty() {
+                para.push_run(Run::new(" "));
+            }
         }
+        para.break_latin_words = bibliography_has_visible_uri(&entry.body);
         para.inlines.extend(lower_inlines(&entry.body, ctx));
+        preserve_bibliography_links(&mut para.inlines);
         let id = ctx.next_bookmark();
         para.add_bookmark_at_start(id, entry.bookmark.clone());
         paragraphs.push(para);
     }
     if ctx.compat.is_c3() {
-        vec![BlockElement::BibliographyBlock { paragraphs }]
-    } else {
-        paragraphs
-            .into_iter()
-            .map(BlockElement::Paragraph)
-            .collect()
+        if entries.iter().all(|entry| !entry.custom_display) {
+            return vec![BlockElement::BibliographyBlock { paragraphs }];
+        }
+        ctx.degrade(
+            "bibliography-field",
+            DegradationAction::Literalized,
+            "the bibliography keeps its Typst display as editable paragraphs; refreshing a Word BIBLIOGRAPHY field would replace that display".to_owned(),
+        );
+    }
+    paragraphs
+        .into_iter()
+        .map(BlockElement::Paragraph)
+        .collect()
+}
+
+fn bibliography_has_visible_uri(inlines: &[IrInline]) -> bool {
+    inlines.iter().any(|inline| match inline {
+        IrInline::Text(run) => run
+            .text
+            .split_whitespace()
+            .any(is_absolute_bibliography_uri),
+        IrInline::Link { body, .. } => bibliography_has_visible_uri(body),
+        _ => false,
+    })
+}
+
+fn is_absolute_bibliography_uri(token: &str) -> bool {
+    let Some((scheme, rest)) = token.split_once("://") else {
+        return false;
+    };
+    let scheme = scheme.trim_start_matches(|c: char| !c.is_ascii_alphabetic());
+    !scheme.is_empty()
+        && scheme
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+        && rest.starts_with(|c: char| c.is_alphanumeric() || c == '[')
+}
+
+fn preserve_bibliography_links(inlines: &mut [InlineElement]) {
+    for inline in inlines {
+        match inline {
+            InlineElement::Hyperlink {
+                body,
+                preserve_style,
+                ..
+            } => {
+                *preserve_style = true;
+                preserve_bibliography_links(body);
+            }
+            InlineElement::InternalLink { body, .. } => preserve_bibliography_links(body),
+            _ => {}
+        }
     }
 }
 
@@ -1232,7 +1405,7 @@ fn floating_table(
                 shading: None,
                 width_twips: None,
                 borders: Some(CellBorders::default()),
-                zero_margins: false,
+                margins: None,
             }],
             height_twips: None,
             is_header: false,
@@ -1341,28 +1514,35 @@ fn force_paragraph_alignment(element: &mut BlockElement) {
     }
 }
 
-fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockElement> {
-    if weak {
-        Vec::new()
-    } else if let Some(target) = to {
-        let break_type = match target {
-            IrSectionBreakType::Odd => SectionBreakType::OddPage,
-            IrSectionBreakType::Even => SectionBreakType::EvenPage,
-        };
-        let mut para = Paragraph::new();
-        para.section_break = Some(SectionBreak {
-            break_type,
-            page_settings: None,
-            title_page: false,
-            page_numbering: None,
-            page_number_start: None,
-        });
-        vec![BlockElement::Paragraph(para)]
-    } else {
-        let mut para = Paragraph::new();
-        para.inlines.push(InlineElement::PageBreak);
-        vec![BlockElement::Paragraph(para)]
+fn lower_flow(body: &[IrBlock], doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
+    let mut out = Vec::new();
+    let mut page = PageFlow::Start;
+    for block in body {
+        if let IrBlock::PageBreak { weak, to } = block {
+            if page.advance(*weak, *to).is_some() {
+                push_hard_page_break(&mut out);
+            }
+        } else {
+            let blocks = lower_block(block, doc, ctx);
+            if !blocks.is_empty() {
+                if page.pending().is_some() {
+                    push_hard_page_break(&mut out);
+                }
+                page = PageFlow::Content;
+                out.extend(blocks);
+            }
+        }
     }
+    if page.pending().is_some_and(|p| p.strong) {
+        push_hard_page_break(&mut out);
+    }
+    out
+}
+
+fn push_hard_page_break(out: &mut Vec<BlockElement>) {
+    let mut para = Paragraph::new();
+    para.inlines.push(InlineElement::PageBreak);
+    out.push(BlockElement::Paragraph(para));
 }
 
 fn lower_table_block(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<BlockElement> {
@@ -1513,6 +1693,12 @@ fn apply_par_overrides(out: &mut Paragraph, par: IrParStyle, ctx: &LowerCtx) {
     {
         out.justify = Some(justify);
     }
+    match par.line_spacing {
+        Some(crate::IrLineSpacing::AtLeast(twips)) => out.min_line_twips = Some(twips),
+        Some(crate::IrLineSpacing::Exact(twips)) => out.line_twips = Some(twips),
+        None => {}
+    }
+    out.spacing_after = par.spacing_after;
 }
 
 /// Scan the paragraph's line structure for `#linebreak`s. Returns
@@ -1569,7 +1755,7 @@ fn lower_paragraph(para: &IrParagraph, ctx: &mut LowerCtx) -> Paragraph {
     out.horizontal_rule = para.horizontal_rule;
     out.tab_stops.clone_from(&para.tab_stops);
     out.spacing_before = para.spacing_before;
-    out.spacing_after = para.spacing_after;
+    out.spacing_after = para.spacing_after.or(out.spacing_after);
     out.keep_next = para.keep_next;
     out.inlines = merge_runs(lower_inlines(&para.inlines, ctx));
     for name in &para.bookmarks {
@@ -1593,6 +1779,7 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                         out.push(InlineElement::Hyperlink {
                             url: url.clone(),
                             body,
+                            preserve_style: false,
                         });
                     } else if let Some(anchor) = anchor {
                         out.push(InlineElement::InternalLink {
@@ -1607,19 +1794,7 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
                 display_text,
                 page_ref,
                 ..
-            } => {
-                if *page_ref {
-                    out.push(InlineElement::FieldPageRef {
-                        bookmark_name: target_label.clone(),
-                        display_text: display_text.clone(),
-                    });
-                } else {
-                    out.push(InlineElement::FieldRef {
-                        bookmark_name: target_label.clone(),
-                        display_text: display_text.clone(),
-                    });
-                }
-            }
+            } => lower_reference(target_label, display_text, *page_ref, ctx, &mut out),
             IrInline::Cite {
                 keys,
                 rendered,
@@ -1678,6 +1853,38 @@ fn lower_inlines(inlines: &[IrInline], ctx: &mut LowerCtx) -> Vec<InlineElement>
         }
     }
     out
+}
+
+fn lower_reference(
+    target: &str,
+    display: &str,
+    page_ref: bool,
+    ctx: &LowerCtx,
+    out: &mut Vec<InlineElement>,
+) {
+    let (bookmark, equation_value) = ctx
+        .equation_refs
+        .get(target)
+        .map_or((target, None), |(name, value)| {
+            (name.as_str(), value.as_deref())
+        });
+    if page_ref {
+        out.push(InlineElement::FieldPageRef {
+            bookmark_name: bookmark.to_owned(),
+            display_text: display.to_owned(),
+        });
+        return;
+    }
+    if let Some(prefix) = equation_value
+        .and_then(|value| display.strip_suffix(value))
+        .filter(|prefix| !prefix.is_empty())
+    {
+        out.push(InlineElement::Text(Run::new(prefix)));
+    }
+    out.push(InlineElement::FieldRef {
+        bookmark_name: bookmark.to_owned(),
+        display_text: equation_value.unwrap_or(display).to_owned(),
+    });
 }
 
 /// Lower a `#link` body node-by-node so images, OMML math, tabs, and fields
@@ -2045,7 +2252,7 @@ fn lower_table(table: &IrTable, doc: &mut Document, ctx: &mut LowerCtx) -> Table
     let rows = table
         .rows
         .iter()
-        .map(|row| lower_row(row, table.column_widths_pct.as_ref(), doc, ctx))
+        .map(|row| lower_row(row, table.column_widths_pct.as_ref(), None, doc, ctx))
         .collect();
     Table {
         rows,
@@ -2089,15 +2296,36 @@ fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<Bloc
         return plan
             .tables
             .iter()
-            .map(|table| BlockElement::Table(lower_planned_table(table, grid, doc, ctx)))
+            .map(|table| {
+                BlockElement::Table(lower_planned_table(
+                    table,
+                    grid,
+                    plan.tables.len() == 1,
+                    doc,
+                    ctx,
+                ))
+            })
             .collect();
     }
+    let allow_bottom = generic_grid_allows_bottom(grid);
     let rows = grid
         .rows
         .iter()
-        .filter(|row| !row.cells.is_empty())
-        .map(|row| {
-            let mut lowered = lower_row(row, grid.column_widths_pct.as_ref(), doc, ctx);
+        .enumerate()
+        .filter(|(_, row)| !row.cells.is_empty())
+        .map(|(index, row)| {
+            let grid_row = GridRow {
+                grid,
+                index,
+                allow_bottom,
+            };
+            let mut lowered = lower_row(
+                row,
+                grid.column_widths_pct.as_ref(),
+                Some(grid_row),
+                doc,
+                ctx,
+            );
             // Measured heights exist to feed the planner's merged bands; on the
             // generic path an `exact` trHeight would compress an ordinary grid
             // in Word, so they are planner input, not output.
@@ -2121,6 +2349,7 @@ fn lower_grid(grid: &IrGrid, doc: &mut Document, ctx: &mut LowerCtx) -> Vec<Bloc
 fn lower_planned_table(
     planned: &PlannedTable,
     grid: &IrGrid,
+    allow_bottom: bool,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> Table {
@@ -2131,14 +2360,22 @@ fn lower_planned_table(
             let mut cells = Vec::new();
             let mut lane = 0_usize;
             for cell in &row.cells {
-                let span = usize::try_from(cell.col_span).unwrap_or(1);
-                let width = planned
-                    .col_widths_twips
-                    .as_ref()
-                    .and_then(|w| w.get(lane..lane + span).map(|slice| slice.iter().sum()));
-                if cell.kind != PlannedCellKind::Filler {
-                    cells.push(lower_planned_cell(cell, grid, width, doc, ctx));
+                if cell.kind == PlannedCellKind::Filler {
+                    continue;
                 }
+                let span = usize::try_from(cell.col_span).unwrap_or(1);
+                let width = planned.col_widths_twips.as_ref().and_then(|w| {
+                    w.get(lane..lane + span)
+                        .map(|slice| slice.iter().copied().fold(0, u32::saturating_add))
+                });
+                cells.push(lower_planned_cell(
+                    cell,
+                    grid,
+                    width,
+                    allow_bottom,
+                    doc,
+                    ctx,
+                ));
                 lane += span;
             }
             TableRow {
@@ -2159,7 +2396,10 @@ fn lower_planned_table(
             bottom: 0,
             right: 0,
         }),
-        width_twips: planned.col_widths_twips.as_ref().map(|w| w.iter().sum()),
+        width_twips: planned
+            .col_widths_twips
+            .as_ref()
+            .map(|w| w.iter().copied().fold(0, u32::saturating_add)),
         alignment: None,
         col_widths_twips: planned.col_widths_twips.clone(),
         float: None,
@@ -2167,18 +2407,19 @@ fn lower_planned_table(
 }
 
 fn ooxml_cell_borders(borders: &IrCellBorders) -> CellBorders {
-    let map = |b: &Option<crate::types::IrBorder>| {
-        b.as_ref().map(|b| tydocx_ooxml::document::CellBorder {
-            sz_eighths: b.sz_eighths,
-            color_hex: b.color_hex.clone(),
-            dashed: b.dashed,
-        })
-    };
     CellBorders {
-        top: map(&borders.top),
-        left: map(&borders.left),
-        bottom: map(&borders.bottom),
-        right: map(&borders.right),
+        top: borders.top.as_ref().map(ooxml_cell_border),
+        left: borders.left.as_ref().map(ooxml_cell_border),
+        bottom: borders.bottom.as_ref().map(ooxml_cell_border),
+        right: borders.right.as_ref().map(ooxml_cell_border),
+    }
+}
+
+fn ooxml_cell_border(border: &crate::types::IrBorder) -> tydocx_ooxml::document::CellBorder {
+    tydocx_ooxml::document::CellBorder {
+        sz_eighths: border.sz_eighths,
+        color_hex: border.color_hex.clone(),
+        dashed: border.dashed,
     }
 }
 
@@ -2195,6 +2436,7 @@ fn lower_planned_cell(
     cell: &PlannedCell,
     grid: &IrGrid,
     width_twips: Option<u32>,
+    allow_bottom: bool,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> TableCell {
@@ -2202,14 +2444,22 @@ fn lower_planned_cell(
     match cell.kind {
         PlannedCellKind::Real { row, index } => {
             let src = &grid.rows[row].cells[index];
-            let mut out = lower_cell(src, None, doc, ctx);
+            let layout = CellLayout {
+                width_pct: None,
+                borders,
+                grid_row: Some(GridRow {
+                    grid,
+                    index: row,
+                    allow_bottom: allow_bottom && cell.borders.bottom.is_none(),
+                }),
+            };
+            let mut out = lower_cell(src, layout, doc, ctx);
             out.colspan = cell.col_span;
             out.vmerge = if cell.row_span > 1 {
                 VMerge::Restart
             } else {
                 VMerge::None
             };
-            out.borders = borders;
             out.width_twips = width_twips;
             out
         }
@@ -2223,7 +2473,7 @@ fn lower_planned_cell(
             shading: cell.fill_hex.clone(),
             width_twips,
             borders,
-            zero_margins: true,
+            margins: Some(TableCellMargins::default()),
         },
         PlannedCellKind::VContinue => TableCell {
             paragraphs: vec![tiny_paragraph()],
@@ -2235,7 +2485,7 @@ fn lower_planned_cell(
             shading: cell.fill_hex.clone(),
             width_twips,
             borders,
-            zero_margins: true,
+            margins: Some(TableCellMargins::default()),
         },
     }
 }
@@ -2243,6 +2493,7 @@ fn lower_planned_cell(
 fn lower_row(
     row: &IrTableRow,
     column_widths_pct: Option<&Vec<u32>>,
+    grid_row: Option<GridRow<'_>>,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> TableRow {
@@ -2254,13 +2505,18 @@ fn lower_row(
                 let span = usize::try_from(cell.colspan).unwrap_or(1).max(1);
                 let pct: u32 = (col..col + span)
                     .filter_map(|i| widths.get(i).copied())
-                    .sum();
+                    .fold(0, u32::saturating_add);
                 if pct == 0 { None } else { Some(pct) }
             }
             None => None,
         };
         col += usize::try_from(cell.colspan).unwrap_or(1).max(1);
-        cells.push(lower_cell(cell, width_pct, doc, ctx));
+        let layout = CellLayout {
+            width_pct,
+            borders: cell_borders_emitted(&cell.borders, cell.borders_declared),
+            grid_row,
+        };
+        cells.push(lower_cell(cell, layout, doc, ctx));
     }
     TableRow {
         cells,
@@ -2269,18 +2525,44 @@ fn lower_row(
     }
 }
 
+struct CellLayout<'a> {
+    width_pct: Option<u32>,
+    borders: Option<CellBorders>,
+    grid_row: Option<GridRow<'a>>,
+}
+
 fn lower_cell(
     cell: &IrTableCell,
-    width_pct: Option<u32>,
+    mut layout: CellLayout<'_>,
     doc: &mut Document,
     ctx: &mut LowerCtx,
 ) -> TableCell {
     let mut content: Vec<CellContent> = Vec::new();
     let mut paragraphs: Vec<Paragraph> = Vec::new();
-    for block in &cell.body {
+    let rect = layout.grid_row.and_then(|row| row.rect(cell));
+    let body = rect.as_ref().map_or(cell.body.as_slice(), |rect| rect.body);
+    let alignment = rect.as_ref().and_then(|rect| rect.alignment);
+    if let Some(border) = rect
+        .as_ref()
+        .and_then(|rect| rect.paint.bottom_border.as_ref())
+    {
+        layout
+            .borders
+            .get_or_insert_with(CellBorders::default)
+            .bottom = Some(ooxml_cell_border(border));
+    }
+    for (index, block) in body.iter().enumerate() {
+        let trim_cell_gap = index + 1 == body.len()
+            && index > 0
+            && matches!(body[index - 1], IrBlock::Paragraph(_))
+            && matches!(block, IrBlock::Paragraph(para) if para.spacing_after.is_none());
         for element in lower_block(block, doc, ctx) {
             match element {
-                BlockElement::Paragraph(para) => {
+                BlockElement::Paragraph(mut para) => {
+                    para.alignment = para.alignment.or(alignment);
+                    if trim_cell_gap {
+                        para.spacing_after = Some(0);
+                    }
                     paragraphs.push(para.clone());
                     content.push(CellContent::Paragraph(para));
                 }
@@ -2311,7 +2593,7 @@ fn lower_cell(
             IrVMerge::Restart => VMerge::Restart,
             IrVMerge::Continue => VMerge::Continue,
         },
-        width_pct,
+        width_pct: layout.width_pct,
         vertical_align: cell.vertical_align,
         shading: if ctx.compat.is_c1() {
             None
@@ -2319,12 +2601,8 @@ fn lower_cell(
             cell.fill_hex.clone()
         },
         width_twips: None,
-        // Per-cell `w:tcBorders` only where an edge was declared on the cell
-        // (a `table.cell(stroke:)` or a partial hline/vline folded in at
-        // collection). Cells that merely inherit the table's uniform stroke
-        // keep `None` and inherit `tblBorders` — the same output as before.
-        borders: cell_borders_emitted(&cell.borders, cell.borders_declared),
-        zero_margins: false,
+        borders: layout.borders,
+        margins: rect.map(|rect| rect.paint.margins),
     }
 }
 
@@ -2820,7 +3098,7 @@ mod tests {
     use super::*;
     use crate::types::{
         DocumentStyle, IrCellBorderFlags, IrDocumentInfo, IrEnumItem, IrListItem, IrNumberingPiece,
-        IrNumeralSystem, IrShapeKind, PageSettings, VerticalAlign,
+        IrNumeralSystem, IrShapeKind, IrTrackSize, PageSettings, VerticalAlign,
     };
     use tydocx_ooxml::document::{AnchoredLine, BlockElement, InlineElement, ParagraphStyle};
 
@@ -2830,6 +3108,7 @@ mod tests {
             page: PageSettings::default(),
             style: DocumentStyle::default(),
             body: Vec::new(),
+            equation_refs: HashMap::new(),
             sections: Vec::new(),
             first_numbering: None,
             footnotes: Vec::new(),
@@ -2945,6 +3224,105 @@ mod tests {
         assert_eq!(cell.vmerge, VMerge::Restart);
         assert_eq!(cell.vertical_align, Some(VerticalAlign::Center));
         assert_eq!(cell.width_pct, Some(5000));
+    }
+
+    fn fixed_grid_with_spanning_cell(widths: [u32; 4]) -> IrDocument {
+        let cell = |x| IrTableCell {
+            body: vec![IrBlock::Paragraph(text_para("x"))],
+            x,
+            colspan: 1,
+            rowspan: 1,
+            vmerge: IrVMerge::None,
+            fill_hex: None,
+            vertical_align: None,
+            inset_twips: None,
+            borders: IrCellBorders::default(),
+            borders_declared: IrCellBorderFlags::default(),
+        };
+        let row = |cells| IrTableRow {
+            cells,
+            height_twips: Some(400),
+            is_header: false,
+        };
+        let mut ir = empty_doc();
+        // Equivalent to four fixed-width Typst tracks with a 2×2 cell in
+        // the top left. The last row separates every lane, including the
+        // two that share the spanning cell in the first and second rows.
+        ir.body.push(IrBlock::Grid(IrGrid {
+            rows: vec![
+                row(vec![
+                    IrTableCell {
+                        colspan: 2,
+                        rowspan: 2,
+                        vmerge: IrVMerge::Restart,
+                        ..cell(0)
+                    },
+                    cell(2),
+                    cell(3),
+                ]),
+                row(vec![
+                    IrTableCell {
+                        body: Vec::new(),
+                        colspan: 2,
+                        vmerge: IrVMerge::Continue,
+                        ..cell(0)
+                    },
+                    cell(2),
+                    cell(3),
+                ]),
+                row((0..4).map(cell).collect()),
+            ],
+            column_widths_pct: None,
+            borders: None,
+            row_sizes: vec![IrTrackSize::Fixed(400); 3],
+            col_sizes: widths.map(IrTrackSize::Fixed).to_vec(),
+            hlines: Vec::new(),
+            vlines: Vec::new(),
+        }));
+        ir
+    }
+
+    #[test]
+    fn planned_grid_keeps_widths_after_spanning_cells() {
+        let ir = fixed_grid_with_spanning_cell([300, 500, 700, 900]);
+        let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
+        let [BlockElement::Table(table)] = doc.body.elements.as_slice() else {
+            panic!("expected one table");
+        };
+        assert_eq!(
+            table.col_widths_twips.as_deref(),
+            Some(&[300, 500, 700, 900][..])
+        );
+        for (row, merge) in table.rows[..2]
+            .iter()
+            .zip([VMerge::Restart, VMerge::Continue])
+        {
+            let cells: Vec<_> = row
+                .cells
+                .iter()
+                .map(|cell| (cell.colspan, cell.width_twips, &cell.vmerge))
+                .collect();
+            assert_eq!(
+                cells,
+                [
+                    (2, Some(800), &merge),
+                    (1, Some(700), &VMerge::None),
+                    (1, Some(900), &VMerge::None),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn planned_grid_saturates_merged_cell_and_table_widths() {
+        let ir = fixed_grid_with_spanning_cell([u32::MAX, 500, 700, 900]);
+        let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
+        let [BlockElement::Table(table)] = doc.body.elements.as_slice() else {
+            panic!("expected one table");
+        };
+        assert_eq!(table.width_twips, Some(u32::MAX));
+        assert_eq!(table.rows[0].cells[0].width_twips, Some(u32::MAX));
+        assert_eq!(table.rows[1].cells[0].width_twips, Some(u32::MAX));
     }
 
     #[test]
@@ -3215,18 +3593,21 @@ mod tests {
     #[test]
     fn odd_page_break_becomes_a_section_break() {
         let mut ir = empty_doc();
+        ir.body.push(IrBlock::Paragraph(text_para("first")));
         ir.body.push(IrBlock::PageBreak {
             weak: false,
             to: Some(IrSectionBreakType::Odd),
         });
+        ir.body.push(IrBlock::Paragraph(text_para("odd")));
         let (doc, _) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         let BlockElement::Paragraph(para) = &doc.body.elements[0] else {
             panic!("expected a paragraph");
         };
         assert_eq!(
             para.section_break.as_ref().map(|s| s.break_type),
-            Some(SectionBreakType::OddPage)
+            Some(SectionBreakType::NextPage)
         );
+        assert_eq!(doc.final_section_type, Some(SectionBreakType::OddPage));
     }
 
     #[test]
@@ -3513,8 +3894,10 @@ mod tests {
             "",
             true,
         )));
-        ir.body.push(heading(1, "1", numbering.clone()));
-        ir.body.push(heading(2, "1.1", numbering));
+        for level in 1..=9 {
+            let rendered = vec!["1"; usize::from(level)].join(".");
+            ir.body.push(heading(level, &rendered, numbering.clone()));
+        }
         let (doc, degradations) = lower(&ir, &GeometryInput::default(), CompatMode::C2);
         assert!(degradations.is_empty());
         assert_eq!(doc.heading_num_instances.len(), 1);
@@ -3535,6 +3918,47 @@ mod tests {
                 |inline| matches!(inline, InlineElement::Text(run) if run.text.contains("1.1"))
             )
         );
+        let h9 = heading_para(&doc, 8);
+        assert_eq!(h9.style, Some(ParagraphStyle::Heading(9)));
+        assert_eq!(
+            h9.num_pr.as_ref().map(|info| (info.id, info.level)),
+            Some((num_id, 8))
+        );
+        assert!(matches!(h9.inlines.as_slice(), [InlineElement::Text(run)] if run.text == "Title"));
+    }
+
+    #[test]
+    fn heading_level_ten_uses_heading_nine_with_literal_numbering() {
+        let mut ir = empty_doc();
+        ir.body.push(heading(
+            10,
+            "1.2.3.4.5.6.7.8.9.10.",
+            Some(IrHeadingNumbering::Mappable(pattern(
+                &[("", IrNumeralSystem::Arabic)],
+                ".",
+                true,
+            ))),
+        ));
+        for mode in [CompatMode::C1, CompatMode::C2, CompatMode::C3] {
+            let (doc, degradations) = lower(&ir, &GeometryInput::default(), mode);
+            let para = heading_para(&doc, 0);
+            assert_eq!(para.style, Some(ParagraphStyle::Heading(9)));
+            assert!(para.num_pr.is_none());
+            assert!(doc.heading_num_instances.is_empty());
+            assert!(matches!(
+                para.inlines.as_slice(),
+                [InlineElement::Text(number), InlineElement::Text(body)]
+                    if number.text == "1.2.3.4.5.6.7.8.9.10. " && body.text == "Title"
+            ));
+            assert!(matches!(
+                degradations.as_slice(),
+                [Degradation {
+                    construct: "heading-level",
+                    action: DegradationAction::Approximated,
+                    ..
+                }]
+            ));
+        }
     }
 
     #[test]

@@ -14,7 +14,8 @@ use super::fields::write_toc_block;
 use super::paragraph::write_paragraph;
 use super::table::write_table;
 use crate::document::{
-    BlockElement, InlineShape, ShapeCap, ShapeJoin, ShapeOutline, ShapePathSeg, ShapeStroke,
+    BlockElement, InlineShape, ShapeCap, ShapeCompound, ShapeJoin, ShapeOutline, ShapePathSeg,
+    ShapeStroke,
 };
 
 /// Write a `wp:inline` drawing element holding one [`InlineShape`]: a
@@ -287,48 +288,74 @@ fn write_stroke<W: Write>(sp: &mut Writer<W>, stroke: Option<&ShapeStroke>) -> i
     let Some(stroke) = stroke else {
         return Ok(());
     };
+    if stroke.width_emu == 0 {
+        sp.create_element("a:ln").write_inner_content(|ln| {
+            ln.create_element("a:noFill").write_empty()?;
+            Ok(())
+        })?;
+        return Ok(());
+    }
     let cap = match stroke.cap {
         ShapeCap::Flat => "flat",
         ShapeCap::Round => "rnd",
         ShapeCap::Square => "sq",
     };
     let color = stroke.color_hex.as_deref().unwrap_or("000000");
-    sp.create_element("a:ln")
-        .with_attribute(("w", stroke.width_emu.to_string().as_str()))
-        .with_attribute(("cap", cap))
-        .write_inner_content(|ln| {
-            ln.create_element("a:solidFill").write_inner_content(|sf| {
-                sf.create_element("a:srgbClr")
-                    .with_attribute(("val", color))
-                    .write_empty()?;
-                Ok(())
-            })?;
-            if let Some(dash) = &stroke.dash {
-                ln.create_element("a:custDash").write_inner_content(|cd| {
-                    for (d, gap) in dash {
-                        cd.create_element("a:ds")
-                            .with_attribute(("d", d.to_string().as_str()))
-                            .with_attribute(("sp", gap.to_string().as_str()))
-                            .write_empty()?;
-                    }
+    let width = stroke.width_emu.to_string();
+    let line = sp
+        .create_element("a:ln")
+        .with_attribute(("w", width.as_str()))
+        .with_attribute(("cap", cap));
+    let line = match stroke.compound {
+        ShapeCompound::Single => line,
+        ShapeCompound::Double => line.with_attribute(("cmpd", "dbl")),
+        ShapeCompound::ThickThin => line.with_attribute(("cmpd", "thickThin")),
+        ShapeCompound::ThinThick => line.with_attribute(("cmpd", "thinThick")),
+        ShapeCompound::Triple => line.with_attribute(("cmpd", "tri")),
+    };
+    line.write_inner_content(|ln| {
+        ln.create_element("a:solidFill").write_inner_content(|sf| {
+            let color = sf
+                .create_element("a:srgbClr")
+                .with_attribute(("val", color));
+            if let Some(alpha) = stroke.alpha {
+                color.write_inner_content(|clr| {
+                    clr.create_element("a:alpha")
+                        .with_attribute(("val", alpha.to_string().as_str()))
+                        .write_empty()?;
                     Ok(())
                 })?;
-            }
-            match stroke.join {
-                ShapeJoin::Miter { lim } => {
-                    ln.create_element("a:miter")
-                        .with_attribute(("lim", lim.to_string().as_str()))
-                        .write_empty()?;
-                }
-                ShapeJoin::Round => {
-                    ln.create_element("a:round").write_empty()?;
-                }
-                ShapeJoin::Bevel => {
-                    ln.create_element("a:bevel").write_empty()?;
-                }
+            } else {
+                color.write_empty()?;
             }
             Ok(())
         })?;
+        if let Some(dash) = &stroke.dash {
+            ln.create_element("a:custDash").write_inner_content(|cd| {
+                for (d, gap) in dash {
+                    cd.create_element("a:ds")
+                        .with_attribute(("d", d.to_string().as_str()))
+                        .with_attribute(("sp", gap.to_string().as_str()))
+                        .write_empty()?;
+                }
+                Ok(())
+            })?;
+        }
+        match stroke.join {
+            ShapeJoin::Miter { lim } => {
+                ln.create_element("a:miter")
+                    .with_attribute(("lim", lim.to_string().as_str()))
+                    .write_empty()?;
+            }
+            ShapeJoin::Round => {
+                ln.create_element("a:round").write_empty()?;
+            }
+            ShapeJoin::Bevel => {
+                ln.create_element("a:bevel").write_empty()?;
+            }
+        }
+        Ok(())
+    })?;
     Ok(())
 }
 

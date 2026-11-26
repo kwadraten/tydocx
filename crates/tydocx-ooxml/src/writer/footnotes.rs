@@ -4,12 +4,11 @@ use quick_xml::Writer;
 
 use super::WriteCtx;
 use super::fields::{write_bookmark_end, write_bookmark_start};
-use super::header_footer::PartCtx;
 use super::package::write_value_element;
 use super::run::{write_inline, write_text_run};
 use crate::document::{
     Alignment, AnchoredContent, BlockElement, CellContent, Document, Footnote, FootnoteEntryStyle,
-    FootnoteFormat, ImageData, InlineElement, Paragraph, Table,
+    FootnoteFormat, InlineElement, Paragraph, Table,
 };
 
 /// Write `w:footnotePr` element with optional circled-number format and
@@ -73,18 +72,10 @@ pub(super) fn write_footnote_ref<W: Write>(writer: &mut Writer<W>, id: u32) -> i
 }
 
 /// Write `word/footnotes.xml`.
-///
-/// `footnote_images` is the document-ordered list of every image inside a
-/// footnote (top-level or nested in a link/float) — the same list
-/// [`generate_part_image_rels`] enumerates for `word/_rels/footnotes.xml.rels`.
-/// The part writes through a part-local [`PartCtx`] so every image reference,
-/// wherever it nests, gets a footnote-local `rId`; the media files keep the
-/// document-wide image numbering.
 pub(super) fn generate_footnotes_xml(
     writer: &mut Writer<&mut Vec<u8>>,
     doc: &Document,
     ctx: &WriteCtx,
-    footnote_images: &[&ImageData],
     has_drawings: bool,
     has_math: bool,
 ) -> io::Result<()> {
@@ -129,13 +120,8 @@ pub(super) fn generate_footnotes_xml(
             &FootnoteEntryStyle::default(),
         )?;
 
-        // Actual footnotes. The part-local context enumerates footnote images
-        // globally across footnotes (rId{k+1}), so a later footnote's drawing
-        // cannot embed the first image again.
-        let part = PartCtx::new(footnote_images.to_vec());
-        let part_ctx = part.ctx(ctx);
         for footnote in &doc.footnotes {
-            write_footnote_entry(w, footnote, &part_ctx)?;
+            write_footnote_entry(w, footnote, ctx)?;
         }
         Ok(())
     })?;
@@ -240,7 +226,7 @@ fn inline_has_math(inline: &InlineElement) -> bool {
     }
 }
 
-fn para_has_math(para: &Paragraph) -> bool {
+pub(super) fn para_has_math(para: &Paragraph) -> bool {
     para.inlines.iter().any(inline_has_math)
 }
 

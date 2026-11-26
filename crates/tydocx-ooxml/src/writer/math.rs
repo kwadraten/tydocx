@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use quick_xml::Writer;
 
-use super::fields::write_complex_field;
+use super::fields::{write_bookmark_end, write_bookmark_start, write_complex_field};
 use super::run::write_text_run;
 use crate::document::EquationNumber;
 
@@ -52,6 +52,32 @@ pub(super) fn write_equation_number<W: Write>(
                 write_text_run(writer, prefix, true)?;
             }
             write_complex_field(writer, instruction, display, true)?;
+            if !suffix.is_empty() {
+                write_text_run(writer, suffix, true)?;
+            }
+            Ok(())
+        }
+        EquationNumber::Bookmarked {
+            prefix,
+            display,
+            instruction,
+            suffix,
+            bookmarks,
+        } => {
+            if !prefix.is_empty() {
+                write_text_run(writer, prefix, true)?;
+            }
+            for (id, name) in bookmarks {
+                write_bookmark_start(writer, *id, name)?;
+            }
+            if let Some(instruction) = instruction {
+                write_complex_field(writer, instruction, display, true)?;
+            } else {
+                write_text_run(writer, display, true)?;
+            }
+            for (id, _) in bookmarks.iter().rev() {
+                write_bookmark_end(writer, *id)?;
+            }
             if !suffix.is_empty() {
                 write_text_run(writer, suffix, true)?;
             }

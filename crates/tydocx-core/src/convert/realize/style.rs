@@ -1,50 +1,89 @@
 use tydocx_ooxml::document::Run;
-use typst_library::foundations::{Smart, StyleChain};
+use typst_library::foundations::{Smart, StyleChain, Styles};
 use typst_library::layout::Abs;
+use typst_library::routines::Pair;
 use typst_library::text::{
-    DecoLine, FontBook, FontFamily, FontFlags, FontStyle, FontWeight, NumberType, NumberWidth,
-    ScriptKind, TextElem, variant,
+    DecoLine, FontBook, FontFlags, FontStyle, FontWeight, NumberType, NumberWidth, ScriptKind,
+    TextElem, variant,
 };
-use typst_syntax::Span;
+use typst_syntax::{Source, Span};
 
 use crate::convert::highlight::{HighlightStyle, highlight_style};
-use crate::convert::page::extract_non_black_color;
+use crate::convert::page::{self, extract_non_black_color};
+
+mod font;
+
+pub(super) use font::{raw_text_styles, runs_from_styles};
 
 #[derive(Debug, Clone)]
 pub struct StyleDefaults {
     pub size_half_pt: u32,
+    pub inherited_size_half_pt: Option<u32>,
     pub body_font: String,
     pub font_east_asia: String,
     pub monospace_families: Vec<String>,
 }
 
-pub fn defaults_from_root(styles: StyleChain<'_>) -> StyleDefaults {
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "sizes are small and clamped to at least 1.0 first"
+)]
+pub(super) fn text_size_half_pt(styles: StyleChain<'_>) -> u32 {
     let size_pt = styles.resolve(TextElem::size).to_pt();
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "sizes are small and clamped to at least 1.0 first"
-    )]
-    let size_half_pt = (size_pt * 2.0).round().max(1.0) as u32;
-    let families: Vec<&str> = typst_library::text::families(styles)
-        .map(FontFamily::as_str)
-        .collect();
-    let body_font = families.first().map_or_else(
-        || "Times New Roman".to_string(),
-        |family| (*family).to_string(),
-    );
-    let declared: Vec<&str> = styles
+    (size_pt * 2.0).round().max(1.0) as u32
+}
+
+pub(super) fn additional_root_styles(pairs: &[Pair<'_>], initial: StyleChain<'_>) -> Styles {
+    let inherited = Styles::root(&[], initial);
+    let root = Styles::root(pairs, initial);
+    let inherited_prefix = inherited
+        .as_slice()
+        .iter()
+        .zip(root.as_slice())
+        .take_while(|(initial, root)| initial == root)
+        .count();
+    root.into_iter().skip(inherited_prefix).collect()
+}
+
+pub(super) fn declared_root_fonts(
+    styles: StyleChain<'_>,
+    source: Option<&Source>,
+) -> Option<Vec<String>> {
+    if !styles.has(TextElem::font) {
+        return None;
+    }
+
+    let mut fonts: Vec<String> = styles
         .get_ref(TextElem::font)
         .into_iter()
-        .map(FontFamily::as_str)
+        .map(|family| family.as_str().to_owned())
         .collect();
-    let font_east_asia = declared
-        .last()
-        .map_or_else(|| body_font.clone(), |family| (*family).to_string());
+    if let Some(source) = source {
+        let text = source.text();
+        let names = page::extract_show_template_names_from_source(text);
+        if let Some(spelled) = page::extract_source_style_overrides(text, &names).text_font {
+            for font in &mut fonts {
+                if let Some(name) = spelled.iter().find(|name| name.to_lowercase() == *font) {
+                    font.clone_from(name);
+                }
+            }
+        }
+    }
+    Some(fonts)
+}
+
+pub fn defaults_from_root(styles: StyleChain<'_>) -> StyleDefaults {
+    let body_font = typst_library::text::families(styles).next().map_or_else(
+        || "Times New Roman".to_string(),
+        |family| family.as_str().to_owned(),
+    );
+    let size_half_pt = text_size_half_pt(styles);
     StyleDefaults {
         size_half_pt,
+        inherited_size_half_pt: styles.has(TextElem::size).then_some(size_half_pt),
+        font_east_asia: body_font.clone(),
         body_font,
-        font_east_asia,
         monospace_families: Vec::new(),
     }
 }
@@ -71,6 +110,29 @@ pub fn run_from_styles(
     defaults: &StyleDefaults,
     span: Option<Span>,
 ) -> Run {
+    let mut run = run_properties(text, styles, defaults, span);
+    if let Some(first) = typst_library::text::families(styles).next() {
+        let family = first.as_str();
+        if !family.eq_ignore_ascii_case(&defaults.body_font) {
+            run.font_ascii = Some(family.to_owned());
+        }
+        if contains_cjk(&run.text)
+            && styles.has(TextElem::font)
+            && !family.eq_ignore_ascii_case(&defaults.font_east_asia)
+        {
+            run.font_east_asia = Some(family.to_owned());
+        }
+        run.monospace = defaults.monospace_families.iter().any(|f| f == family);
+    }
+    run
+}
+
+fn run_properties(
+    text: &str,
+    styles: StyleChain<'_>,
+    defaults: &StyleDefaults,
+    span: Option<Span>,
+) -> Run {
     let case = styles.get(TextElem::case);
     let text = match case {
         Some(case) => case.apply(text),
@@ -83,14 +145,8 @@ pub fn run_from_styles(
     run.bold = variant.weight >= FontWeight::SEMIBOLD;
     run.italic = variant.style != FontStyle::Normal;
 
-    let size_pt = styles.resolve(TextElem::size).to_pt();
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "sizes are small and clamped to at least 1.0 first"
-    )]
-    let size_half_pt = (size_pt * 2.0).round().max(1.0) as u32;
-    if size_half_pt != defaults.size_half_pt {
+    let size_half_pt = text_size_half_pt(styles);
+    if Some(size_half_pt) != defaults.inherited_size_half_pt {
         run.size_half_pt = Some(size_half_pt);
     }
 
@@ -104,29 +160,6 @@ pub fn run_from_styles(
         {
             run.tracking_twips = Some((tracking.to_pt() * 20.0).round().max(1.0) as u32);
         }
-    }
-
-    let families: Vec<&str> = typst_library::text::families(styles)
-        .map(FontFamily::as_str)
-        .collect();
-    if let Some(first) = families.first()
-        && !first.eq_ignore_ascii_case(&defaults.body_font)
-    {
-        run.font_ascii = Some((*first).to_string());
-    }
-    if contains_cjk(&run.text)
-        && let Some(last) = families.last()
-        && !last.eq_ignore_ascii_case(&defaults.font_east_asia)
-    {
-        run.font_east_asia = Some((*last).to_string());
-    }
-    if families.first().is_some_and(|name| {
-        defaults
-            .monospace_families
-            .iter()
-            .any(|f| f.as_str() == *name)
-    }) {
-        run.monospace = true;
     }
 
     if let Some(color) = extract_non_black_color(&styles.get_cloned(TextElem::fill)) {
@@ -198,14 +231,7 @@ fn apply_opentype_props(run: &mut Run, styles: StyleChain<'_>) {
 }
 
 pub fn contains_cjk(text: &str) -> bool {
-    text.chars().any(|c| {
-        matches!(c,
-            '\u{3040}'..='\u{309F}' // hiragana
-            | '\u{30A0}'..='\u{30FF}' // katakana
-            | '\u{3400}'..='\u{4DBF}' // CJK extension A
-            | '\u{4E00}'..='\u{9FFF}' // CJK unified ideographs
-            | '\u{AC00}'..='\u{D7AF}') // hangul syllables
-    })
+    text.chars().any(page::is_cjk_char)
 }
 
 pub fn lower_runs_match(prev: &Run, next: &Run) -> bool {
@@ -215,9 +241,63 @@ pub fn lower_runs_match(prev: &Run, next: &Run) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use typst_library::foundations::{StyleChain, Styles};
-    use typst_library::text::{Case, Coverage, FontInfo, FontList, FontVariant, TextElem};
+    use crate::convert::{DocxDocument, export_ir};
+    use crate::{ConvertOptions, TydocxWorld};
+    use std::path::Path;
+    use typst::{Library, World};
+    use typst_layout::PagedDocument;
+    use typst_library::diag::FileResult;
+    use typst_library::foundations::{Bytes, Datetime, Duration};
+    use typst_library::layout::{Em, Frame, FrameItem};
+    use typst_library::text::{
+        Case, Coverage, Font, FontFamily, FontInfo, FontList, FontVariant, TextSize,
+    };
     use typst_library::visualize::Paint;
+    use typst_syntax::FileId;
+    use typst_utils::LazyHash;
+
+    struct HostWorld<'a> {
+        base: &'a TydocxWorld,
+        library: LazyHash<Library>,
+    }
+
+    impl World for HostWorld<'_> {
+        fn library(&self) -> &LazyHash<Library> {
+            &self.library
+        }
+
+        fn book(&self) -> &LazyHash<FontBook> {
+            self.base.book()
+        }
+
+        fn main(&self) -> FileId {
+            self.base.main()
+        }
+
+        fn source(&self, id: FileId) -> FileResult<Source> {
+            self.base.source(id)
+        }
+
+        fn file(&self, id: FileId) -> FileResult<Bytes> {
+            self.base.file(id)
+        }
+
+        fn font(&self, index: usize) -> Option<Font> {
+            self.base.font(index)
+        }
+
+        fn today(&self, offset: Option<Duration>) -> Option<Datetime> {
+            self.base.today(offset)
+        }
+    }
+
+    fn first_text_size(frame: &Frame) -> Option<Abs> {
+        frame.items().find_map(|(_, item)| match item {
+            FrameItem::Text(text) => Some(text.size),
+            FrameItem::Group(group) => first_text_size(&group.frame),
+            _ => None,
+        })
+    }
 
     fn root_styles() -> Styles {
         Styles::new()
@@ -236,12 +316,43 @@ mod tests {
         let styles = root_styles();
         let defaults = defaults_from_root(StyleChain::new(&styles));
         assert_eq!(defaults.size_half_pt, 22);
+        assert_eq!(defaults.inherited_size_half_pt, None);
         assert_eq!(defaults.body_font, "libertinus serif");
         assert_eq!(defaults.font_east_asia, "libertinus serif");
     }
 
     #[test]
-    fn defaults_from_root_east_asia_is_last_declared_family() {
+    fn host_relative_text_size_is_applied_once() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/style_default.typ");
+        let base = TydocxWorld::new(&fixture).expect("open unstyled fixture");
+        for outside in [true, false] {
+            let mut library = (**base.library()).clone();
+            let styles = Styles::from(TextElem::size.set(TextSize(Em::new(2.0).into())).wrap());
+            library.styles = if outside { styles.outside() } else { styles };
+            let world = HostWorld {
+                base: &base,
+                library: LazyHash::new(library),
+            };
+            let paged = typst::compile::<PagedDocument>(&world)
+                .output
+                .expect("native Typst compile");
+            let docx = typst::compile::<DocxDocument>(&world)
+                .output
+                .expect("DOCX compile");
+            let outcome = export_ir(&docx, Some(&paged), &base, &ConvertOptions::default());
+            // Typst folds 2em over its 11pt default. An outside host style
+            // also appears in Styles::root, but it must not fold twice.
+            assert_eq!(
+                first_text_size(&paged.pages()[0].frame),
+                Some(Abs::pt(22.0))
+            );
+            assert_eq!(outcome.document.style.body_size_half_pt, 44);
+        }
+    }
+
+    #[test]
+    fn defaults_from_root_does_not_assume_a_separate_east_asian_family() {
         let mut styles = root_styles();
         styles.set(
             TextElem::font,
@@ -252,13 +363,14 @@ mod tests {
         );
         let defaults = defaults_from_root(StyleChain::new(&styles));
         assert_eq!(defaults.body_font, "libertinus serif");
-        assert_eq!(defaults.font_east_asia, "noto serif cjk sc");
+        assert_eq!(defaults.font_east_asia, "libertinus serif");
     }
 
     #[test]
     fn run_from_styles_cjk_run_gets_no_spurious_east_asia_override() {
         let defaults = StyleDefaults {
             size_half_pt: 22,
+            inherited_size_half_pt: None,
             body_font: "libertinus serif".to_owned(),
             font_east_asia: "segoe ui emoji".to_owned(),
             monospace_families: Vec::new(),
@@ -269,8 +381,9 @@ mod tests {
     }
 
     #[test]
-    fn run_from_styles_body_text_stays_implicit() {
-        let styles = root_styles();
+    fn run_from_styles_matching_declared_body_size_stays_implicit() {
+        let mut styles = root_styles();
+        styles.set(TextElem::size, TextSize(Abs::pt(13.0).into()));
         let defaults = defaults_from_root(StyleChain::new(&styles));
         let run = run_from_styles("hello", StyleChain::new(&styles), &defaults, None);
         assert_eq!(run.text, "hello");
@@ -279,6 +392,16 @@ mod tests {
         assert_eq!(run.size_half_pt, None);
         assert_eq!(run.font_ascii, None);
         assert_eq!(run.color, None);
+    }
+
+    #[test]
+    fn guessed_body_size_cannot_remove_a_run_size() {
+        let styles = root_styles();
+        let defaults = defaults_from_root(StyleChain::new(&styles));
+        let run = run_from_styles("hello", StyleChain::new(&styles), &defaults, None);
+        // The Paged histogram (or source fallback) may choose a different
+        // Normal size even when this run matches the collection-time default.
+        assert_eq!(run.size_half_pt, Some(22));
     }
 
     #[test]
@@ -353,6 +476,7 @@ mod tests {
         );
         let defaults = StyleDefaults {
             size_half_pt: 22,
+            inherited_size_half_pt: None,
             body_font: "dejavu sans mono".to_owned(),
             font_east_asia: "dejavu sans mono".to_owned(),
             monospace_families: Vec::new(),
@@ -371,6 +495,7 @@ mod tests {
         );
         let defaults = StyleDefaults {
             size_half_pt: 22,
+            inherited_size_half_pt: None,
             body_font: "libertinus serif".to_owned(),
             font_east_asia: "libertinus serif".to_owned(),
             monospace_families: vec!["foxit fixed".to_owned()],

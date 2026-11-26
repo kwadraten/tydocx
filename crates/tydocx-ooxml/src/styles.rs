@@ -21,7 +21,7 @@ pub(crate) fn generate_styles(
         .write_inner_content(|w| {
             write_doc_defaults(w, style)?;
             write_style_normal(w, style)?;
-            for level in 1..=5 {
+            for level in 1..=9 {
                 write_style_heading(w, level, style)?;
             }
             write_style_code_block(w, style)?;
@@ -66,11 +66,11 @@ fn write_doc_defaults<W: Write>(w: &mut Writer<W>, style: &DocumentStyle) -> io:
                 pprd.create_element("w:pPr").write_inner_content(|ppr| {
                     // CJK typography attributes — inherited by all paragraphs
                     ppr.create_element("w:kinsoku").write_empty()?;
+                    ppr.create_element("w:wordWrap").write_empty()?;
                     ppr.create_element("w:overflowPunct").write_empty()?;
+                    ppr.create_element("w:topLinePunct").write_empty()?;
                     ppr.create_element("w:autoSpaceDE").write_empty()?;
                     ppr.create_element("w:autoSpaceDN").write_empty()?;
-                    ppr.create_element("w:wordWrap").write_empty()?;
-                    ppr.create_element("w:topLinePunct").write_empty()?;
                     Ok(())
                 })?;
                 Ok(())
@@ -91,27 +91,8 @@ fn write_style_normal<W: Write>(w: &mut Writer<W>, style: &DocumentStyle) -> io:
             s.create_element("w:name")
                 .with_attribute(("w:val", "Normal"))
                 .write_empty()?;
-            s.create_element("w:rPr").write_inner_content(|rpr| {
-                write_font_triple(
-                    rpr,
-                    style.body_font_ascii.as_str(),
-                    style.body_font_east_asia.as_str(),
-                    style.has_cjk_content,
-                )?;
-                write_size_pair(rpr, sz.as_str())?;
-                write_language_pair(
-                    rpr,
-                    "w:lang",
-                    style.lang_latin.as_str(),
-                    style.lang_east_asia.as_str(),
-                )?;
-                Ok(())
-            })?;
             s.create_element("w:pPr").write_inner_content(|ppr| {
                 ppr.create_element("w:widowControl").write_empty()?;
-                ppr.create_element("w:jc")
-                    .with_attribute(("w:val", style.body_alignment.as_str()))
-                    .write_empty()?;
                 let sp_before = style.body_spacing_before.to_string();
                 let sp_after = style.body_spacing_after.to_string();
                 // No w:line/w:lineRule: Pandoc-aligned. Emitting the rendered
@@ -135,6 +116,25 @@ fn write_style_normal<W: Write>(w: &mut Writer<W>, style: &DocumentStyle) -> io:
                         ..Default::default()
                     },
                 )?;
+                ppr.create_element("w:jc")
+                    .with_attribute(("w:val", style.body_alignment.as_str()))
+                    .write_empty()?;
+                Ok(())
+            })?;
+            s.create_element("w:rPr").write_inner_content(|rpr| {
+                write_font_triple(
+                    rpr,
+                    style.body_font_ascii.as_str(),
+                    style.body_font_east_asia.as_str(),
+                    style.has_cjk_content,
+                )?;
+                write_size_pair(rpr, sz.as_str())?;
+                write_language_pair(
+                    rpr,
+                    "w:lang",
+                    style.lang_latin.as_str(),
+                    style.lang_east_asia.as_str(),
+                )?;
                 Ok(())
             })?;
             Ok(())
@@ -150,7 +150,7 @@ fn write_style_heading<W: Write>(
     let style_id = format!("Heading{level}");
     let name = format!("heading {level}");
 
-    let idx = (level as usize).saturating_sub(1).min(4);
+    let idx = usize::from(level - 1).min(4);
     let heading_size = style.heading_sizes[idx];
     let font_size = heading_size.to_string();
 
@@ -170,10 +170,6 @@ fn write_style_heading<W: Write>(
                 // onto the next page when the group doesn't fit at the bottom,
                 // leaving a gap. Let Word flow headings so the space is filled.
                 ppr.create_element("w:widowControl").write_empty()?;
-                let outline_level = (level - 1).to_string();
-                ppr.create_element("w:outlineLvl")
-                    .with_attribute(("w:val", outline_level.as_str()))
-                    .write_empty()?;
                 let sp_before = style.heading_spacing_before[idx].to_string();
                 let sp_after = style.heading_spacing_after[idx].to_string();
                 ppr.create_element("w:spacing")
@@ -187,6 +183,10 @@ fn write_style_heading<W: Write>(
                         ..Default::default()
                     },
                 )?;
+                let outline_level = (level - 1).to_string();
+                ppr.create_element("w:outlineLvl")
+                    .with_attribute(("w:val", outline_level.as_str()))
+                    .write_empty()?;
                 Ok(())
             })?;
             s.create_element("w:rPr").write_inner_content(|rpr| {
@@ -252,19 +252,6 @@ fn write_style_code_block<W: Write>(w: &mut Writer<W>, style: &DocumentStyle) ->
                 .with_attribute(("w:val", "Normal"))
                 .write_empty()?;
             s.create_element("w:pPr").write_inner_content(|ppr| {
-                write_indentation(
-                    ppr,
-                    Indentation {
-                        first_line: Some("0"),
-                        ..Default::default()
-                    },
-                )?;
-                ppr.create_element("w:spacing")
-                    .with_attribute(("w:line", "240"))
-                    .with_attribute(("w:lineRule", "auto"))
-                    .with_attribute(("w:before", "0"))
-                    .with_attribute(("w:after", "0"))
-                    .write_empty()?;
                 // Light-gray background. This is a Word convention for code
                 // blocks, not a property Typst exposes (raw blocks carry no fill
                 // in the AST/PagedDocument), so it is a fixed style default.
@@ -273,6 +260,19 @@ fn write_style_code_block<W: Write>(w: &mut Writer<W>, style: &DocumentStyle) ->
                     .with_attribute(("w:color", "auto"))
                     .with_attribute(("w:fill", "F2F2F2"))
                     .write_empty()?;
+                ppr.create_element("w:spacing")
+                    .with_attribute(("w:line", "240"))
+                    .with_attribute(("w:lineRule", "auto"))
+                    .with_attribute(("w:before", "0"))
+                    .with_attribute(("w:after", "0"))
+                    .write_empty()?;
+                write_indentation(
+                    ppr,
+                    Indentation {
+                        first_line: Some("0"),
+                        ..Default::default()
+                    },
+                )?;
                 Ok(())
             })?;
             s.create_element("w:rPr").write_inner_content(|rpr| {

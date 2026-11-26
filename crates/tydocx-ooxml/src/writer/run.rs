@@ -7,9 +7,10 @@ use super::WriteCtx;
 use super::citation::{lang_to_lcid, write_citation_sdt};
 use super::fields::{
     write_bookmark_end, write_bookmark_start, write_field, write_field_page, write_field_pageref,
-    write_field_ref, write_hyperlink, write_toc_field,
+    write_field_ref, write_toc_field,
 };
 use super::footnotes::write_footnote_ref;
+use super::hyperlinks::write_hyperlink;
 use super::image::{
     image_rel_id, svg_rel_id, write_anchored_float, write_anchored_line, write_image_inline,
 };
@@ -42,14 +43,21 @@ pub(super) fn write_inline<W: Write>(
             equation_number: _,
         } => write_math_inline(writer, omml_xml),
         InlineElement::Image(img) => {
-            let n = ctx.image_counter.get() + 1;
-            ctx.image_counter.set(n);
-            let rid = image_rel_id(n, ctx.images, ctx.parts);
+            let image_index = ctx.image_counter.get() + 1;
+            ctx.image_counter.set(image_index);
+            let rid = image_rel_id(image_index, ctx.images, ctx.parts);
             let svg_rid = img
                 .svg
                 .is_some()
-                .then(|| svg_rel_id(n, ctx.images, ctx.parts));
-            write_image_inline(writer, img, n, &rid, svg_rid.as_deref())
+                .then(|| svg_rel_id(image_index, ctx.images, ctx.parts));
+            write_image_inline(
+                writer,
+                img,
+                image_index,
+                ctx.next_drawing_id()?,
+                &rid,
+                svg_rid.as_deref(),
+            )
         }
         InlineElement::Bookmark { id, name } => write_bookmark_start(writer, *id, name),
         InlineElement::BookmarkEnd { id } => write_bookmark_end(writer, *id),
@@ -66,7 +74,11 @@ pub(super) fn write_inline<W: Write>(
             bold,
             size_half_pt,
         } => write_field_page(writer, display_text, *bold, *size_half_pt),
-        InlineElement::Hyperlink { url, body } => write_hyperlink(writer, url, body, ctx),
+        InlineElement::Hyperlink {
+            url,
+            body,
+            preserve_style,
+        } => write_hyperlink(writer, url, body, *preserve_style, ctx),
         InlineElement::InternalLink { anchor, body } => {
             writer
                 .create_element("w:hyperlink")
@@ -81,19 +93,13 @@ pub(super) fn write_inline<W: Write>(
         }
         InlineElement::PageBreak => write_page_break(writer),
         InlineElement::AnchoredLine(line) => {
-            let n = ctx.shape_id_counter.get() + 1;
-            ctx.shape_id_counter.set(n);
-            write_anchored_line(writer, line, n)
+            write_anchored_line(writer, line, ctx.next_drawing_id()?)
         }
         InlineElement::AnchoredFloat(float) => {
-            let n = ctx.shape_id_counter.get() + 1;
-            ctx.shape_id_counter.set(n);
-            write_anchored_float(writer, float, n, ctx)
+            write_anchored_float(writer, float, ctx.next_drawing_id()?, ctx)
         }
         InlineElement::Shape(shape) => {
-            let n = ctx.shape_id_counter.get() + 1;
-            ctx.shape_id_counter.set(n);
-            write_inline_shape(writer, shape, n, ctx)
+            write_inline_shape(writer, shape, ctx.next_drawing_id()?, ctx)
         }
         InlineElement::ColumnBreak => write_column_break(writer),
         InlineElement::FieldToc {
@@ -179,24 +185,115 @@ fn write_line_break<W: Write>(writer: &mut Writer<W>) -> io::Result<()> {
     Ok(())
 }
 
-/// OpenType character properties (`w:ligatures`, `w:numForm`,
-/// `w:numberSpacing`) — `set text(ligatures:/number-type:/number-width:)`.
 fn write_opentype_props<W: Write>(rpr: &mut Writer<W>, run: &Run) -> io::Result<()> {
     if let Some(ligatures) = run.ligatures {
-        rpr.create_element("w:ligatures")
-            .with_attribute(("w:val", ligatures))
+        rpr.create_element("w14:ligatures")
+            .with_attribute(("w14:val", ligatures))
             .write_empty()?;
     }
     if let Some(num_form) = run.num_form {
-        rpr.create_element("w:numForm")
-            .with_attribute(("w:val", num_form))
+        rpr.create_element("w14:numForm")
+            .with_attribute(("w14:val", num_form))
             .write_empty()?;
     }
     if let Some(number_spacing) = run.number_spacing {
-        rpr.create_element("w:numberSpacing")
-            .with_attribute(("w:val", number_spacing))
+        rpr.create_element("w14:numSpacing")
+            .with_attribute(("w14:val", number_spacing))
             .write_empty()?;
     }
+    Ok(())
+}
+
+fn write_run_props<W: Write>(
+    rpr: &mut Writer<W>,
+    run: &Run,
+    doc_style: &DocumentStyle,
+) -> io::Result<()> {
+    if run.monospace {
+        write_font_triple(
+            rpr,
+            doc_style.code_font.as_str(),
+            doc_style.code_font.as_str(),
+            false,
+        )?;
+    } else if run.font_ascii.is_some() || run.font_east_asia.is_some() {
+        let ascii = run
+            .font_ascii
+            .as_deref()
+            .unwrap_or(&doc_style.body_font_ascii);
+        let east_asia = run
+            .font_east_asia
+            .as_deref()
+            .unwrap_or(&doc_style.body_font_east_asia);
+        write_font_triple(rpr, ascii, east_asia, false)?;
+    }
+    if run.bold {
+        rpr.create_element("w:b").write_empty()?;
+    }
+    if run.italic {
+        rpr.create_element("w:i").write_empty()?;
+    }
+    if run.smallcaps {
+        rpr.create_element("w:smallCaps").write_empty()?;
+    }
+    if let Some(color) = &run.color {
+        rpr.create_element("w:color")
+            .with_attribute(("w:val", color.as_str()))
+            .write_empty()?;
+    }
+    if let Some(tracking) = run.tracking_twips.filter(|t| *t > 0) {
+        rpr.create_element("w:spacing")
+            .with_attribute(("w:val", tracking.to_string().as_str()))
+            .write_empty()?;
+    }
+    // A super/subscript run must not carry an explicit reduced size:
+    // `w:vertAlign` already shrinks the glyph and raises it by a fraction
+    // of the *effective* em, so a pre-shrunk `w:sz` collapses the raise and
+    // the mark sits mid-line. Emit vertAlign alone and let the consumer
+    // reduce+raise from the inherited body size (ECMA-376 §17.3.2.42).
+    if let Some(size) = run
+        .size_half_pt
+        .filter(|_| !run.superscript && !run.subscript)
+    {
+        let size_str = size.to_string();
+        write_size_pair(rpr, size_str.as_str())?;
+    }
+    if let Some(position) = run.position_half_pt {
+        let val = position.to_string();
+        rpr.create_element("w:position")
+            .with_attribute(("w:val", val.as_str()))
+            .write_empty()?;
+    }
+    if run.strikethrough {
+        rpr.create_element("w:strike").write_empty()?;
+    }
+    if run.underline {
+        rpr.create_element("w:u")
+            .with_attribute(("w:val", "single"))
+            .write_empty()?;
+    }
+    if let Some(hl_color) = &run.highlight_color {
+        rpr.create_element("w:highlight")
+            .with_attribute(("w:val", hl_color.as_str()))
+            .write_empty()?;
+    }
+    if let Some(shading) = &run.shading {
+        rpr.create_element("w:shd")
+            .with_attribute(("w:val", "clear"))
+            .with_attribute(("w:fill", shading.as_str()))
+            .write_empty()?;
+    }
+    if run.superscript {
+        rpr.create_element("w:vertAlign")
+            .with_attribute(("w:val", "superscript"))
+            .write_empty()?;
+    }
+    if run.subscript {
+        rpr.create_element("w:vertAlign")
+            .with_attribute(("w:val", "subscript"))
+            .write_empty()?;
+    }
+    write_opentype_props(rpr, run)?;
     Ok(())
 }
 
@@ -209,97 +306,21 @@ pub(super) fn write_run<W: Write>(
         return write_line_break(writer);
     }
     writer.create_element("w:r").write_inner_content(|w| {
-        let has_font_override = run.font_ascii.is_some() || run.font_east_asia.is_some();
-        let has_rpr = !run.format_key().is_plain();
-        if has_rpr {
-            w.create_element("w:rPr").write_inner_content(|rpr| {
-                if run.monospace {
-                    write_font_triple(
-                        rpr,
-                        doc_style.code_font.as_str(),
-                        doc_style.code_font.as_str(),
-                        false,
-                    )?;
-                } else if has_font_override {
-                    let ascii = run
-                        .font_ascii
-                        .as_deref()
-                        .unwrap_or(&doc_style.body_font_ascii);
-                    let east_asia = run
-                        .font_east_asia
-                        .as_deref()
-                        .unwrap_or(&doc_style.body_font_east_asia);
-                    write_font_triple(rpr, ascii, east_asia, false)?;
-                }
-                if run.bold {
-                    rpr.create_element("w:b").write_empty()?;
-                }
-                if run.italic {
-                    rpr.create_element("w:i").write_empty()?;
-                }
-                if run.smallcaps {
-                    rpr.create_element("w:smallCaps").write_empty()?;
-                }
-                if let Some(color) = &run.color {
-                    rpr.create_element("w:color")
-                        .with_attribute(("w:val", color.as_str()))
-                        .write_empty()?;
-                }
-                if let Some(tracking) = run.tracking_twips.filter(|t| *t > 0) {
-                    rpr.create_element("w:spacing")
-                        .with_attribute(("w:val", tracking.to_string().as_str()))
-                        .write_empty()?;
-                }
-                // A super/subscript run must not carry an explicit reduced size:
-                // `w:vertAlign` already shrinks the glyph and raises it by a fraction
-                // of the *effective* em, so a pre-shrunk `w:sz` collapses the raise and
-                // the mark sits mid-line. Emit vertAlign alone and let the consumer
-                // reduce+raise from the inherited body size (ECMA-376 §17.3.2.42).
-                if let Some(size) = run
-                    .size_half_pt
-                    .filter(|_| !run.superscript && !run.subscript)
-                {
-                    let size_str = size.to_string();
-                    write_size_pair(rpr, size_str.as_str())?;
-                }
-                if let Some(position) = run.position_half_pt {
-                    let val = position.to_string();
-                    rpr.create_element("w:position")
-                        .with_attribute(("w:val", val.as_str()))
-                        .write_empty()?;
-                }
-                if run.strikethrough {
-                    rpr.create_element("w:strike").write_empty()?;
-                }
-                if run.underline {
-                    rpr.create_element("w:u")
-                        .with_attribute(("w:val", "single"))
-                        .write_empty()?;
-                }
-                if let Some(hl_color) = &run.highlight_color {
-                    rpr.create_element("w:highlight")
-                        .with_attribute(("w:val", hl_color.as_str()))
-                        .write_empty()?;
-                }
-                if let Some(shading) = &run.shading {
-                    rpr.create_element("w:shd")
-                        .with_attribute(("w:val", "clear"))
-                        .with_attribute(("w:fill", shading.as_str()))
-                        .write_empty()?;
-                }
-                if run.superscript {
-                    rpr.create_element("w:vertAlign")
-                        .with_attribute(("w:val", "superscript"))
-                        .write_empty()?;
-                }
-                if run.subscript {
-                    rpr.create_element("w:vertAlign")
-                        .with_attribute(("w:val", "subscript"))
-                        .write_empty()?;
-                }
-                write_opentype_props(rpr, run)?;
-                Ok(())
-            })?;
+        if !run.format_key().is_plain() {
+            let mut props = w.create_element("w:rPr");
+            if run.ligatures.is_some() || run.num_form.is_some() || run.number_spacing.is_some() {
+                props = props
+                    .with_attribute((
+                        "xmlns:w14",
+                        "http://schemas.microsoft.com/office/word/2010/wordml",
+                    ))
+                    .with_attribute((
+                        "xmlns:mc",
+                        "http://schemas.openxmlformats.org/markup-compatibility/2006",
+                    ))
+                    .with_attribute(("mc:Ignorable", "w14"));
+            }
+            props.write_inner_content(|rpr| write_run_props(rpr, run, doc_style))?;
         }
         w.create_element("w:t")
             .with_attribute(("xml:space", "preserve"))

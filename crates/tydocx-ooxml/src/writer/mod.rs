@@ -1,11 +1,14 @@
 use std::cell::Cell;
 use std::error::Error;
-use std::io::{Seek, Write};
+use std::io::{self, Seek, Write};
 
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
-use crate::document::{BlockElement, CellContent, Document, DocumentStyle, ImageData, Table};
+use crate::document::{
+    BlockElement, CellContent, Document, DocumentStyle, HeaderFooter, ImageData, Paragraph,
+    SectionFooter, Table,
+};
 use crate::styles;
 
 mod citation;
@@ -13,6 +16,7 @@ mod document;
 mod fields;
 mod footnotes;
 mod header_footer;
+mod hyperlinks;
 mod image;
 mod math;
 mod numbering;
@@ -29,16 +33,18 @@ use citation::{
 use document::generate_document_xml;
 use footnotes::{footnotes_have_math, generate_footnotes_xml};
 use header_footer::{
-    PartCtx, generate_footer_xml, generate_header_xml, generate_page_number_footer_xml,
+    EMPTY_FOOTER_SLOT, PartCtx, generate_footer_xml, generate_header_xml,
+    generate_page_number_footer_xml,
 };
+use hyperlinks::HyperlinkRelationships;
 use image::{
     body_has_drawing, collect_footnote_images, collect_header_footer_images, collect_images,
     footnotes_have_drawing,
 };
 use numbering::generate_numbering_xml;
 use package::{
-    generate_content_types, generate_core_properties, generate_document_rels,
-    generate_part_image_rels, generate_rels, generate_settings, xml_part,
+    generate_content_types, generate_core_properties, generate_document_rels, generate_part_rels,
+    generate_rels, generate_settings, xml_part,
 };
 
 /// Tracks which optional document parts are present, used for rId assignment
@@ -74,6 +80,16 @@ impl DocParts {
         }
         if doc.footer_first.is_some() || doc.page_number_footers.first {
             relationships.push(RelKind::Footer(3));
+        }
+        if doc.page_settings.footer_reference == SectionFooter::Empty
+            || doc.body.elements.iter().any(|block| {
+                matches!(block, BlockElement::Paragraph(para)
+                    if para.section_break.as_ref()
+                        .and_then(|b| b.page_settings.as_ref())
+                        .is_some_and(|s| s.footer_reference == SectionFooter::Empty))
+            })
+        {
+            relationships.push(RelKind::Footer(EMPTY_FOOTER_SLOT));
         }
         if !doc.citation_sources.is_empty() {
             relationships.push(RelKind::Bibliography);
@@ -111,12 +127,25 @@ struct WriteCtx<'a> {
     doc_style: &'a DocumentStyle,
     parts: &'a DocParts,
     images: &'a [&'a ImageData],
+    hyperlinks: &'a HyperlinkRelationships,
     content_width_twips: u32,
     image_counter: &'a Cell<usize>,
     citation_id_counter: &'a Cell<u32>,
-    /// `wp:docPr` ids for anchored shape drawings. Starts high so it cannot
-    /// collide with the 1-based image `docPr` ids in the same part.
-    shape_id_counter: &'a Cell<usize>,
+    drawing_id_counter: &'a Cell<usize>,
+}
+
+impl WriteCtx<'_> {
+    fn next_drawing_id(&self) -> io::Result<usize> {
+        let next = self.drawing_id_counter.get() + 1;
+        if next > 2_147_483_646 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "drawing ID exceeds Word's supported range",
+            ));
+        }
+        self.drawing_id_counter.set(next);
+        Ok(next)
+    }
 }
 
 /// Write a Document to a .docx file (ZIP archive) into the given writer.
@@ -134,22 +163,22 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     let footnote_image_base = images.len() - footnote_images.len() - hf_image_count;
     let hf_image_base = images.len() - hf_image_count;
 
-    // Running image/citation ids are shared across document.xml and
-    // footnotes.xml, so they never restart per part.
     let image_counter = Cell::new(0_usize);
     let citation_id_counter = Cell::new(1_000_000_u32);
-    let shape_id_counter = Cell::new(1_000_000_usize);
+    let drawing_id_counter = Cell::new(0_usize);
     let ps = &doc.page_settings;
+    let hyperlinks = HyperlinkRelationships::default();
     let ctx = WriteCtx {
         doc_style: &doc.style,
         parts: &parts,
         images: &images,
+        hyperlinks: &hyperlinks,
         content_width_twips: ps
             .width_twips
             .saturating_sub(ps.margin_left + ps.margin_right),
         image_counter: &image_counter,
         citation_id_counter: &citation_id_counter,
-        shape_id_counter: &shape_id_counter,
+        drawing_id_counter: &drawing_id_counter,
     };
 
     let mut zip = ZipWriter::new(writer);
@@ -162,9 +191,6 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
 
     zip.start_file("_rels/.rels", options)?;
     zip.write_all(&xml_part(generate_rels)?)?;
-
-    zip.start_file("word/_rels/document.xml.rels", options)?;
-    zip.write_all(&xml_part(|w| generate_document_rels(w, &parts, &images))?)?;
 
     zip.start_file("word/styles.xml", options)?;
     zip.write_all(&xml_part(|w| {
@@ -190,24 +216,14 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
         generate_document_xml(w, doc, body_has_drawing(doc), &ctx)
     })?)?;
 
+    zip.start_file("word/_rels/document.xml.rels", options)?;
+    zip.write_all(&xml_part(|w| {
+        generate_document_rels(w, &parts, &images, &hyperlinks)
+    })?)?;
+
     if parts.has(RelKind::Footnotes) {
-        zip.start_file("word/footnotes.xml", options)?;
-        zip.write_all(&xml_part(|w| {
-            generate_footnotes_xml(
-                w,
-                doc,
-                &ctx,
-                &footnote_images,
-                footnotes_have_drawing(doc),
-                footnotes_have_math(doc),
-            )
-        })?)?;
-        if !footnote_images.is_empty() {
-            zip.start_file("word/_rels/footnotes.xml.rels", options)?;
-            zip.write_all(&xml_part(|w| {
-                generate_part_image_rels(w, &footnote_images, footnote_image_base)
-            })?)?;
-        }
+        let part = PartCtx::new(footnote_images);
+        write_footnotes_part(&mut zip, doc, options, &ctx, &part, footnote_image_base)?;
     }
 
     if parts.has(RelKind::Numbering) {
@@ -241,6 +257,33 @@ pub fn write_docx<W: Write + Seek>(doc: &Document, writer: W) -> Result<(), Box<
     }
 
     zip.finish()?;
+    Ok(())
+}
+
+fn write_footnotes_part<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    doc: &Document,
+    options: SimpleFileOptions,
+    ctx: &WriteCtx,
+    part: &PartCtx,
+    image_base: usize,
+) -> Result<(), Box<dyn Error>> {
+    zip.start_file("word/footnotes.xml", options)?;
+    zip.write_all(&xml_part(|w| {
+        generate_footnotes_xml(
+            w,
+            doc,
+            &part.ctx(ctx),
+            footnotes_have_drawing(doc),
+            footnotes_have_math(doc),
+        )
+    })?)?;
+    if !part.images.is_empty() || !part.hyperlinks.is_empty() {
+        zip.start_file("word/_rels/footnotes.xml.rels", options)?;
+        zip.write_all(&xml_part(|w| {
+            generate_part_rels(w, &part.images, image_base, &part.hyperlinks)
+        })?)?;
+    }
     Ok(())
 }
 
@@ -311,10 +354,10 @@ fn write_header_footer_parts<W: Write + Seek>(
             zip.write_all(&xml_part(|w| {
                 generate_header_xml(w, header, &doc.style, &part.ctx(ctx))
             })?)?;
-            if !part_images.is_empty() {
+            if !part_images.is_empty() || !part.hyperlinks.is_empty() {
                 zip.start_file(format!("word/_rels/header{slot}.xml.rels"), options)?;
                 zip.write_all(&xml_part(|w| {
-                    generate_part_image_rels(w, part_images, media_offset)
+                    generate_part_rels(w, part_images, media_offset, &part.hyperlinks)
                 })?)?;
             }
         }
@@ -339,14 +382,23 @@ fn write_header_footer_parts<W: Write + Seek>(
             zip.write_all(&xml_part(|w| {
                 generate_footer_xml(w, footer, &doc.style, &part.ctx(ctx))
             })?)?;
-            if !part_images.is_empty() {
+            if !part_images.is_empty() || !part.hyperlinks.is_empty() {
                 zip.start_file(format!("word/_rels/footer{slot}.xml.rels"), options)?;
                 zip.write_all(&xml_part(|w| {
-                    generate_part_image_rels(w, part_images, media_offset)
+                    generate_part_rels(w, part_images, media_offset, &part.hyperlinks)
                 })?)?;
             }
         }
         media_offset += part_images.len();
+    }
+    if ctx.parts.has(RelKind::Footer(EMPTY_FOOTER_SLOT)) {
+        let footer = HeaderFooter {
+            paragraphs: vec![Paragraph::new()],
+        };
+        zip.start_file(format!("word/footer{EMPTY_FOOTER_SLOT}.xml"), options)?;
+        zip.write_all(&xml_part(|w| {
+            generate_footer_xml(w, &footer, &doc.style, ctx)
+        })?)?;
     }
     Ok(())
 }

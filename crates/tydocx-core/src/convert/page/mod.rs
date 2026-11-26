@@ -37,8 +37,8 @@ pub use style::extract_document_style;
 
 pub(crate) use language::is_cjk_char;
 pub(super) use language::{is_cjk_language, lang_region_to_bcp47};
-pub(super) use margin::header_footer_variant;
 pub(super) use margin::numbering_page_format;
+pub(super) use margin::{body_spans, header_footer_variant, numbered_footer};
 pub(super) use page_ref::{
     CounterUse, DatePattern, DateTimeUse, PageCounterRender, classify_counter_use,
     counter_footnote_label, counter_page_label, date_display_pattern, datetime_use,

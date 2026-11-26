@@ -20,7 +20,7 @@ use super::inline::FootnoteMarker;
 use super::style::{contains_cjk, lower_runs_match};
 use crate::compat::CompatMode;
 use crate::convert::image::{
-    ImagePlacement, collect_image_sizes, extract_figure_rasters, hash_bytes,
+    ImagePlacements, collect_image_placements, extract_figure_rasters, hash_bytes,
 };
 use crate::convert::page::{
     PageCounterRender, effective_style, effective_weight, extract_non_black_color,
@@ -93,7 +93,7 @@ pub fn patch_document(
 
     patch_page_counters(doc, paged, source, compat, &mut degradations);
 
-    let sizes = collect_image_sizes(paged);
+    let sizes = collect_image_placements(paged);
     patch_block_images(&mut doc.body, &sizes);
     for footnote in &mut doc.footnotes {
         for para in &mut footnote.body {
@@ -128,7 +128,7 @@ fn patch_page_counters(
         paged,
         source,
         misplaced: false,
-        unrenderable: false,
+        render_failures: PageRenderFailures::default(),
         numpages_mismatch: false,
         numpages_span: None,
     };
@@ -138,6 +138,7 @@ fn patch_page_counters(
             patch_page_inlines(&mut para.inlines, &mut patch);
         }
     }
+    let PageRenderFailures { counter, outline } = patch.render_failures;
     for (construct, message) in [
         (
             patch.misplaced.then_some("page-counter-location"),
@@ -145,10 +146,15 @@ fn patch_page_counters(
              its cached field result keeps the realize-time value",
         ),
         (
-            patch.unrenderable.then_some("page-counter-render"),
+            counter.then_some("page-counter-render"),
             "a page numbering or display shape the patch cannot re-render \
              (a numbering function or unparseable pattern); the cached field \
              result falls back to decimal digits",
+        ),
+        (
+            outline.then_some("outline-page-number"),
+            "a page numbering format not renderable in isolation fell back to \
+             decimal digits in the cached TOC page numbers",
         ),
     ] {
         if let Some(construct) = construct {
@@ -189,12 +195,18 @@ struct PagePatch<'a> {
     /// A read location the paged introspector could not place.
     misplaced: bool,
     /// A numbering/display shape the patch cannot re-render.
-    unrenderable: bool,
+    render_failures: PageRenderFailures,
     /// A `counter(page).final()` field whose cached result ` NUMPAGES `
     /// cannot refresh to.
     numpages_mismatch: bool,
     /// The first such field's span (a field may carry none).
     numpages_span: Option<typst_syntax::Span>,
+}
+
+#[derive(Default)]
+struct PageRenderFailures {
+    counter: bool,
+    outline: bool,
 }
 
 /// The logical page number (`counter(page)` value) at `location`.
@@ -228,7 +240,7 @@ fn render_at(
     match render {
         PageCounterRender::Raw => render_raw(current, old_text),
         PageCounterRender::Unrenderable => {
-            patch.unrenderable = true;
+            patch.render_failures.counter = true;
             current.to_string()
         }
         PageCounterRender::Display {
@@ -242,7 +254,7 @@ fn render_at(
                 {
                     resolved
                 } else {
-                    patch.unrenderable = true;
+                    patch.render_failures.counter = true;
                     return current.to_string();
                 }
             } else {
@@ -259,7 +271,7 @@ fn render_at(
                 numbering.as_ref(),
                 &numbers,
                 current,
-                &mut patch.unrenderable,
+                &mut patch.render_failures.counter,
             )
         }
     }
@@ -476,6 +488,17 @@ fn patch_page_blocks(blocks: &mut [IrBlock], patch: &mut PagePatch<'_>) {
                 patch_page_inlines(title, patch);
                 for entry in entries {
                     patch_page_inlines(&mut entry.title, patch);
+                    if entry.page_number.is_none()
+                        && let Some(location) = entry.page_loc.map(Location::new)
+                        && let Some(number) = logical_number(patch.paged, location)
+                    {
+                        entry.page_number = Some(render_numbered(
+                            patch.paged.introspector().page_numbering(location),
+                            &[number],
+                            number,
+                            &mut patch.render_failures.outline,
+                        ));
+                    }
                 }
             }
             IrBlock::Equation(_) | IrBlock::Raw(_) | IrBlock::PageBreak { .. } => {}
@@ -708,7 +731,7 @@ fn push_merged(paragraph: &mut IrParagraph, run: Run) {
     paragraph.inlines.push(IrInline::Text(run));
 }
 
-fn patch_block_images(blocks: &mut [IrBlock], sizes: &HashMap<u64, ImagePlacement>) {
+fn patch_block_images(blocks: &mut [IrBlock], sizes: &ImagePlacements) {
     for block in blocks {
         match block {
             IrBlock::Paragraph(para) => patch_inline_images(&mut para.inlines, sizes),
@@ -844,13 +867,13 @@ fn blocks_have_image(blocks: &[IrBlock]) -> bool {
     })
 }
 
-fn patch_inline_images(inlines: &mut [IrInline], sizes: &HashMap<u64, ImagePlacement>) {
+fn patch_inline_images(inlines: &mut [IrInline], sizes: &ImagePlacements) {
     for inline in inlines {
         match inline {
-            IrInline::Image(image) => {
-                if let Some(placement) = sizes
-                    .get(&image.source_hash)
-                    .or_else(|| sizes.get(&hash_bytes(&image.bytes)))
+            IrInline::Image(image) if image.width_emu == 0 || image.height_emu == 0 => {
+                let source_bytes = image.svg.as_deref().unwrap_or(&image.bytes);
+                if let Some(placement) =
+                    sizes.get(image.source_hash, image.span, hash_bytes(source_bytes))
                 {
                     image.width_emu = placement.size_emu.0;
                     image.height_emu = placement.size_emu.1;

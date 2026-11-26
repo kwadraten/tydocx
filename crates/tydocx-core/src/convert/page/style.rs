@@ -133,10 +133,11 @@ pub fn extract_document_style(paged: &PagedDocument) -> DocumentStyle {
     // the alphabetically-first name so the choice is deterministic across runs
     // (a bare `max_by_key` on count would pick whichever the HashMap happened to
     // iterate first).
-    let body_font_ascii = super::stats::dominant_key(
+    let body_font_ascii = preferred_body_font(
         ascii_font_counts
             .iter()
             .map(|(font, count)| (font.as_str(), *count)),
+        |font| monospace_fonts.contains(font),
     )
     .map_or_else(|| "Times New Roman".to_string(), ToString::to_string);
 
@@ -430,6 +431,14 @@ fn collect_right_edges(
             }
         }
     });
+}
+
+pub(super) fn preferred_body_font<'a>(
+    fonts: impl Iterator<Item = (&'a str, usize)> + Clone,
+    is_monospace: impl Fn(&str) -> bool,
+) -> Option<&'a str> {
+    super::stats::dominant_key(fonts.clone().filter(|(font, _)| !is_monospace(font)))
+        .or_else(|| super::stats::dominant_key(fonts))
 }
 
 /// Pick the code font: the most common monospace family that is not the body

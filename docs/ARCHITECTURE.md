@@ -76,8 +76,10 @@ semantic HTML representation:
 - **Page-level facts don't exist before pagination.** Page size, margins, columns,
   headers/footers (which live in the page-margin zones), foreground/background
   layers and page fill (which only exist in the final page frame's paint
-  order), page breaks, and page numbering only come into being once the
-  document is laid out — i.e. only from Paged. The realize path still takes these from the companion `PagedDocument`
+  order), and page numbering are resolved at layout. Explicit page and
+  column breaks already appear in the realize pairs; a column break in
+  single-column page flow shares Word's page-break handling and retains
+  its strength. The realize path takes the laid-out page facts from the companion `PagedDocument`
   (route (b)), as an explicit patch step (`convert/realize/patch.rs`).
 - **Math is MathML, not OMML.** The HTML target (typst 0.15) renders equations to
   **MathML** `<math>` elements — semantic, but not what Word edits. Both paths
@@ -122,9 +124,11 @@ chain:
   (`extract_source_style_overrides` over reachable files) treats their
   top-level rules as document-global, so `merge_from` keeps them for fields
   the ambient chains leave unset.
-- **Consumption facts.** `show heading:`/`show outline.entry:` rewrite the
-  element during realization — whether `it` was re-emitted is unobservable
-  in the pairs. `counter(footnote).update(0)` is locatable, but
+- **Consumption facts.** C1 flags `show heading:`/`show outline.entry:`
+  from source. The realized heading tag does not store the recipe's return
+  value, but the collector can identify the block produced by the built-in
+  heading rule by its originating span and collect the remaining output
+  as ordinary flow. `counter(footnote).update(0)` is locatable, but
   `CounterUpdateElem::key` is private in typst 0.15. `counter(page).at(<label>)`
   reference targets likewise need the source span lookup.
 
@@ -216,7 +220,7 @@ they exercise that public API as integration tests.
 |------|----------------|
 | `world.rs` | `TydocxWorld`: implements Typst's `World` trait (source, system fonts, `@preview` package download, `Feature::Html`). |
 | `convert/mod.rs` | Entry orchestration: `convert` (the realize path, thin wrapper over `convert_ir`) and `convert_legacy`/`export` (the legacy HtmlDocument pipeline, kept as fallback and equivalence baseline), module declarations/re-exports, `WalkCtx`, equation state, and the legacy pipeline phases. |
-| `convert/realize/mod.rs` | The realize path: `DocxDocument: Output` (`Target::Paged`, collects the IR during `create`), `with_fragment` (fragment re-realization), `convert_ir`/`export_ir` (page/style via a scratch `Document`, patch, pure lowering, path-independent post-passes), and the core↔ir `CompatMode`/`Degradation` boundary conversions. `DocxDocument`'s `introspector()` is an `ElementIntrospector` fed from the pairs' tag stream; the feed **must recurse into `ParElem`/`BlockElem` bodies** for nested `TagElem`s — top-level-only collection leaves `CiteGroup`s undiscovered and fails the final compile round ("citation could not be located"). |
+| `convert/realize/mod.rs` | The realize path: `DocxDocument: Output` (`Target::Paged`, collects the IR during `create`), `with_fragment` (fragment re-realization), `convert_ir`/`export_ir` (page/style via a scratch `Document`, patch, pure lowering, path-independent post-passes), and the core↔ir `CompatMode`/`Degradation` boundary conversions. `DocxDocument`'s `introspector()` is an `ElementIntrospector` fed by a recursive tag walk. Besides ordinary `ParElem`/`BlockElem` bodies, it re-realizes deferred `ColumnsElem`/`PadElem`/`StackElem` and `PlaceElem` bodies so their labels and bibliographies remain queryable; fragment citation groups are deduplicated against the outer walk. |
 | `convert/realize/collect.rs` | Pair → `IrDocument` collection: the tag-group walk, label/bibliography pass, footnote markers, and fragment-resolved tables/grids/figures. |
 | `convert/realize/inline.rs` | Pair → `IrInline` collection: runs from `StyleChain`, links, refs, cites, images, math, breaks. |
 | `convert/realize/style.rs` | `StyleChain` → `Run` conversion (weight/style/size/color/font, smart quotes, run-merge key). |
@@ -368,9 +372,10 @@ Rules the equivalence round established (see
   into ` STYLEREF "Heading N" ` by `apply_headers_and_footers`.
   `Document.update_fields` is set at C3 only, emitting `w:updateFields`
   in `settings.xml`.
-- **Body defaults** are voted from the leading portion of the document
-  only (9,000 glyphs, the pairs-level analogue of the legacy first-3-
-  pages rule), so back matter cannot misdetect the body size or font.
+- **Body defaults** come from explicit root `#set text(size:, font:)` rules
+  when present. An undeclared property is voted from the leading portion of
+  the document only (9,000 glyphs, the pairs-level analogue of the legacy
+  first-3-pages rule), so back matter cannot misdetect the body size or font.
 - **Inline images** arriving as tags in fragments are collected
   (`ImageElem` branch in `handle_tag_start`); **block elements nested
   in sequence children** are flattened out of the pending inline run
@@ -461,6 +466,12 @@ rather than individual features:
 - **Preservation:** `preserve_inert_constructs` pins that constructs tydocx
   emits but does not further model (HYPERLINK `w:fldSimple`, heading
   bookmarks + REF fields, footnote references) survive a save + reopen.
+- **Universe/WPS regressions:** [render_corpus.rs](../crates/tydocx-cli/tests/integration/render_corpus.rs)
+  and [the fixtures](../tests/fixtures/) (`render_*.typ`) hold package-free
+  reductions from real templates. Run their structural checks with
+  `cargo test -p tydocx --test integration render_corpus`. For the opt-in
+  Windows WPS export tests, run `cargo test -p tydocx --test integration wps_ -- --ignored`;
+  see [AGENTS.md](../AGENTS.md#testing) for tool and template requirements.
 
 ## The retired seam: `convert/recovery/` (deleted)
 

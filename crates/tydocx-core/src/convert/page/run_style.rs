@@ -8,6 +8,7 @@ use super::body_size::{
     BODY_SIZE_SAMPLE_PAGES, DEFAULT_BODY_SIZE_HALF_PT, dominant_body_size_half_pt,
 };
 use super::language::is_cjk_char;
+use super::style::preferred_body_font;
 use super::units::pt_to_half_pt;
 
 /// OpenType weight at which rendered text is treated as bold.
@@ -37,6 +38,7 @@ struct PagedRunStyle {
     /// face, copying it verbatim leaks a math font onto plain text, so we
     /// normalize it back to the baseline.
     is_math_font: bool,
+    is_monospace: bool,
     /// The run has no visible glyphs (entirely whitespace). Such a run inherits
     /// all formatting; a font/size detected on it is never observable, so it
     /// must carry no override at all.
@@ -115,6 +117,9 @@ fn collect_styles_at(
                         | typst_library::text::FontStyle::Oblique
                 ),
                 is_math_font,
+                is_monospace: info
+                    .flags
+                    .contains(typst_library::text::FontFlags::MONOSPACE),
                 is_whitespace,
                 x: absolute.x.to_pt(),
                 text_width: text_item.width().to_pt(),
@@ -228,6 +233,7 @@ struct RenderedBodyStyle {
 fn detect_rendered_body_style(styles: &[PagedRunStyle]) -> RenderedBodyStyle {
     let mut ascii_font_counts: HashMap<&str, usize> = HashMap::new();
     let mut cjk_font_counts: HashMap<&str, usize> = HashMap::new();
+    let mut monospace_fonts = HashSet::new();
     let mut size_samples: Vec<(f64, usize)> = Vec::new();
 
     for item in styles
@@ -246,6 +252,9 @@ fn detect_rendered_body_style(styles: &[PagedRunStyle]) -> RenderedBodyStyle {
         }
         if has_ascii || !has_cjk {
             *ascii_font_counts.entry(&item.font_family).or_insert(0) += item.text.len();
+            if item.is_monospace {
+                monospace_fonts.insert(item.font_family.as_str());
+            }
         }
     }
 
@@ -253,8 +262,13 @@ fn detect_rendered_body_style(styles: &[PagedRunStyle]) -> RenderedBodyStyle {
     // deterministic and consistent with `extract_document_style`; otherwise a
     // one-line-each document would flip body size between runs (HashMap order)
     // and shuffle which runs receive an explicit size override.
-    let body_font_ascii = super::stats::dominant_key(ascii_font_counts)
-        .map_or_else(|| "Times New Roman".to_string(), ToString::to_string);
+    let body_font_ascii = preferred_body_font(
+        ascii_font_counts
+            .iter()
+            .map(|(&font, &count)| (font, count)),
+        |font| monospace_fonts.contains(font),
+    )
+    .map_or_else(|| "Times New Roman".to_string(), ToString::to_string);
     let body_font_cjk = super::stats::dominant_key(cjk_font_counts)
         .map_or_else(|| body_font_ascii.clone(), ToString::to_string);
     let body_size = dominant_body_size_half_pt(size_samples).unwrap_or(DEFAULT_BODY_SIZE_HALF_PT);
@@ -890,6 +904,7 @@ mod tests {
             is_bold: false,
             is_italic: false,
             is_math_font: false,
+            is_monospace: false,
             is_whitespace: false,
             x: 0.0,
             text_width: 10.0,

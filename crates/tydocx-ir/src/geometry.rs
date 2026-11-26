@@ -5,7 +5,6 @@ pub struct GeometryInput {
     /// (width, height) in twips.
     pub page_size: (u32, u32),
     pub page_numbering: Option<PageNumberFormat>,
-    /// `w:start` restart on the final section's `w:pgNumType`.
     pub page_number_start: Option<u32>,
     /// Supplement text (for example `"page"`), when known.
     pub supplement: Option<String>,
@@ -23,4 +22,6 @@ pub struct GeometryInput {
     pub mirror_margins: bool,
     /// `w:titlePg` — page 1's margin-zone content differed from the rest.
     pub title_page: bool,
+    pub numbered_blank_pages: BTreeMap<usize, usize>,
 }
+use std::collections::BTreeMap;

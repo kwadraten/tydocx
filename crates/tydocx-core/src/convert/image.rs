@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use tydocx_ooxml::document::{ImageData, ImageFormat, SrcRect};
-use typst::foundations::Packed;
-use typst::introspection::Location;
+use typst::foundations::{Packed, StyleChain};
+use typst::introspection::{Location, Tag};
 use typst::layout::{Abs, Frame, FrameItem, Point, Rect};
 use typst_html::HtmlFrame;
 use typst_layout::PagedDocument;
@@ -13,6 +13,7 @@ use typst_syntax::Span;
 use crate::compat::{Degradation, DegradationAction};
 
 /// One rendered image's display size and optional crop window.
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct ImagePlacement {
     /// On-page size of the visible (post-clip) area, EMU.
     pub size_emu: (u64, u64),
@@ -20,6 +21,79 @@ pub(super) struct ImagePlacement {
     /// way Typst encodes both `block/box(clip:)` and `image(fit: "cover")`.
     /// The full image bytes stay embedded; Word crops at display time.
     pub src_rect: Option<SrcRect>,
+}
+
+#[derive(Default)]
+pub(super) struct ImagePlacements {
+    source: HashMap<u64, Option<ImagePlacement>>,
+    span: HashMap<(Span, u64), Option<ImagePlacement>>,
+    bytes: HashMap<u64, Option<ImagePlacement>>,
+}
+
+impl ImagePlacements {
+    pub(super) fn get(
+        &self,
+        source: u64,
+        span: Option<Span>,
+        bytes: u64,
+    ) -> Option<&ImagePlacement> {
+        self.source
+            .get(&source)
+            .or_else(|| span.and_then(|span| self.span.get(&(span, bytes))))
+            .or_else(|| self.bytes.get(&bytes))
+            .and_then(Option::as_ref)
+    }
+}
+
+pub(super) fn image_source_key(
+    image: &Packed<ImageElem>,
+    styles: StyleChain<'_>,
+    bytes: u64,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    (
+        image.span(),
+        image.width.get(styles),
+        image.height.get(styles),
+        image.fit.get(styles),
+        bytes,
+    )
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(super) fn collect_image_placements(paged: &PagedDocument) -> ImagePlacements {
+    let mut placements = ImagePlacements::default();
+    for page in paged.pages() {
+        collect_frame_images(
+            &page.frame,
+            Point::zero(),
+            None,
+            &mut Vec::new(),
+            &mut |span, bytes, source, placement| {
+                if let Some(source) = source {
+                    record_placement(&mut placements.source, source, placement);
+                }
+                record_placement(&mut placements.span, (span, bytes), placement);
+                record_placement(&mut placements.bytes, bytes, placement);
+            },
+        );
+    }
+    placements
+}
+
+fn record_placement<K: Eq + Hash>(
+    map: &mut HashMap<K, Option<ImagePlacement>>,
+    key: K,
+    placement: &ImagePlacement,
+) {
+    map.entry(key)
+        .and_modify(|value| {
+            if value.as_ref() != Some(placement) {
+                *value = None;
+            }
+        })
+        .or_insert_with(|| Some(placement.clone()));
 }
 
 /// Image CONTENT comes from the HTML `<img>` src data-URL (the semantic
@@ -31,7 +105,15 @@ pub(super) struct ImagePlacement {
 pub(super) fn collect_image_sizes(paged: &PagedDocument) -> HashMap<u64, ImagePlacement> {
     let mut sizes = HashMap::new();
     for page in paged.pages() {
-        collect_frame_image_sizes(&page.frame, Point::zero(), None, &mut sizes);
+        collect_frame_images(
+            &page.frame,
+            Point::zero(),
+            None,
+            &mut Vec::new(),
+            &mut |_, bytes, _, placement| {
+                sizes.entry(bytes).or_insert_with(|| placement.clone());
+            },
+        );
     }
     sizes
 }
@@ -44,16 +126,27 @@ pub(super) fn collect_image_sizes(paged: &PagedDocument) -> HashMap<u64, ImagePl
     clippy::cast_sign_loss,
     reason = "positive pt sizes rounded to whole pixels"
 )]
-fn collect_frame_image_sizes(
-    frame: &Frame,
+fn collect_frame_images<'a>(
+    frame: &'a Frame,
     offset: Point,
     clip: Option<Rect>,
-    sizes: &mut HashMap<u64, ImagePlacement>,
+    tags: &mut Vec<&'a Packed<ImageElem>>,
+    record: &mut impl FnMut(Span, u64, Option<u64>, &ImagePlacement),
 ) {
     for (pos, item) in frame.items() {
         let absolute = offset + *pos;
         match item {
-            FrameItem::Image(img, size, _) => {
+            FrameItem::Tag(Tag::Start(content, _)) => {
+                if let Some(image) = content.to_packed::<ImageElem>() {
+                    tags.push(image);
+                }
+            }
+            FrameItem::Tag(Tag::End(location, ..)) => {
+                if tags.last().and_then(|image| image.location()) == Some(*location) {
+                    tags.pop();
+                }
+            }
+            FrameItem::Image(img, size, span) => {
                 let bytes: Option<&[u8]> = match img.kind() {
                     typst_library::visualize::ImageKind::Raster(r) => Some(r.data().as_ref()),
                     typst_library::visualize::ImageKind::Svg(s) => Some(s.data().as_ref()),
@@ -62,14 +155,23 @@ fn collect_frame_image_sizes(
                 if let Some(bytes) = bytes {
                     let bounds = Rect::from_pos_size(absolute, *size);
                     let visible = clip.map_or(bounds, |window| intersect(window, bounds));
-                    // First occurrence wins: document order matches the HTML.
-                    sizes.entry(hash_bytes(bytes)).or_insert(ImagePlacement {
-                        size_emu: (
-                            (visible.size().x.to_pt() * 12700.0) as u64,
-                            (visible.size().y.to_pt() * 12700.0) as u64,
-                        ),
-                        src_rect: (visible != bounds).then(|| crop_fractions(bounds, visible)),
-                    });
+                    let hash = hash_bytes(bytes);
+                    let source = tags
+                        .last()
+                        .filter(|tag| tag.span() == *span)
+                        .map(|tag| image_source_key(tag, StyleChain::default(), hash));
+                    record(
+                        *span,
+                        hash,
+                        source,
+                        &ImagePlacement {
+                            size_emu: (
+                                (visible.size().x.to_pt() * 12700.0) as u64,
+                                (visible.size().y.to_pt() * 12700.0) as u64,
+                            ),
+                            src_rect: (visible != bounds).then(|| crop_fractions(bounds, visible)),
+                        },
+                    );
                 }
             }
             FrameItem::Group(group) => {
@@ -86,7 +188,7 @@ fn collect_frame_image_sizes(
                 } else {
                     None
                 };
-                collect_frame_image_sizes(&group.frame, absolute, sub_clip, sizes);
+                collect_frame_images(&group.frame, absolute, sub_clip, tags, record);
             }
             _ => {}
         }
@@ -303,7 +405,6 @@ fn collect_figure_canvases(
     rasters: &mut HashMap<Location, ImageData>,
 ) {
     use typst::foundations::NativeElement;
-    use typst::introspection::Tag;
     for (_, item) in frame.items() {
         match item {
             FrameItem::Tag(Tag::Start(content, _)) => {

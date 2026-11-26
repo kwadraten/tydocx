@@ -111,9 +111,14 @@ fn coalesce_inline_texts(body: &mut Vec<InlineElement>) {
             InlineElement::Hyperlink {
                 url,
                 body: mut inner,
+                preserve_style,
             } => {
                 coalesce_inline_texts(&mut inner);
-                merged.push(InlineElement::Hyperlink { url, body: inner });
+                merged.push(InlineElement::Hyperlink {
+                    url,
+                    body: inner,
+                    preserve_style,
+                });
             }
             InlineElement::InternalLink {
                 anchor,

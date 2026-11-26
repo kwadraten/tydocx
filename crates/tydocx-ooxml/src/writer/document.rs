@@ -5,6 +5,7 @@ use quick_xml::Writer;
 use super::citation::write_bibliography_sdt;
 use super::fields::write_toc_block;
 use super::footnotes::write_footnote_pr;
+use super::header_footer::write_footer_refs;
 use super::paragraph::write_paragraph;
 use super::table::write_table;
 use super::{DocParts, RelKind, WriteCtx};
@@ -13,6 +14,8 @@ use crate::document::{
     SectionBreakType,
 };
 
+const DEFAULT_HEADER_FOOTER_TWIPS: u32 = 720;
+
 /// Write `w:headerReference`/`w:footerReference` for every header/footer part
 /// the document carries. `include_first` adds the `w:type="first"` references,
 /// which are only meaningful on a `w:titlePg` section.
@@ -20,6 +23,7 @@ fn write_header_footer_refs<W: Write>(
     w: &mut Writer<W>,
     parts: &DocParts,
     include_first: bool,
+    settings: &PageSettings,
 ) -> io::Result<()> {
     for (slot, kind, tag) in [
         (1_u8, "default", "w:headerReference"),
@@ -36,22 +40,7 @@ fn write_header_footer_refs<W: Write>(
                 .write_empty()?;
         }
     }
-    for (slot, kind, tag) in [
-        (1_u8, "default", "w:footerReference"),
-        (2, "even", "w:footerReference"),
-        (3, "first", "w:footerReference"),
-    ] {
-        if slot == 3 && !include_first {
-            continue;
-        }
-        if let Some(rid) = parts.rel_id(RelKind::Footer(slot)) {
-            w.create_element(tag)
-                .with_attribute(("w:type", kind))
-                .with_attribute(("r:id", rid.as_str()))
-                .write_empty()?;
-        }
-    }
-    Ok(())
+    write_footer_refs(w, parts, include_first, settings.footer_reference)
 }
 
 /// Write `<w:pgNumType>` with optional `w:fmt` and `w:start` attributes.
@@ -184,7 +173,7 @@ fn write_section_properties<W: Write>(
     tail: &SectionTail<'_>,
 ) -> io::Result<()> {
     writer.create_element("w:sectPr").write_inner_content(|w| {
-        write_header_footer_refs(w, parts, tail.title_page)?;
+        write_header_footer_refs(w, parts, tail.title_page, settings)?;
         write_footnote_pr(w, &style.footnote_format, style.footnote_restart_each_page)?;
         // CT_SectPr orders w:type between footnotePr and pgSz; omitted
         // means nextPage.
@@ -220,21 +209,29 @@ fn write_section_page_settings<W: Write>(
     } else {
         pg_sz.write_empty()?;
     }
-    let pg_mar = w
-        .create_element("w:pgMar")
+    w.create_element("w:pgMar")
         .with_attribute(("w:top", settings.margin_top.to_string().as_str()))
         .with_attribute(("w:right", settings.margin_right.to_string().as_str()))
         .with_attribute(("w:bottom", settings.margin_bottom.to_string().as_str()))
-        .with_attribute(("w:left", settings.margin_left.to_string().as_str()));
-    let pg_mar = match settings.header_twips {
-        Some(v) => pg_mar.with_attribute(("w:header", v.to_string().as_str())),
-        None => pg_mar,
-    };
-    let pg_mar = match settings.footer_twips {
-        Some(v) => pg_mar.with_attribute(("w:footer", v.to_string().as_str())),
-        None => pg_mar,
-    };
-    pg_mar.write_empty()?;
+        .with_attribute(("w:left", settings.margin_left.to_string().as_str()))
+        .with_attribute((
+            "w:header",
+            settings
+                .header_twips
+                .unwrap_or(DEFAULT_HEADER_FOOTER_TWIPS)
+                .to_string()
+                .as_str(),
+        ))
+        .with_attribute((
+            "w:footer",
+            settings
+                .footer_twips
+                .unwrap_or(DEFAULT_HEADER_FOOTER_TWIPS)
+                .to_string()
+                .as_str(),
+        ))
+        .with_attribute(("w:gutter", "0"))
+        .write_empty()?;
     if let Some(distance) = settings.line_number_distance_twips {
         let distance = distance.to_string();
         w.create_element("w:lnNumType")
@@ -267,21 +264,19 @@ fn write_section_page_settings<W: Write>(
 ///
 /// The `sectPr` describes the section that *ends* at this paragraph: its page
 /// settings, page numbering, and (when the section owns page 1) `w:titlePg`.
-/// Header/footer references are re-emitted so the ending section points at the
-/// same parts the following section inherits.
 pub(super) fn write_section_break<W: Write>(
     writer: &mut Writer<W>,
     section: &SectionBreak,
     parts: &DocParts,
 ) -> io::Result<()> {
     writer.create_element("w:sectPr").write_inner_content(|w| {
-        write_header_footer_refs(w, parts, section.title_page)?;
+        let default_settings = PageSettings::default();
+        let ps = section.page_settings.as_ref().unwrap_or(&default_settings);
+        write_header_footer_refs(w, parts, section.title_page, ps)?;
         let break_val = section.break_type.ooxml_value();
         w.create_element("w:type")
             .with_attribute(("w:val", break_val))
             .write_empty()?;
-        let default_settings = PageSettings::default();
-        let ps = section.page_settings.as_ref().unwrap_or(&default_settings);
         write_section_page_settings(
             w,
             ps,

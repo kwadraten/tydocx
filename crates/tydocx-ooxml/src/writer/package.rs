@@ -4,6 +4,7 @@ use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesText, Event};
 
 use super::footnotes::write_footnote_pr;
+use super::hyperlinks::HyperlinkRelationships;
 use super::image::{image_rel_id, svg_rel_id};
 use super::{DocParts, RelKind};
 use crate::document::{Document, DocumentStyle, ImageData, ImageFormat};
@@ -176,7 +177,7 @@ pub(super) fn generate_content_types(
                         .write_empty()?;
                 }
             }
-            for slot in 1_u8..=3 {
+            for slot in 1_u8..=super::header_footer::EMPTY_FOOTER_SLOT {
                 if parts.has(RelKind::Footer(slot)) {
                     w.create_element("Override")
                         .with_attribute(("PartName", format!("/word/footer{slot}.xml").as_str()))
@@ -229,6 +230,7 @@ pub(super) fn generate_document_rels(
     writer: &mut Writer<&mut Vec<u8>>,
     parts: &DocParts,
     images: &[&ImageData],
+    hyperlinks: &HyperlinkRelationships,
 ) -> io::Result<()> {
     writer
         .create_element("Relationships")
@@ -274,7 +276,7 @@ pub(super) fn generate_document_rels(
                         .write_empty()?;
                 }
             }
-            Ok(())
+            hyperlinks.write(w)
         })?;
     Ok(())
 }
@@ -301,7 +303,7 @@ pub(super) fn generate_settings(
                 w.create_element("w:mirrorMargins").write_empty()?;
             }
             if style.suppress_auto_hyphens {
-                w.create_element("w:suppressAutoHyphens").write_empty()?;
+                write_value_element(w, "w:autoHyphenation", "0")?;
             }
             if even_and_odd_headers {
                 w.create_element("w:evenAndOddHeaders").write_empty()?;
@@ -321,12 +323,6 @@ pub(super) fn generate_settings(
                     .write_empty()?;
                 Ok(())
             })?;
-            write_language_pair(
-                w,
-                "w:themeFontLang",
-                style.lang_latin.as_str(),
-                style.lang_east_asia.as_str(),
-            )?;
             w.create_element("m:mathPr").write_inner_content(|m| {
                 m.create_element("m:mathFont")
                     .with_attribute(("m:val", "Cambria Math"))
@@ -361,6 +357,12 @@ pub(super) fn generate_settings(
                     .write_empty()?;
                 Ok(())
             })?;
+            write_language_pair(
+                w,
+                "w:themeFontLang",
+                style.lang_latin.as_str(),
+                style.lang_east_asia.as_str(),
+            )?;
             Ok(())
         })?;
     Ok(())
@@ -403,15 +405,11 @@ pub(super) fn generate_core_properties(
     Ok(())
 }
 
-/// Write a part-local `word/_rels/<part>.xml.rels` holding only image
-/// relationships: ids restart at `rId1` (each part has its own rId
-/// namespace); the media target keeps the document-wide image number
-/// (`image_base + k + 1`) so it matches the file written to `word/media/`.
-/// Used for `footnotes.xml.rels` and `headerN.xml.rels`/`footerN.xml.rels`.
-pub(super) fn generate_part_image_rels(
+pub(super) fn generate_part_rels(
     writer: &mut Writer<&mut Vec<u8>>,
     images: &[&ImageData],
     image_base: usize,
+    hyperlinks: &HyperlinkRelationships,
 ) -> io::Result<()> {
     writer
         .create_element("Relationships")
@@ -447,7 +445,7 @@ pub(super) fn generate_part_image_rels(
                         .write_empty()?;
                 }
             }
-            Ok(())
+            hyperlinks.write(w)
         })?;
     Ok(())
 }

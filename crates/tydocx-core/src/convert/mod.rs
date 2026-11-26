@@ -221,6 +221,7 @@ pub fn export(
         options.compat,
         &mut degradations,
         &HashSet::new(),
+        None,
     );
 
     // 5. Run post-processing passes.
@@ -350,6 +351,7 @@ fn apply_headers_and_footers(
     compat: CompatMode,
     degradations: &mut Vec<Degradation>,
     body_places: &HashSet<u64, RandomState>,
+    section_footer: Option<HeaderFooter>,
 ) {
     // Extract headers and footers first so header/footer text is not
     // misidentified as body content. All margin-zone consumers
@@ -390,8 +392,13 @@ fn apply_headers_and_footers(
         doc.header_first.clone_from(&top.first);
         // Detect page numbering before extracting footer. If the footer is just
         // a page number, the writer generates a PAGE field footer instead.
-        let numbering = page::detect_page_numbering(paged, margins, maps)
-            .or_else(|| page::detect_multi_format_page_numbering(paged, margins, maps));
+        let numbering = section_footer
+            .is_none()
+            .then(|| {
+                page::detect_page_numbering(paged, margins, maps)
+                    .or_else(|| page::detect_multi_format_page_numbering(paged, margins, maps))
+            })
+            .flatten();
         let mut footer_first_differs = false;
         let mut footer_even_differs = false;
         let mut bottom: Option<page::ZoneParts> = None;
@@ -422,7 +429,9 @@ fn apply_headers_and_footers(
             doc.footer_first.clone_from(&parts.first);
             *bottom_slot = Some(parts);
         };
-        if let Some(fmt) = numbering {
+        if let Some(footer) = section_footer {
+            doc.footer = Some(footer);
+        } else if let Some(fmt) = numbering {
             if declared.is_none() {
                 doc.page_numbering = Some(fmt);
             }

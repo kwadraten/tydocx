@@ -4,7 +4,9 @@ use quick_xml::Writer;
 
 use super::WriteCtx;
 use super::paragraph::write_paragraph;
-use crate::document::{CellContent, Table, VMerge};
+use crate::document::{CellContent, Table, TableCellMargins, VMerge};
+
+const MAX_AUTO_COLUMNS: u32 = 63;
 
 #[allow(clippy::too_many_lines, reason = "writes the schema-ordered table XML")]
 pub(super) fn write_table<W: Write>(
@@ -12,11 +14,29 @@ pub(super) fn write_table<W: Write>(
     table: &Table,
     ctx: &WriteCtx,
 ) -> io::Result<()> {
-    // Determine number of columns from the first row for equal-width distribution
+    let fixed = table.col_widths_twips.is_some();
     let num_cols = table
         .rows
-        .first()
-        .map_or(1, |r| r.cells.iter().map(|c| c.colspan).sum::<u32>());
+        .iter()
+        .map(|row| {
+            row.cells
+                .iter()
+                .map(|cell| {
+                    if fixed {
+                        cell.colspan
+                    } else {
+                        cell.colspan.max(1)
+                    }
+                })
+                .fold(0, u32::saturating_add)
+        })
+        .max()
+        .unwrap_or(0);
+    let num_cols = if fixed {
+        num_cols
+    } else {
+        num_cols.min(MAX_AUTO_COLUMNS)
+    };
 
     writer.create_element("w:tbl").write_inner_content(|w| {
         // Table properties with borders
@@ -37,7 +57,6 @@ pub(super) fn write_table<W: Write>(
                     .with_attribute(("w:horzAnchor", "page"))
                     .with_attribute(("w:tblpX", x.as_str()))
                     .with_attribute(("w:tblpY", y.as_str()))
-                    .with_attribute(("w:overlap", "never"))
                     .write_empty()?;
             }
             if let Some(dxa) = table.width_twips {
@@ -96,42 +115,17 @@ pub(super) fn write_table<W: Write>(
                     }
                     Ok(())
                 })?;
-            if let Some(margins) = &table.cell_margins {
-                tpr.create_element("w:tblCellMar")
-                    .write_inner_content(|mar| {
-                        for (name, value) in [
-                            ("w:top", margins.top),
-                            ("w:left", margins.left),
-                            ("w:bottom", margins.bottom),
-                            ("w:right", margins.right),
-                        ] {
-                            let v = value.to_string();
-                            mar.create_element(name)
-                                .with_attribute(("w:w", v.as_str()))
-                                .with_attribute(("w:type", "dxa"))
-                                .write_empty()?;
-                        }
-                        Ok(())
-                    })?;
-            }
-            if table.col_widths_twips.is_some() {
+            if fixed {
                 tpr.create_element("w:tblLayout")
                     .with_attribute(("w:type", "fixed"))
                     .write_empty()?;
             }
+            if let Some(margins) = &table.cell_margins {
+                write_margins(tpr, "w:tblCellMar", margins)?;
+            }
             Ok(())
         })?;
-        if let Some(widths) = &table.col_widths_twips {
-            w.create_element("w:tblGrid").write_inner_content(|grid| {
-                for width in widths {
-                    let w_str = width.to_string();
-                    grid.create_element("w:gridCol")
-                        .with_attribute(("w:w", w_str.as_str()))
-                        .write_empty()?;
-                }
-                Ok(())
-            })?;
-        }
+        write_table_grid(w, table.col_widths_twips.as_deref(), num_cols)?;
         // Table rows
         for (row_idx, row) in table.rows.iter().enumerate() {
             w.create_element("w:tr").write_inner_content(|tr_w| {
@@ -150,10 +144,19 @@ pub(super) fn write_table<W: Write>(
                         Ok(())
                     })?;
                 }
+                let mut extra_columns =
+                    num_cols.saturating_sub(u32::try_from(row.cells.len()).unwrap_or(u32::MAX));
                 for cell in &row.cells {
+                    let colspan = if fixed {
+                        cell.colspan
+                    } else {
+                        let extra = cell.colspan.saturating_sub(1).min(extra_columns);
+                        extra_columns -= extra;
+                        1 + extra
+                    };
                     tr_w.create_element("w:tc").write_inner_content(|tc_w| {
                         // Emit cell properties (width, merges)
-                        let has_colspan = cell.colspan > 1;
+                        let has_colspan = colspan > 1;
                         let has_vmerge = cell.vmerge != VMerge::None;
                         // Always emit tcPr to set cell width
                         tc_w.create_element("w:tcPr").write_inner_content(|tcpr| {
@@ -166,7 +169,7 @@ pub(super) fn write_table<W: Write>(
                             } else {
                                 let cell_width = cell
                                     .width_pct
-                                    .unwrap_or_else(|| (5000 / num_cols) * cell.colspan);
+                                    .unwrap_or_else(|| (5000 / num_cols.max(1)) * colspan);
                                 let width_str = cell_width.to_string();
                                 tcpr.create_element("w:tcW")
                                     .with_attribute(("w:w", width_str.as_str()))
@@ -174,7 +177,7 @@ pub(super) fn write_table<W: Write>(
                                     .write_empty()?;
                             }
                             if has_colspan {
-                                let span_str = cell.colspan.to_string();
+                                let span_str = colspan.to_string();
                                 tcpr.create_element("w:gridSpan")
                                     .with_attribute(("w:val", span_str.as_str()))
                                     .write_empty()?;
@@ -258,16 +261,8 @@ pub(super) fn write_table<W: Write>(
                                     .with_attribute(("w:fill", shading.as_str()))
                                     .write_empty()?;
                             }
-                            if cell.zero_margins {
-                                tcpr.create_element("w:tcMar").write_inner_content(|mar| {
-                                    for name in ["w:top", "w:left", "w:bottom", "w:right"] {
-                                        mar.create_element(name)
-                                            .with_attribute(("w:w", "0"))
-                                            .with_attribute(("w:type", "dxa"))
-                                            .write_empty()?;
-                                    }
-                                    Ok(())
-                                })?;
+                            if let Some(margins) = &cell.margins {
+                                write_margins(tcpr, "w:tcMar", margins)?;
                             }
                             // Vertical cell alignment (w:vAlign comes after
                             // tcBorders in the CT_TcPr schema order).
@@ -313,5 +308,56 @@ pub(super) fn write_table<W: Write>(
         }
         Ok(())
     })?;
+    Ok(())
+}
+
+fn write_margins<W: Write>(
+    writer: &mut Writer<W>,
+    element: &str,
+    margins: &TableCellMargins,
+) -> io::Result<()> {
+    writer.create_element(element).write_inner_content(|mar| {
+        for (name, value) in [
+            ("w:top", margins.top),
+            ("w:left", margins.left),
+            ("w:bottom", margins.bottom),
+            ("w:right", margins.right),
+        ] {
+            let v = value.to_string();
+            mar.create_element(name)
+                .with_attribute(("w:w", v.as_str()))
+                .with_attribute(("w:type", "dxa"))
+                .write_empty()?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn write_table_grid<W: Write>(
+    writer: &mut Writer<W>,
+    widths: Option<&[u32]>,
+    num_cols: u32,
+) -> io::Result<()> {
+    let grid = writer.create_element("w:tblGrid");
+    if let Some(widths) = widths {
+        grid.write_inner_content(|w| {
+            for width in widths {
+                w.create_element("w:gridCol")
+                    .with_attribute(("w:w", width.to_string().as_str()))
+                    .write_empty()?;
+            }
+            Ok(())
+        })?;
+    } else if num_cols > 0 {
+        grid.write_inner_content(|w| {
+            for _ in 0..num_cols {
+                w.create_element("w:gridCol").write_empty()?;
+            }
+            Ok(())
+        })?;
+    } else {
+        grid.write_empty()?;
+    }
     Ok(())
 }

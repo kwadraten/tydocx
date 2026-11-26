@@ -961,32 +961,22 @@ fn extract_text_content(content: &Content) -> String {
     String::new()
 }
 
-/// Convert a `CasesElem` to `m:d` (left brace) wrapping `m:eqArr`.
 fn convert_cases<W: Write>(writer: &mut Writer<W>, cases: &CasesElem) -> std::io::Result<()> {
-    let is_reverse = *cases.reverse.as_option().as_ref().unwrap_or(&false);
-
-    // CasesElem default delimiter is BRACE: { }
-    let (delim_open, delim_close) = if let Some(delim) = cases.delim.as_option().as_ref() {
-        (
-            delim.open().map_or_else(String::new, |c| c.to_string()),
-            delim.close().map_or_else(String::new, |c| c.to_string()),
-        )
+    let styles = StyleChain::default();
+    let delim = cases.delim.get(styles);
+    let (open, close) = if cases.reverse.get(styles) {
+        (None, delim.close())
     } else {
-        ("{".to_string(), "}".to_string())
+        (delim.open(), None)
     };
+    let open = open.map_or_else(String::new, |c| c.to_string());
+    let close = close.map_or_else(String::new, |c| c.to_string());
 
-    let (open_str, close_str) = if is_reverse {
-        (delim_close, delim_open)
-    } else {
-        (delim_open, delim_close)
-    };
-
-    // For standard (non-reverse) cases, suppress the closing delimiter
-    let effective_close = if is_reverse { close_str.as_str() } else { "" };
-    let effective_open = if is_reverse { "" } else { open_str.as_str() };
-
-    write_delimited(writer, effective_open, effective_close, |e| {
+    write_delimited(writer, &open, &close, |e| {
         e.create_element("m:eqArr").write_inner_content(|arr| {
+            if cases.children.is_empty() {
+                arr.create_element("m:e").write_empty()?;
+            }
             for child in &cases.children {
                 arr.create_element("m:e").write_inner_content(|ce| {
                     convert_content(ce, child)?;

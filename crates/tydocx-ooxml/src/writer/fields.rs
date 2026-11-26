@@ -4,6 +4,7 @@ use quick_xml::Writer;
 use quick_xml::events::BytesText;
 
 use super::WriteCtx;
+use super::paragraph::write_toc_paragraph;
 use super::run::{write_inline, write_run, write_text_run};
 use crate::document::{DocumentStyle, InlineElement, Run};
 
@@ -157,8 +158,18 @@ pub(super) fn write_field_pageref<W: Write>(
     bookmark_name: &str,
     display_text: &str,
 ) -> io::Result<()> {
+    write_pageref(writer, bookmark_name, display_text, true)
+}
+
+fn write_pageref<W: Write>(
+    writer: &mut Writer<W>,
+    bookmark_name: &str,
+    display_text: &str,
+    hyperlink: bool,
+) -> io::Result<()> {
     let bookmark_name = truncate_bookmark_name(bookmark_name);
-    let instr = format!(" PAGEREF {bookmark_name} \\h ");
+    let switch = if hyperlink { " \\h" } else { "" };
+    let instr = format!(" PAGEREF {bookmark_name}{switch} ");
     write_complex_field(writer, &instr, display_text, true)
 }
 
@@ -174,47 +185,6 @@ pub(super) fn write_field_page<W: Write>(
         return write_complex_field(writer, " PAGE ", display_text, true);
     }
     write_complex_field_styled(writer, " PAGE ", display_text, bold, size_half_pt)
-}
-
-pub(super) fn write_hyperlink<W: Write>(
-    writer: &mut Writer<W>,
-    url: &str,
-    body: &[InlineElement],
-    ctx: &WriteCtx,
-) -> io::Result<()> {
-    // Use w:fldSimple with HYPERLINK field code to avoid relationship management
-    let instr = format!("HYPERLINK &quot;{url}&quot;");
-    writer
-        .create_element("w:fldSimple")
-        .with_attribute(("w:instr", instr.as_str()))
-        .write_inner_content(|w| {
-            for inline in body {
-                if let InlineElement::Text(run) = inline {
-                    write_hyperlink_run(w, run, ctx.doc_style)?;
-                } else {
-                    // Non-text children (drawing, OMML, tab, field) are valid
-                    // run-level content inside the field result; they keep
-                    // their own appearance rather than hyperlink styling.
-                    write_inline(w, inline, ctx)?;
-                }
-            }
-            Ok(())
-        })?;
-    Ok(())
-}
-
-/// One text run inside a HYPERLINK field result: the run keeps all of its own
-/// properties (fonts, size, tracking, …) with hyperlink color + underline on
-/// top.
-fn write_hyperlink_run<W: Write>(
-    writer: &mut Writer<W>,
-    run: &Run,
-    doc_style: &DocumentStyle,
-) -> io::Result<()> {
-    let mut styled = run.clone();
-    styled.color = Some(doc_style.hyperlink_color.clone());
-    styled.underline = true;
-    write_run(writer, &styled, doc_style)
 }
 
 /// Write a generic complex field: `instruction` into `w:instrText`, `result`
@@ -258,6 +228,35 @@ pub(super) fn write_toc_field<W: Write>(
     )
 }
 
+pub(super) fn write_toc_inline<W: Write>(
+    writer: &mut Writer<W>,
+    inline: &InlineElement,
+    ctx: &WriteCtx,
+) -> io::Result<()> {
+    let InlineElement::InternalLink { anchor, body } = inline else {
+        return write_inline(writer, inline, ctx);
+    };
+    writer
+        .create_element("w:hyperlink")
+        .with_attribute(("w:anchor", anchor.as_str()))
+        .with_attribute(("w:history", "1"))
+        .write_inner_content(|w| {
+            for inline in body {
+                if let InlineElement::FieldPageRef {
+                    bookmark_name,
+                    display_text,
+                } = inline
+                {
+                    write_pageref(w, bookmark_name, display_text, false)?;
+                } else {
+                    write_inline(w, inline, ctx)?;
+                }
+            }
+            Ok(())
+        })?;
+    Ok(())
+}
+
 /// A TOC field whose cached result is one paragraph per collected entry —
 /// the same multi-paragraph complex-field shape Word itself writes. `instr`
 /// spans the first entry's paragraph; the `end` char gets its own paragraph.
@@ -269,20 +268,12 @@ pub(super) fn write_toc_block<W: Write>(
     ctx: &WriteCtx,
 ) -> io::Result<()> {
     let instr = toc_instruction(max_depth, caption_id);
-    if paragraphs.is_empty() {
+    let Some((first, rest)) = paragraphs.split_first() else {
         return write_toc_field(writer, max_depth, caption_id);
-    }
-    writer.create_element("w:p").write_inner_content(|pw| {
-        write_fld_char(pw, "begin")?;
-        write_instruction_text_run(pw, &instr)?;
-        write_fld_char(pw, "separate")?;
-        for inline in &paragraphs[0].inlines {
-            write_inline(pw, inline, ctx)?;
-        }
-        Ok(())
-    })?;
-    for para in &paragraphs[1..] {
-        super::paragraph::write_paragraph(writer, para, ctx)?;
+    };
+    write_toc_paragraph(writer, first, ctx, Some(&instr))?;
+    for para in rest {
+        write_toc_paragraph(writer, para, ctx, None)?;
     }
     writer.create_element("w:p").write_inner_content(|pw| {
         write_fld_char(pw, "end")?;

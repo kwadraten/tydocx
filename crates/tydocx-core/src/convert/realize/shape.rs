@@ -16,21 +16,29 @@
 use std::f64::consts::SQRT_2;
 
 use tydocx_ir::{
-    IrShapeGeometry, ShapeCap, ShapeInsets, ShapeJoin, ShapeOutline, ShapePathSeg, ShapeStroke,
-    pt_to_emu,
+    IrBlock, IrBorder, IrCellRect, IrShapeGeometry, IrShapeKind, ShapeCap, ShapeInsets, ShapeJoin,
+    ShapeOutline, ShapePathSeg, ShapeStroke, pt_to_emu, pt_to_twips,
 };
+use tydocx_ooxml::document::{ShapeCompound, TableCellMargins};
 use typst_library::engine::Engine;
 use typst_library::foundations::{Content, Packed, Resolve, Smart, StyleChain};
 use typst_library::introspection::SplitLocator;
-use typst_library::layout::{Abs, Axes, Corners, Point, Ratio, Region, Rel, Sides, Size, Sizing};
-use typst_library::visualize::{
-    CircleElem, CloseMode, CurveComponent, CurveElem, EllipseElem, FillRule, FixedStroke, LineCap,
-    LineElem, LineJoin, Paint, PolygonElem, RectElem, SquareElem, Stroke,
+use typst_library::layout::{
+    Abs, Angle, Axes, Axis, Corners, HElem, Point, Ratio, Region, Rel, Sides, Size, Sizing,
+    Spacing, StackChild, StackElem, VElem,
 };
-use typst_utils::Numeric;
+use typst_library::visualize::{
+    CircleElem, CloseMode, Color, CurveComponent, CurveElem, EllipseElem, FillRule, FixedStroke,
+    LineCap, LineElem, LineJoin, Paint, PolygonElem, RectElem, SquareElem, Stroke,
+};
+use typst_utils::{Get, Numeric};
 
 use super::collect::{page_content_height_pt, page_content_width_pt};
 use crate::convert::table_align::paint_to_shd_hex;
+
+const MAX_LINE_WIDTH_EMU: u64 = 20_116_800;
+const MAX_LINE_PERCENTAGE: f64 = 2_147_483_647.0;
+const MAX_WORD_COORDINATE_EMU: u64 = 2_147_483_647;
 
 /// The result of resolving one bare shape element against the page region.
 pub(super) struct ResolvedShape {
@@ -284,7 +292,92 @@ fn box_shape(
     } else {
         rounded_outline(&resolved_radii(drawn, &stroke_sides, &radius), drawn)
     };
-    finish(drawn, outline, stroke, inset_abs, &losses)
+    let mut resolved = finish(drawn, outline, stroke, inset_abs, &losses);
+    if matches!(kind, BoxKind::Rect)
+        && width == Sizing::Rel(Ratio::new(1.0).into())
+        && height == Sizing::Auto
+        && body.is_some()
+        && fill.is_none()
+        && outset.unwrap_or_default().is_zero()
+        && radius.unwrap_or_default() == Corners::splat(Rel::zero())
+        && let Some(geometry) = &mut resolved.geometry
+    {
+        geometry.cell_rect = cell_rect_paint(inset.unwrap_or_default(), &stroke_sides);
+    }
+    resolved
+}
+
+fn cell_rect_paint(
+    inset: Sides<Rel<Abs>>,
+    stroke: &Sides<Option<FixedStroke>>,
+) -> Option<IrCellRect> {
+    let twips = |inset: Rel<Abs>| {
+        (inset.rel.is_zero() && inset.abs.is_finite() && inset.abs >= Abs::zero())
+            .then(|| pt_to_twips(inset.abs.to_pt()))
+    };
+    let margins = TableCellMargins {
+        top: twips(inset.top)?,
+        left: twips(inset.left)?,
+        bottom: twips(inset.bottom)?,
+        right: twips(inset.right)?,
+    };
+    if stroke.top.is_some() || stroke.left.is_some() || stroke.right.is_some() {
+        return None;
+    }
+    let bottom_border = if let Some(bottom) = &stroke.bottom {
+        Some(cell_rect_bottom_border(bottom)?)
+    } else {
+        None
+    };
+    Some(IrCellRect {
+        margins,
+        bottom_border,
+    })
+}
+
+fn cell_rect_bottom_border(stroke: &FixedStroke) -> Option<IrBorder> {
+    let Paint::Solid(color) = &stroke.paint else {
+        return None;
+    };
+    if color.alpha().is_some_and(|alpha| alpha < 1.0)
+        || stroke.dash.is_some()
+        || stroke.cap != LineCap::Butt
+    {
+        return None;
+    }
+    let eighths = (stroke.thickness.to_pt() * 8.0).round();
+    if !(2.0..=96.0).contains(&eighths) {
+        return None;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "rounded stroke thickness was checked against Word's border range"
+    )]
+    let sz_eighths = eighths as u32;
+    Some(IrBorder {
+        sz_eighths,
+        color_hex: paint_to_shd_hex(&stroke.paint),
+        dashed: false,
+    })
+}
+
+pub(super) fn native_border_style_is_lossy(stroke: &Stroke<Abs>) -> bool {
+    let fixed = stroke.clone().unwrap_or_default();
+    if fixed.thickness <= Abs::zero() {
+        return false;
+    }
+    let opaque_solid = matches!(&fixed.paint, Paint::Solid(color)
+        if !matches!(color, Color::Spot(_)) && color.alpha().is_none_or(|alpha| alpha >= 1.0));
+    let eighths = fixed.thickness.to_pt() * 8.0;
+    !opaque_solid
+        || fixed.cap != LineCap::Butt
+        || fixed
+            .dash
+            .as_ref()
+            .is_some_and(|dash| !dash.array.is_empty())
+        || !(2.0..=96.0).contains(&eighths)
+        || eighths.fract().abs() > f64::EPSILON
 }
 
 /// `layout_polygon`: vertices resolve against the region, the drawn size is
@@ -407,57 +500,347 @@ fn curve_shape(elem: &Packed<CurveElem>, styles: StyleChain<'_>, base: Size) -> 
 /// segment maps to the `line` preset with `a:xfrm` flips; anything else
 /// becomes a two-point `custGeom`.
 fn line_shape(elem: &Packed<LineElem>, styles: StyleChain<'_>, base: Size) -> ResolvedShape {
-    let resolve = |axes: Axes<Rel<Abs>>| axes.zip_map(base, Rel::relative_to);
-    let start = resolve(elem.start.resolve(styles));
-    let delta = elem.end.resolve(styles).map_or_else(
-        || {
-            let length = elem.length.resolve(styles);
-            let angle = elem.angle.get(styles);
-            let x = angle.cos() * length;
-            let y = angle.sin() * length;
-            resolve(Axes::new(x, y))
-        },
-        |end| resolve(end) - start,
-    );
-    let size = start.max(start + delta).max(Size::zero());
-    if !size.is_finite() {
+    let line = LineSegment::resolve(elem, styles, base);
+    if !line.start.is_finite() || !line.end.is_finite() {
         return unresolvable("the line has an infinite length");
     }
     let stroke = elem.stroke.resolve(styles).unwrap_or_default();
-    let (stroke, losses) = fixed_stroke(&stroke);
-    let p0 = start.to_point();
-    let p1 = (start + delta).to_point();
-    let w = size.x;
-    let h = size.y;
-    let zero = Abs::zero();
-    let outline = if p0 == Point::new(zero, zero) && p1 == Point::new(w, h) {
-        ShapeOutline::Line {
-            flip_h: false,
-            flip_v: false,
+    resolve_line_geometry(line, &stroke)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct LineSegment {
+    start: Point,
+    end: Point,
+}
+
+impl LineSegment {
+    fn relative_endpoints(
+        elem: &Packed<LineElem>,
+        styles: StyleChain<'_>,
+    ) -> (Axes<Rel<Abs>>, Axes<Rel<Abs>>) {
+        let start = elem.start.resolve(styles);
+        let end = elem.end.resolve(styles).unwrap_or_else(|| {
+            let length = elem.length.resolve(styles);
+            let angle = elem.angle.get(styles);
+            Axes::new(
+                start.x + angle.cos() * length,
+                start.y + angle.sin() * length,
+            )
+        });
+        (start, end)
+    }
+
+    fn resolve(elem: &Packed<LineElem>, styles: StyleChain<'_>, base: Size) -> Self {
+        let (start, end) = Self::relative_endpoints(elem, styles);
+        let resolve = |axes: Axes<Rel<Abs>>| axes.zip_map(base, Rel::relative_to).to_point();
+        Self {
+            start: resolve(start),
+            end: resolve(end),
         }
-    } else if p0 == Point::new(w, zero) && p1 == Point::new(zero, h) {
-        ShapeOutline::Line {
-            flip_h: true,
-            flip_v: false,
+    }
+
+    fn translate(self, offset: Point) -> Self {
+        Self {
+            start: self.start + offset,
+            end: self.end + offset,
         }
-    } else if p0 == Point::new(zero, h) && p1 == Point::new(w, zero) {
-        ShapeOutline::Line {
-            flip_h: false,
-            flip_v: true,
+    }
+
+    fn outline(self, size: Size) -> ShapeOutline {
+        let zero = Abs::zero();
+        let flip_h = !self.start.x.is_zero();
+        let flip_v = !self.start.y.is_zero();
+        if size.x > zero
+            && size.y > zero
+            && self.start
+                == Point::new(
+                    if flip_h { size.x } else { zero },
+                    if flip_v { size.y } else { zero },
+                )
+            && self.end
+                == Point::new(
+                    if flip_h { zero } else { size.x },
+                    if flip_v { zero } else { size.y },
+                )
+        {
+            return ShapeOutline::Line { flip_h, flip_v };
         }
-    } else if p0 == Point::new(w, h) && p1 == Point::new(zero, zero) {
-        ShapeOutline::Line {
-            flip_h: true,
-            flip_v: true,
-        }
-    } else {
         ShapeOutline::Custom {
-            path_w_emu: emu_i(w),
-            path_h_emu: emu_i(h),
-            segments: vec![seg_move(p0), seg_line(p1)],
+            path_w_emu: emu_i(size.x),
+            path_h_emu: emu_i(size.y),
+            segments: vec![seg_move(self.start), seg_line(self.end)],
         }
+    }
+}
+
+fn resolve_line_geometry(line: LineSegment, fixed: &FixedStroke) -> ResolvedShape {
+    let (stroke, mut losses) = fixed_stroke(fixed);
+    if line.start == line.end {
+        return ResolvedShape {
+            geometry: None,
+            loss: (fixed.cap != LineCap::Butt)
+                .then(|| "a coincident-endpoint line cannot retain its end caps".to_string()),
+        };
+    }
+    let origin = line.start.min(line.end).min(Point::zero());
+    if !origin.is_zero() {
+        losses
+            .push("negative line coordinates were translated into the drawing extent".to_string());
+    }
+    fit_line_geometry(line, origin, stroke, &losses)
+}
+
+fn fit_line_geometry(
+    line: LineSegment,
+    origin: Point,
+    stroke: Option<ShapeStroke>,
+    losses: &[String],
+) -> ResolvedShape {
+    let mut line = line.translate(-origin);
+    let mut size = line.start.max(line.end).to_size();
+    let min_extent = Abs::pt(1.0 / tydocx_ir::units::EMU_PER_PT);
+    let extent = stroke
+        .as_ref()
+        .map_or(min_extent, |s| width_in_pt(s.width_emu).max(min_extent));
+    let mut offset = Point::zero();
+    for axis in [Axis::X, Axis::Y] {
+        if pt_to_emu(size.get(axis).to_pt()) > MAX_WORD_COORDINATE_EMU {
+            return unresolvable("the line extent exceeds Word's DrawingML coordinate limit");
+        }
+        if pt_to_emu(size.get(axis).to_pt()) == 0 {
+            *size.get_mut(axis) = extent;
+            *offset.get_mut(axis) = extent / 2.0;
+        }
+    }
+    line = line.translate(offset);
+    finish(
+        size,
+        line.outline(size),
+        stroke,
+        Sides::splat(Abs::zero()),
+        losses,
+    )
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "DrawingML stroke widths are at most 20116800 EMU"
+)]
+fn width_in_pt(emu: u64) -> Abs {
+    Abs::pt(emu as f64 / tydocx_ir::units::EMU_PER_PT)
+}
+
+pub(super) fn is_default_full_width_rule(line: &Packed<LineElem>, styles: StyleChain<'_>) -> bool {
+    line.start.resolve(styles) == Axes::splat(Rel::zero())
+        && line.end.get(styles).is_none()
+        && line.angle.get(styles) == Angle::zero()
+        && line.length.resolve(styles) == Ratio::new(1.0).into()
+        && line.stroke.resolve(styles).unwrap_or_default() == FixedStroke::default()
+}
+
+pub(super) fn merge_stack_line_paths(
+    stack: &StackElem,
+    styles: StyleChain<'_>,
+    mut fragments: Vec<(&Content, Vec<IrBlock>)>,
+) -> Vec<IrBlock> {
+    if let Some(pair) = stack_line_pair(stack, styles)
+        && let Some(index) = fragments.windows(2).position(|children| {
+            std::ptr::eq(children[0].0, pair.first.pack_ref())
+                && std::ptr::eq(children[1].0, pair.second.pack_ref())
+        })
+        && let [(_, first), (_, second), ..] = &mut fragments[index..]
+        && merge_line_geometry(&pair, first, second).is_some()
+    {
+        fragments.remove(index + 1);
+    }
+    fragments
+        .into_iter()
+        .flat_map(|(_, blocks)| blocks)
+        .collect()
+}
+
+struct StackLinePair<'a> {
+    first: &'a Packed<LineElem>,
+    second: &'a Packed<LineElem>,
+    single: IrShapeGeometry,
+    grouped: IrShapeGeometry,
+}
+
+fn stack_line_pair<'a>(stack: &'a StackElem, styles: StyleChain<'_>) -> Option<StackLinePair<'a>> {
+    let dir = stack.dir.get(styles);
+    let axis = dir.axis();
+    let mut lines = stack.children.iter().enumerate().filter_map(|(i, child)| {
+        let StackChild::Block(block) = child else {
+            return None;
+        };
+        Some((i, block.to_packed::<LineElem>()?))
+    });
+    let (i, first) = lines.next()?;
+    let (j, second) = lines.next()?;
+    if lines.next().is_some() || first.label().is_some() || second.label().is_some() {
+        return None;
+    }
+    let between = &stack.children[i + 1..j];
+    let gap = if between.is_empty() {
+        absolute_gap(stack.spacing.get(styles)?, styles)?
+    } else {
+        between.iter().try_fold(Abs::zero(), |sum, child| {
+            let spacing = match child {
+                StackChild::Spacing(spacing) => *spacing,
+                StackChild::Block(content) => match axis {
+                    Axis::X => content.to_packed::<HElem>()?.amount,
+                    Axis::Y => content.to_packed::<VElem>()?.amount,
+                },
+            };
+            Some(sum + absolute_gap(spacing, styles)?)
+        })?
     };
-    finish(size, outline, stroke, Sides::splat(Abs::zero()), &losses)
+    let a = stack_axis_line(first, styles, axis)?;
+    let b = stack_axis_line(second, styles, axis)?;
+    let mut offset = Point::zero();
+    *offset.get_mut(axis) = gap * if dir.is_positive() { 1.0 } else { -1.0 };
+    let a_stroke = first.stroke.resolve(styles).unwrap_or_default();
+    let b_stroke = second.stroke.resolve(styles).unwrap_or_default();
+    let single = resolve_line_geometry(a, &a_stroke).geometry?;
+    let grouped = group_parallel_line_geometry(a, b.translate(offset), axis, &a_stroke, &b_stroke)?;
+    Some(StackLinePair {
+        first,
+        second,
+        single,
+        grouped,
+    })
+}
+
+fn absolute_gap(spacing: Spacing, styles: StyleChain<'_>) -> Option<Abs> {
+    let Spacing::Rel(length) = spacing else {
+        return None;
+    };
+    let length = length.resolve(styles);
+    (length.rel.is_zero() && length.abs.is_finite() && length.abs >= Abs::zero())
+        .then_some(length.abs)
+}
+
+fn stack_axis_line(
+    line: &Packed<LineElem>,
+    styles: StyleChain<'_>,
+    axis: Axis,
+) -> Option<LineSegment> {
+    let (start, end) = LineSegment::relative_endpoints(line, styles);
+    if [start.x, start.y, end.x, end.y]
+        .iter()
+        .any(|v| !v.rel.is_zero() || !v.abs.is_finite() || v.abs < Abs::zero())
+        || !start.get(axis).is_zero()
+        || !end.get(axis).is_zero()
+    {
+        return None;
+    }
+    Some(LineSegment::resolve(line, styles, Size::zero()))
+}
+
+fn group_parallel_line_geometry(
+    a: LineSegment,
+    b: LineSegment,
+    axis: Axis,
+    first: &FixedStroke,
+    second: &FixedStroke,
+) -> Option<IrShapeGeometry> {
+    let delta = a.end - a.start;
+    let separation = b.start - a.start;
+    if delta.is_zero()
+        || a.translate(separation) != b
+        || first != second
+        || first.cap != LineCap::Butt
+        || first.dash.is_some()
+        || !matches!(&first.paint, Paint::Solid(_))
+        || first.thickness <= Abs::zero()
+        || separation.hypot() <= first.thickness
+    {
+        return None;
+    }
+    let dot = delta
+        .x
+        .to_pt()
+        .mul_add(separation.x.to_pt(), delta.y.to_pt() * separation.y.to_pt());
+    if dot.abs() > f64::EPSILON {
+        return None;
+    }
+    let (stroke, losses) = fixed_stroke(first);
+    if !losses.is_empty() {
+        return None;
+    }
+    let stroke = stroke?;
+    if stroke.width_emu == 0 {
+        return None;
+    }
+    let half_width = width_in_pt(stroke.width_emu) / 2.0;
+    let mut origin = Point::zero();
+    *origin.get_mut(axis) = a.start.min(b.start).get(axis) - half_width;
+    let mut size = (a.start.max(a.end).max(b.start).max(b.end) - origin).to_size();
+    *size.get_mut(axis) += half_width;
+    if [size.x, size.y]
+        .into_iter()
+        .any(|side| pt_to_emu(side.to_pt()) > MAX_WORD_COORDINATE_EMU)
+    {
+        return None;
+    }
+    let (a, b) = (a.translate(-origin), b.translate(-origin));
+    let outline = ShapeOutline::Custom {
+        path_w_emu: emu_i(size.x),
+        path_h_emu: emu_i(size.y),
+        segments: vec![
+            seg_move(a.start),
+            seg_line(a.end),
+            seg_move(b.start),
+            seg_line(b.end),
+        ],
+    };
+    finish(size, outline, Some(stroke), Sides::splat(Abs::zero()), &[]).geometry
+}
+
+fn merge_line_geometry(
+    pair: &StackLinePair<'_>,
+    first: &mut [IrBlock],
+    second: &[IrBlock],
+) -> Option<()> {
+    let [
+        IrBlock::Shape {
+            kind: IrShapeKind::Line,
+            geometry: Some(first),
+            fill_hex: None,
+            body: first_body,
+            loss: None,
+            alignment: first_alignment,
+            ..
+        },
+    ] = first
+    else {
+        return None;
+    };
+    let [
+        IrBlock::Shape {
+            kind: IrShapeKind::Line,
+            geometry: Some(second),
+            fill_hex: None,
+            body: second_body,
+            loss: None,
+            alignment: second_alignment,
+            ..
+        },
+    ] = second
+    else {
+        return None;
+    };
+    if *first != pair.single
+        || second != first
+        || first_alignment != second_alignment
+        || !first_body.is_empty()
+        || !second_body.is_empty()
+    {
+        return None;
+    }
+    *first = pair.grouped.clone();
+    Some(())
 }
 
 /// Sizing resolution from `unbreakable_pod`: `Auto` and `fr` take the
@@ -628,15 +1011,33 @@ fn sides_stroke(sides: &Sides<Option<FixedStroke>>) -> (Option<ShapeStroke>, Vec
 /// or a non-zero dash `phase` has no `a:ln` equivalent — reported.
 fn fixed_stroke(fixed: &FixedStroke) -> (Option<ShapeStroke>, Vec<String>) {
     let mut losses = Vec::new();
-    let color_hex = if let Paint::Solid(_) = &fixed.paint {
-        paint_to_shd_hex(&fixed.paint)
+    let width = pt_to_emu(fixed.thickness.to_pt());
+    if width > MAX_LINE_WIDTH_EMU {
+        losses.push("the stroke thickness exceeds the DrawingML limit and was clamped".to_string());
+    } else if width == 0 && fixed.thickness > Abs::zero() {
+        losses.push("the stroke thickness rounds to zero in DrawingML".to_string());
+    }
+    let (color_hex, alpha) = if let Paint::Solid(color) = &fixed.paint {
+        if matches!(color, Color::Spot(_)) {
+            losses.push("a spot stroke color was converted to its RGB approximation".to_string());
+        }
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the alpha transform is rounded into DrawingML's 0–100000 range"
+        )]
+        let alpha = color
+            .alpha()
+            .filter(|alpha| *alpha < 1.0)
+            .map(|a| (f64::from(a).clamp(0.0, 1.0) * 100_000.0).round() as u32);
+        (paint_to_shd_hex(&fixed.paint), alpha)
     } else {
         losses.push(
             "a non-solid stroke paint (gradient/tiling) is not representable; \
              the stroke draws black"
                 .to_string(),
         );
-        None
+        (None, None)
     };
     let dash = match &fixed.dash {
         None => None,
@@ -648,7 +1049,23 @@ fn fixed_stroke(fixed: &FixedStroke) -> (Option<ShapeStroke>, Vec<String>) {
                         .to_string(),
                 );
             }
-            Some(dash_pairs(&pattern.array, fixed.thickness))
+            let (pairs, clamped) =
+                dash_pairs(&pattern.array, width_in_pt(width.min(MAX_LINE_WIDTH_EMU)));
+            if clamped {
+                losses.push(
+                    "a dash length exceeds the DrawingML percentage limit and was clamped"
+                        .to_string(),
+                );
+            }
+            if pairs.iter().any(|(d, sp)| *d != 0 || *sp != 0) {
+                Some(pairs)
+            } else {
+                losses.push(
+                    "the stroke's dash lengths round to zero; the line uses a solid stroke"
+                        .to_string(),
+                );
+                None
+            }
         }
     };
     let cap = match fixed.cap {
@@ -656,22 +1073,28 @@ fn fixed_stroke(fixed: &FixedStroke) -> (Option<ShapeStroke>, Vec<String>) {
         LineCap::Round => ShapeCap::Round,
         LineCap::Square => ShapeCap::Square,
     };
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the miter limit is a small positive ratio"
-    )]
     let join = match fixed.join {
-        LineJoin::Miter => ShapeJoin::Miter {
-            lim: (fixed.miter_limit.get() * 100_000.0).round().max(0.0) as u32,
-        },
+        LineJoin::Miter => {
+            let limit = fixed.miter_limit.get() * 100_000.0;
+            if limit > MAX_LINE_PERCENTAGE {
+                losses.push(
+                    "the miter limit exceeds the DrawingML percentage limit and was clamped"
+                        .to_string(),
+                );
+            }
+            ShapeJoin::Miter {
+                lim: line_percentage(limit),
+            }
+        }
         LineJoin::Round => ShapeJoin::Round,
         LineJoin::Bevel => ShapeJoin::Bevel,
     };
     (
         Some(ShapeStroke {
-            width_emu: pt_to_emu(fixed.thickness.to_pt()),
+            width_emu: width.min(MAX_LINE_WIDTH_EMU),
+            compound: ShapeCompound::Single,
             color_hex,
+            alpha,
             cap,
             join,
             dash,
@@ -684,25 +1107,35 @@ fn fixed_stroke(fixed: &FixedStroke) -> (Option<ShapeStroke>, Vec<String>) {
 /// (`DashLength::LineWidth` was already folded to the thickness), written
 /// in 100000ths of the stroke width. An odd-length array repeats, so it is
 /// doubled before pairing — SVG/typst semantics exactly.
-fn dash_pairs(array: &[Abs], thickness: Abs) -> Vec<(u32, u32)> {
+fn dash_pairs(array: &[Abs], thickness: Abs) -> (Vec<(u32, u32)>, bool) {
     let width_pt = thickness.to_pt().max(f64::EPSILON);
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "dash lengths are non-negative"
-    )]
-    let to_pct = |a: &Abs| (a.to_pt() / width_pt * 100_000.0).round().max(0.0) as u32;
+    let mut clamped = false;
+    let to_pct = |a: &Abs| {
+        let value = a.to_pt() / width_pt * 100_000.0;
+        clamped |= value > MAX_LINE_PERCENTAGE;
+        line_percentage(value)
+    };
     let mut values: Vec<u32> = array.iter().map(to_pct).collect();
     if values.len() % 2 == 1 {
         let doubled = values.clone();
         values.extend(doubled);
     }
-    values
+    let pairs = values
         .as_chunks::<2>()
         .0
         .iter()
         .map(|[dash, gap]| (*dash, *gap))
-        .collect()
+        .collect();
+    (pairs, clamped)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the percentage is rounded and clamped to a non-negative xsd:int"
+)]
+fn line_percentage(value: f64) -> u32 {
+    value.round().clamp(0.0, MAX_LINE_PERCENTAGE) as u32
 }
 
 /// Polygon/curve stroke resolution: `auto` gives the `1pt` black default
@@ -774,6 +1207,7 @@ fn finish(
                 right_emu: pt_to_emu(inset.right.to_pt()),
                 bottom_emu: pt_to_emu(inset.bottom.to_pt()),
             },
+            cell_rect: None,
         }),
         loss: joined_loss(losses),
     }

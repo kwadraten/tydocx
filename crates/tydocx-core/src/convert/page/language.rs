@@ -1,7 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use tydocx_ooxml::document::{Document, Run};
 use typst::World;
+use typst_library::foundations::PathOrStr;
+use typst_syntax::{FileId, Span};
+
+use super::{reachable, source_ast};
 
 /// Whether a declared Typst language code is an East-Asian language
 /// (Chinese, Japanese, Korean) — the languages whose text Word tags
@@ -151,38 +155,80 @@ pub fn localize_cjk_fonts(world: &dyn World, doc: &mut Document) {
     localize_cjk_font_names(doc, &name_map);
 }
 
-/// Canonicalize font family names against the font book: Typst stores
-/// `FontFamily` lowercased (`dejavu sans`), while Word shows the font's
-/// canonical typographic family (`DejaVu Sans`). The legacy path got the
-/// canonical name from Paged `font.info()`; the IR path reads the chain,
-/// so it canonicalizes here, after lowering. Families the book does not
-/// know stay as-is.
 pub fn canonicalize_font_names(world: &dyn World, doc: &mut Document) {
-    let mut name_map: HashMap<String, String> = HashMap::new();
-    for (family, _) in world.book().families() {
-        name_map.insert(family.to_lowercase(), family.to_string());
-    }
-    if name_map.is_empty() {
-        return;
-    }
-    if let Some(canonical) = name_map.get(&doc.style.body_font_ascii.to_lowercase()) {
-        doc.style.body_font_ascii.clone_from(canonical);
-    }
-    if let Some(canonical) = name_map.get(&doc.style.body_font_east_asia.to_lowercase()) {
-        doc.style.body_font_east_asia.clone_from(canonical);
-    }
-    doc.for_each_run_mut(&mut |run| {
-        if let Some(family) = &run.font_ascii
-            && let Some(canonical) = name_map.get(&family.to_lowercase())
+    let main = world.main();
+    let mut sources = VecDeque::from([main]);
+    let mut seen = HashSet::from([main]);
+    doc.for_each_run(&mut |run| {
+        if let Some(id) = run.span.and_then(Span::id)
+            && seen.insert(id)
         {
-            run.font_ascii = Some(canonical.clone());
-        }
-        if let Some(family) = &run.font_east_asia
-            && let Some(canonical) = name_map.get(&family.to_lowercase())
-        {
-            run.font_east_asia = Some(canonical.clone());
+            sources.push_back(id);
         }
     });
+
+    let book = world.book();
+    let mut declarations = None;
+    let mut rewrite = |family: &mut String| {
+        if family.is_empty() {
+            return;
+        }
+        let spelling = book
+            .select_family(&family.to_lowercase())
+            .next()
+            .and_then(|index| book.info(index))
+            .map(|info| info.family.as_str())
+            .or_else(|| {
+                declarations
+                    .get_or_insert_with(|| declared_font_names(world, &mut sources, &mut seen))
+                    .get(&family.to_ascii_lowercase())
+                    .map(String::as_str)
+            });
+        if let Some(spelling) = spelling
+            && spelling != family
+        {
+            *family = spelling.to_owned();
+        }
+    };
+    rewrite(&mut doc.style.body_font_ascii);
+    rewrite(&mut doc.style.body_font_east_asia);
+    doc.for_each_run_mut(&mut |run| {
+        if let Some(family) = &mut run.font_ascii {
+            rewrite(family);
+        }
+        if let Some(family) = &mut run.font_east_asia {
+            rewrite(family);
+        }
+    });
+}
+
+fn declared_font_names(
+    world: &dyn World,
+    sources: &mut VecDeque<FileId>,
+    seen: &mut HashSet<FileId>,
+) -> HashMap<String, String> {
+    let mut names = HashMap::new();
+    while let Some(id) = sources.pop_front() {
+        let Ok(source) = world.source(id) else {
+            continue;
+        };
+        source_ast::for_each_declared_font(source.root(), &mut |name| {
+            names.entry(name.to_ascii_lowercase()).or_insert(name);
+        });
+        let mut paths = Vec::new();
+        reachable::collect_module_paths(source.root(), &mut paths);
+        for path in paths {
+            if !path.starts_with('@')
+                && let Ok(rooted) = PathOrStr::Str(path.into()).resolve(id)
+            {
+                let target = rooted.intern();
+                if seen.insert(target) {
+                    sources.push_back(target);
+                }
+            }
+        }
+    }
+    names
 }
 
 /// The distinct East-Asian font family names currently in `doc`: the body default
@@ -244,7 +290,57 @@ fn localized_name_via_book(world: &dyn World, family: &str, lang_ids: &[u16]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tydocx_ooxml::document::Paragraph;
+    use crate::TydocxWorld;
+    use std::path::Path;
+    use tydocx_ooxml::document::{BlockElement, Paragraph};
+
+    #[test]
+    fn canonicalize_font_names_restores_unavailable_declarations() {
+        // Typst lowercases family names before lowering. Only the source can
+        // restore an unavailable font's spelling; installed fonts use FontBook.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/declared_font_spelling.typ");
+        let world = TydocxWorld::new(&path).unwrap();
+        let mut doc = Document::new();
+        doc.style.body_font_ascii = "tydocx missing body".to_string();
+        doc.style.body_font_east_asia = "TYDOCX MISSING IMPORTED".to_string();
+
+        let mut para = Paragraph::new();
+        let mut heading = Run::new("Heading");
+        heading.font_ascii = Some("TYDOCX MISSING HEADING".to_string());
+        heading.font_east_asia = Some("tydocx missing imported".to_string());
+        para.push_run(heading);
+        let mut other = Run::new("Other");
+        other.font_ascii = Some("LIBERTINUS SERIF".to_string());
+        other.font_east_asia = Some("tydocx not a font declaration".to_string());
+        para.push_run(other);
+        doc.body.elements.push(BlockElement::Paragraph(para));
+
+        canonicalize_font_names(&world, &mut doc);
+
+        assert_eq!(doc.style.body_font_ascii, "TyDocx Missing Body");
+        assert_eq!(doc.style.body_font_east_asia, "TyDocx Missing Imported");
+        let BlockElement::Paragraph(para) = &doc.body.elements[0] else {
+            panic!("expected a paragraph");
+        };
+        let mut runs = para.text_runs();
+        let heading = runs.next().unwrap();
+        assert_eq!(
+            heading.font_ascii.as_deref(),
+            Some("TyDocx Missing Heading")
+        );
+        assert_eq!(
+            heading.font_east_asia.as_deref(),
+            Some("TyDocx Missing Imported")
+        );
+        let other = runs.next().unwrap();
+        assert_eq!(other.font_ascii.as_deref(), Some("Libertinus Serif"));
+        assert_eq!(
+            other.font_east_asia.as_deref(),
+            Some("tydocx not a font declaration")
+        );
+    }
+
     #[test]
     fn is_cjk_language_matches_cjk_primaries() {
         // Chinese, Japanese, and Korean — in any case, with or without a

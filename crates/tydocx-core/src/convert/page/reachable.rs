@@ -26,7 +26,7 @@ fn collect_import_paths(node: &typst_syntax::SyntaxNode, paths: &mut Vec<String>
 }
 
 /// String-literal `#import`/`#include` targets of a parsed source (one level).
-fn collect_module_paths(node: &typst_syntax::SyntaxNode, paths: &mut Vec<String>) {
+pub(super) fn collect_module_paths(node: &typst_syntax::SyntaxNode, paths: &mut Vec<String>) {
     use typst_syntax::SyntaxKind;
     match node.kind() {
         SyntaxKind::ModuleImport => {

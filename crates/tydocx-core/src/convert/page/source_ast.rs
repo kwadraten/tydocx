@@ -1527,6 +1527,94 @@ fn extract_font_list(expr: typst_syntax::ast::Expr<'_>) -> Option<Vec<String>> {
     }
 }
 
+pub(super) fn for_each_declared_font(
+    node: &typst_syntax::SyntaxNode,
+    visit: &mut impl FnMut(String),
+) {
+    use typst_syntax::ast::{Arg, Expr};
+
+    let args = match node.cast::<Expr<'_>>() {
+        Some(Expr::SetRule(rule)) if is_text_function(rule.target()) => Some(rule.args()),
+        Some(Expr::FuncCall(call))
+            if is_text_function(call.callee())
+                || matches!(ungroup(call.callee()), Expr::FieldAccess(access)
+                    if access.field().as_str() == "with" && is_text_function(access.target())) =>
+        {
+            Some(call.args())
+        }
+        _ => None,
+    };
+    for arg in args.into_iter().flat_map(typst_syntax::ast::Args::items) {
+        if let Arg::Named(named) = arg
+            && named.name().as_str() == "font"
+        {
+            visit_font_literals(named.expr(), visit);
+        }
+    }
+    for child in node.children() {
+        for_each_declared_font(child, visit);
+    }
+}
+
+fn visit_font_literals(expr: typst_syntax::ast::Expr<'_>, visit: &mut impl FnMut(String)) {
+    use typst_syntax::ast::{ArrayItem, Expr};
+    match ungroup(expr) {
+        Expr::Array(array) => {
+            for item in array.items() {
+                if let ArrayItem::Pos(expr) = item
+                    && let Some(name) = font_family_literal(expr)
+                {
+                    visit(name);
+                }
+            }
+        }
+        expr => {
+            if let Some(name) = font_family_literal(expr) {
+                visit(name);
+            }
+        }
+    }
+}
+
+fn is_text_function(expr: typst_syntax::ast::Expr<'_>) -> bool {
+    use typst_syntax::ast::Expr;
+    match ungroup(expr) {
+        Expr::Ident(ident) => ident.as_str() == "text",
+        Expr::FieldAccess(access) => {
+            access.field().as_str() == "text"
+                && matches!(access.target(), Expr::Ident(ident) if ident.as_str() == "std")
+        }
+        _ => false,
+    }
+}
+
+fn ungroup(mut expr: typst_syntax::ast::Expr<'_>) -> typst_syntax::ast::Expr<'_> {
+    while let typst_syntax::ast::Expr::Parenthesized(group) = expr {
+        expr = group.expr();
+    }
+    expr
+}
+
+fn font_family_literal(expr: typst_syntax::ast::Expr<'_>) -> Option<String> {
+    use typst_syntax::ast::{DictItem, Expr};
+    let expr = match ungroup(expr) {
+        Expr::Dict(dict) => dict.items().find_map(|item| match item {
+            DictItem::Named(named) if named.name().as_str() == "name" => Some(named.expr()),
+            DictItem::Keyed(keyed)
+                if matches!(keyed.key(), Expr::Str(key) if key.get() == "name") =>
+            {
+                Some(keyed.expr())
+            }
+            _ => None,
+        })?,
+        expr => expr,
+    };
+    match ungroup(expr) {
+        Expr::Str(name) => Some(name.get().to_string()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::units::pt_to_twips;

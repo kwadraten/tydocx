@@ -6,6 +6,7 @@
 
 #![warn(clippy::pedantic)]
 
+mod cell_rect;
 pub mod degradation;
 pub mod geometry;
 pub mod grid_plan;

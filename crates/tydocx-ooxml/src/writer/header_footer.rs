@@ -4,20 +4,53 @@ use std::io::{self, Write};
 use quick_xml::Writer;
 
 use super::fields::{write_complex_field, write_field, write_field_page};
-use super::image::write_anchored_float;
+use super::footnotes::para_has_math;
+use super::hyperlinks::{HyperlinkRelationships, write_hyperlink};
+use super::image::{para_has_drawing, write_anchored_float};
+use super::package::{Indentation, write_indentation};
 use super::run::write_run;
 use super::shape::write_inline_shape;
-use super::{DocParts, WriteCtx};
-use crate::document::{DocumentStyle, HeaderFooter, InlineElement, Paragraph};
+use super::{DocParts, RelKind, WriteCtx};
+use crate::document::{DocumentStyle, HeaderFooter, InlineElement, Paragraph, SectionFooter};
+
+pub(super) const EMPTY_FOOTER_SLOT: u8 = 4;
+
+pub(super) fn write_footer_refs<W: Write>(
+    w: &mut Writer<W>,
+    parts: &DocParts,
+    include_first: bool,
+    footer: SectionFooter,
+) -> io::Result<()> {
+    if footer == SectionFooter::Omitted {
+        return Ok(());
+    }
+    for (slot, kind) in [(1, "default"), (2, "even"), (3, "first")] {
+        if (slot == 3 && !include_first) || !parts.has(RelKind::Footer(slot)) {
+            continue;
+        }
+        let part = if footer == SectionFooter::Empty {
+            EMPTY_FOOTER_SLOT
+        } else {
+            slot
+        };
+        if let Some(rid) = parts.rel_id(RelKind::Footer(part)) {
+            w.create_element("w:footerReference")
+                .with_attribute(("w:type", kind))
+                .with_attribute(("r:id", rid.as_str()))
+                .write_empty()?;
+        }
+    }
+    Ok(())
+}
 
 /// A `WriteCtx` scoped to one header/footer part: the image list is the
 /// part's own (rIds restart at `rId1`, matching the part's `.rels` file) and
 /// `parts` is empty so `image_rel_id` yields the part-local `rId{i}`.
-/// `shape_id_counter` stays shared so `wp:docPr` ids are unique package-wide.
 pub(super) struct PartCtx<'a> {
     pub(super) parts: DocParts,
     pub(super) images: Vec<&'a crate::document::ImageData>,
     pub(super) image_counter: Cell<usize>,
+    pub(super) hyperlinks: HyperlinkRelationships,
 }
 
 impl<'a> PartCtx<'a> {
@@ -26,6 +59,7 @@ impl<'a> PartCtx<'a> {
             parts: DocParts::empty(),
             images,
             image_counter: Cell::new(0),
+            hyperlinks: HyperlinkRelationships::default(),
         }
     }
 
@@ -37,10 +71,11 @@ impl<'a> PartCtx<'a> {
             doc_style: shared.doc_style,
             parts: &self.parts,
             images: &self.images,
+            hyperlinks: &self.hyperlinks,
             content_width_twips: shared.content_width_twips,
             image_counter: &self.image_counter,
             citation_id_counter: shared.citation_id_counter,
-            shape_id_counter: shared.shape_id_counter,
+            drawing_id_counter: shared.drawing_id_counter,
         }
     }
 }
@@ -102,12 +137,7 @@ fn generate_header_footer_part(
     doc_style: &DocumentStyle,
     ctx: &WriteCtx,
 ) -> io::Result<()> {
-    let has_anchors = content.paragraphs.iter().any(|para| {
-        para.inlines
-            .iter()
-            .any(|i| matches!(i, InlineElement::AnchoredFloat(_) | InlineElement::Shape(_)))
-    });
-    let root = writer
+    let mut root = writer
         .create_element(root_tag)
         .with_attribute((
             "xmlns:w",
@@ -119,14 +149,18 @@ fn generate_header_footer_part(
         ));
     // Furniture anchors (`wp:anchor`) need the drawing prefix declared;
     // `a:`/`pic:`/`wps:`/`mc:` are declared inline by the drawing writers.
-    let root = if has_anchors {
-        root.with_attribute((
+    if content.paragraphs.iter().any(para_has_drawing) {
+        root = root.with_attribute((
             "xmlns:wp",
             "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
-        ))
-    } else {
-        root
-    };
+        ));
+    }
+    if content.paragraphs.iter().any(para_has_math) {
+        root = root.with_attribute((
+            "xmlns:m",
+            "http://schemas.openxmlformats.org/officeDocument/2006/math",
+        ));
+    }
     root.write_inner_content(|w| {
         for para in &content.paragraphs {
             write_header_footer_paragraph(w, para, doc_style, ctx)?;
@@ -136,10 +170,6 @@ fn generate_header_footer_part(
     Ok(())
 }
 
-/// Write a paragraph for headers/footers: text runs, fields, and furniture
-/// `wp:anchor` drawings. `FieldPage` (margin-zone page-number tokens) and
-/// `Field` (C3 running-heading `STYLEREF`s) reach here; any other non-text
-/// inline is still dropped.
 fn write_header_footer_paragraph<W: Write>(
     writer: &mut Writer<W>,
     para: &Paragraph,
@@ -149,8 +179,36 @@ fn write_header_footer_paragraph<W: Write>(
     writer.create_element("w:p").write_inner_content(|w| {
         let has_alignment = para.alignment.is_some();
         let has_mark_size = para.mark_size_half_pt.is_some();
-        if has_alignment || has_mark_size {
+        let has_spacing = para.spacing_before.is_some() || para.spacing_after.is_some();
+        if has_alignment || has_mark_size || has_spacing || para.first_line_indent.is_some() {
             w.create_element("w:pPr").write_inner_content(|ppr| {
+                if has_spacing {
+                    ppr.create_element("w:spacing")
+                        .with_attribute((
+                            "w:before",
+                            para.spacing_before.unwrap_or(0).to_string().as_str(),
+                        ))
+                        .with_attribute((
+                            "w:after",
+                            para.spacing_after.unwrap_or(0).to_string().as_str(),
+                        ))
+                        .write_empty()?;
+                }
+                if let Some(indent) = para.first_line_indent {
+                    write_indentation(
+                        ppr,
+                        Indentation {
+                            first_line: Some(indent.twips.to_string().as_str()),
+                            first_line_chars: indent.chars.map(|c| c.to_string()).as_deref(),
+                            ..Indentation::default()
+                        },
+                    )?;
+                }
+                if let Some(alignment) = &para.alignment {
+                    ppr.create_element("w:jc")
+                        .with_attribute(("w:val", alignment.ooxml_value()))
+                        .write_empty()?;
+                }
                 if let Some(size) = para.mark_size_half_pt {
                     ppr.create_element("w:rPr").write_inner_content(|rpr| {
                         rpr.create_element("w:sz")
@@ -159,17 +217,19 @@ fn write_header_footer_paragraph<W: Write>(
                         Ok(())
                     })?;
                 }
-                if let Some(alignment) = &para.alignment {
-                    ppr.create_element("w:jc")
-                        .with_attribute(("w:val", alignment.ooxml_value()))
-                        .write_empty()?;
-                }
                 Ok(())
             })?;
         }
         for inline in &para.inlines {
             match inline {
                 InlineElement::Text(run) => write_run(w, run, doc_style)?,
+                InlineElement::Hyperlink {
+                    url,
+                    body,
+                    preserve_style,
+                } => {
+                    write_hyperlink(w, url, body, *preserve_style, ctx)?;
+                }
                 InlineElement::FieldPage {
                     display_text,
                     bold,
@@ -184,14 +244,10 @@ fn write_header_footer_paragraph<W: Write>(
                     write_field(w, instruction, result, doc_style)?;
                 }
                 InlineElement::AnchoredFloat(float) => {
-                    let n = ctx.shape_id_counter.get() + 1;
-                    ctx.shape_id_counter.set(n);
-                    write_anchored_float(w, float, n, ctx)?;
+                    write_anchored_float(w, float, ctx.next_drawing_id()?, ctx)?;
                 }
                 InlineElement::Shape(shape) => {
-                    let n = ctx.shape_id_counter.get() + 1;
-                    ctx.shape_id_counter.set(n);
-                    write_inline_shape(w, shape, n, ctx)?;
+                    write_inline_shape(w, shape, ctx.next_drawing_id()?, ctx)?;
                 }
                 _ => {}
             }

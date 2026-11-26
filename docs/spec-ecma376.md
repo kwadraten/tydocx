@@ -1,24 +1,27 @@
-# ECMA-376 feature map
+# OOXML output contract and feature map
 
-How tydocx expresses each Typst construct in Office Open XML (ECMA-376), per
-compatibility level. Every claim here is verified against the implementation
-(`tydocx-core/src/convert/realize/`, `tydocx-ir/src/lower.rs`,
-`tydocx-ooxml/src/writer/`) and the test suite; where behavior differs from the
-old `compat-modes.md` design doc, the code is authoritative and the difference
-is noted.
+Use the **emission contract** to decide whether the writer may generate a
+tree, and the **feature map** below to decide when the converter selects it.
+The map alone does not specify valid XML, part ownership, or application
+support. The writer targets **WML Transitional with selected Microsoft
+extensions**, not Strict. C1/C2/C3 are tydocx policies, not ECMA conformance
+classes or guarantees that a given reader renders the document.
+
+| Writer question | Contract |
+|---|---|
+| Which editions, namespaces, ZIP parts, media types, relationships and compatibility rules apply? | [Profile, packaging and namespaces](spec-ecma376/package.md) |
+| What are the exact drawing containers, geometry, line sequence, picture/SVG and text-box payloads? | [DrawingML, pictures and Word shapes](spec-ecma376/drawing.md) |
+| Where does OMML go, and how do tabs, fields, bookmarks, hyperlinks and story parts interact? | [Math and cross-references](spec-ecma376/math-fields.md) |
 
 ## Compatibility levels
 
-`CompatMode` is defined twice — `tydocx_core::compat::CompatMode` (user-facing,
-richer degradation formatting) and `tydocx_ir::CompatMode` (used by the
-lowerer). Both accept `c1` / `c2` / `c3`; the CLI flag is `--compat`, default
-`c2`.
+The CLI flag `--compat` accepts `c1`, `c2` and `c3`; the default is `c2`.
 
 | Level | Name | Contract |
 |-------|------|----------|
 | C1 | minimal | Only constructs inside the Typst/OOXML intersection are emitted. Anything outside it is skipped or literalized and reported as a named degradation. |
 | C2 | graphical | Default. Everything C1 emits, plus Word's graphical vocabulary (anchored floats, numbered-list patterns, cell shading, section breaks, headers/footers) to preserve appearance where the semantic mapping does not reach. |
-| C3 | dynamic | Everything C2 emits, plus Word **field codes** around the values C2 rendered literally: `w:updateFields` in `settings.xml`, ` NUMPAGES ` for `counter(page).final()`, ` NOTEREF <label> \h ` for `counter(footnote).at(<label>)`, ` DATE `/` TIME ` for `datetime.today()`/`now()`, ` DOCPROPERTY <name> ` for `document.<field>` reads, ` SEQ ` for single-piece figure/table/equation numbering, ` STYLEREF "Heading N" ` for pure heading-query page zones, and ` CITATION <key> \l 1033 ` for `@key`/`#cite`. Every field carries the C2 literal as its cached result, so disconnecting all fields reproduces C2 (D1). |
+| C3 | dynamic | Everything C2 emits, plus Word fields around representable values C2 rendered literally. The C2 literal becomes the cached result; `w:updateFields` enables refresh. |
 
 In the tables below, the "C2/C3" column describes what both levels emit; a
 row calls out the C3 form explicitly only where C3 differs from C2.
@@ -35,32 +38,17 @@ row calls out the C3 form explicitly only where C3 differs from C2.
   aspect is dropped; "approximated" means a nearby OOXML construct stands in;
   "skipped" means nothing is emitted.
 
-## Pipeline
-
-```mermaid
-flowchart LR
-    src[.typ source] --> compile["typst::compile<br/>(Target::Paged, typst-realize)"]
-    src --> paged["typst::compile<br/>(PagedDocument)"]
-    compile --> pairs["(Content, StyleChain) pairs<br/>DocxDocument"]
-    pairs --> collect["collect.rs<br/>semantic walk → IrDocument"]
-    paged --> patch["patch.rs / place.rs / overline.rs<br/>footnote bodies, image sizes,<br/>float & overline geometry"]
-    collect --> patch
-    patch --> lower["tydocx_ir::lower<br/>IrDocument → ooxml::Document"]
-    lower --> write["tydocx-ooxml writers<br/>document.xml, numbering.xml,<br/>styles.xml, OMML, drawings"]
-    write --> docx[(.docx package)]
-```
-
 ## Runs and text
 
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
-| `#text(font:)` | `w:rFonts w:ascii`/`w:eastAsia` (first family → ascii, last → eastAsia) | same | same |
-| monospace family (`#raw`, `text(font:)` mono) | `w:rFonts` with the document `code_font` (families detected via `fontdb` `monospace` flag, never by name) | same | same |
-| `#text(size:)` | `w:sz` half-points | same | same |
+| `#text(font:)` | For declared fonts, select by grapheme cluster: try the resolved list in declaration order, respecting `covers` and the selected `FontBook` face's glyph coverage. Eligible uninstalled declarations can retain their names; otherwise use available fallback when enabled. Split runs when their `w:rFonts` `w:ascii`/`w:eastAsia` selections conflict. A slot is not assigned by taking the first or last family. | same | same |
+| `#raw` / monospace fonts | Raw resolves its own text rules for font, fallback and size; block lines use `CodeBlock` and retain resolved run overrides. Runs marked monospace use the document `code_font`; explicitly selected font slots can instead emit their own `w:rFonts`. Monospace family detection uses font metadata, not name matching. | same | same |
+| `#text(size:)` | Resolve the run size from the style chain and round to half-points; emit `w:sz`/`w:szCs` for overrides. Reuse matching body, heading, code or footnote styles rather than emitting redundant run sizes. Sub/superscripts follow their `w:vertAlign` path without explicit reduced size. | same | same |
 | weight / `#strong` | `w:b` | same | same |
 | italic / `#emph` | `w:i` | same | same |
-| `#underline` | `w:u w:val="single"`; a custom `offset` is dropped + `"underline-offset"` (all levels) | same | same |
-| `#strike` | `w:strike` | same | same |
+| `#underline` | `w:u w:val="single"`; unsupported decoration options → `"underline-style"`, custom offset → `"underline-offset"` | same | same |
+| `#strike` | `w:strike`; unsupported decoration options → `"strikethrough-style"` | same | same |
 | `#overline` | C1: dropped + `"overline"`. C2/C3: measured `wp:anchor` line shape (`AnchoredLine`); unmatched runs degrade | dropped + report | `wp:anchor` line; unmatched → report |
 | `#highlight` | `w:highlight` (palette-mapped); non-default extent/edges/radius/stroke → `"highlight-geometry"` (all levels) | same | same |
 | `#smallcaps`, `smcp`/`c2sc` features | `w:smallCaps` | same | same |
@@ -68,10 +56,10 @@ flowchart LR
 | `#text(baseline:)` | `w:position` half-points | same | same |
 | `#text(fill:)` (non-black) | `w:color` | same | same |
 | `#text(tracking:)` | `w:spacing` | same | same |
-| ligatures / `num-form` / `num-spacing` | `w:ligatures`, `w:numForm`, `w:numSpacing` | same | same |
+| ligatures / numeral form / numeral width | Microsoft `w14:ligatures`, `w14:numForm`, `w14:numSpacing` with `w14:val` inside `w:rPr` declaring `mc:Ignorable="w14"` | same | same |
 | `#text(lang:, region:)` | `w:lang` (document-level via `Normal` style) | same | same |
 | `top-edge` / `bottom-edge` metrics | dropped + `"text-edge-metrics"` (all levels) | same | same |
-| `#text(hyphenate: false)` | `w:suppressAutoHyphens` in `settings.xml` | same | same |
+| `#text(hyphenate: false)` | `w:autoHyphenation w:val="0"` in `settings.xml` | same | same |
 | `#text(case:)`, `#lower`/`#upper` | literal text transform | same | same |
 | smart quotes | literal typographic characters | same | same |
 | U+200B zero-width space / U+2060 word joiner (Typst's URL break hints in realized text) | dropped from `w:t` text; Word finds its own break opportunities | same | same |
@@ -99,6 +87,7 @@ flowchart LR
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
 | `= Heading` | `w:pStyle Heading1`–`Heading9` (level >5 uses the level-5 size) + `w:bookmarkStart/End` for labels; the heading body's resolved `par` (`first-line-indent`, `justify` — including set rules scoped inside `show heading` bodies) emits `w:ind`/`w:jc` overrides where it differs from `Normal` | same | same |
+| heading level >9 | `Heading9` + literal rendered numbering instead of an out-of-range `w:numPr`, with `"heading-level"` approximated | same | same |
 | `#set heading(numbering: "1.1")` | `w:numPr` against a heading `abstractNum` (per-level `lvlText`/`numFmt`); counter divergence vs the rendered number → `"heading-numbering"` approximated | literal `numbering_text` run in the heading paragraph | `w:numPr` mapping |
 | numbering via a function or unmappable numeral system | literal text + `"heading-numbering"` literalized (all levels) | same | same |
 | `#heading(outlined: false)` | plain paragraph (keeps the number text, keeps the bookmark) so it stays out of the TOC + `"unoutlined-heading"` (all levels) | same | same |
@@ -125,7 +114,7 @@ flowchart LR
 | unresolved cell grid | falls back to a paragraph stream + `"table-grid-unresolved"` (all levels) | same | same |
 | `#grid` | `w:tbl` via the pure `grid_plan` lowering when the planner changes the structure (row coalescing, column merging, `trHeight`, `tcBorders`); a grid it leaves unchanged lowers to a plain `w:tbl` with no `trHeight` | flattened to paragraphs + `"grid-layout"` | `w:tbl` |
 | grid > 63 columns | split into stacked tables + `"grid-column-split"` (all levels) | flattened | split |
-| row heights | rows the grid planner rewrites get exact `trHeight` from Typst layout; ordinary grid/table rows carry none and Word reflows them (registered gap) | flattened | `trHeight` on planned rows only |
+| row heights | rows the grid planner rewrites get exact `trHeight` from Typst layout; Word reflows ordinary grid/table rows | flattened | `trHeight` on planned rows only |
 
 ## Figures, equations, images
 
@@ -135,11 +124,11 @@ flowchart LR
 | `figure(placement: top/bottom)` explicit | lone-table body → `w:tblpPr` floating table (caption becomes a grid-spanning row); other bodies → anchored `wps:txbx` at the measured position | body kept in flow + `"figure-placement"`/`"placed-content"` | `w:tblpPr` / anchored `txbx`; unmeasured → flow fallback + `"placed-content"` |
 | `$x$` / `$ x $` | `m:oMath` inline / `m:oMathPara` block; equation numbering `(1)`; C3: a single-piece numbering pattern renders as ` SEQ equation [\* fmt] ` with the rendered numeral cached | same | C2: literal number / C3: ` SEQ ` field |
 | `#image` (raster) | `w:drawing` + `wp:inline` + `a:blip` (`pic:pic`) | same | same |
-| `#image` (SVG) | `mc:AlternateContent`: `asvg:svgBlip` (Choice) + PNG `a:blip` (Fallback) | PNG bytes only + `"vector-image"` | full AlternateContent |
+| `#image` (SVG) | PNG `a:blip/@r:embed` with `a:extLst/a:ext/asvg:svgBlip/@r:embed` pointing to the vector bytes (no `mc:AlternateContent`) | PNG bytes only + `"vector-image"` | PNG base plus SVG extension |
 | `image(fit: "cover")` | `a:srcRect` l/t/r/b derived from the measured clip window; the declared box stays the `wp:extent` and the full bytes stay embedded | same | same |
 | `image(fit: "contain"/"stretch")` | fit aspect dropped; display size still comes from the measured frame | + `"image-fit"` | silently dropped |
 | `block(clip: true)`/`box(clip:)` + negative `inset:` | `a:srcRect` l/t/r/b from the clip window vs the image bounds (composes with a cover fit) | same | same |
-| `image(alt:)` | `wp:docPr descr` from the alt text | + `"image-alt"` (dropped) | same |
+| `image(alt:)` | Inline pictures carry `wp:docPr/@descr` from the alt text | + `"image-alt"` (dropped) | `descr` on inline pictures |
 | PDF image source | skipped + `"pdf-image"` (all levels — the IR path has no rasterizer; the legacy path rasterizes PDF pages) | same | same |
 
 ## Footnotes
@@ -147,7 +136,7 @@ flowchart LR
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
 | `#footnote` | real `w:footnote` part + `w:footnoteRef` marker style + `w:footnoteReference` | same | same |
-| decimal numbering | `w:numFmt decimal` in `w:footnotePr` | same | same |
+| decimal numbering | Default decimal `w:footnotePr` numbering (writer omits `w:numFmt`) | same | same |
 | circled (`①`) numbering | `w:numFmt decimalEnclosedCircle` | same | same |
 | `counter(footnote).update(0)` in a page header | `w:numRestart eachPage` | same | same |
 | unsupported numbering pattern (e.g. `(n)`) | literal marker text + `"footnote-numbering"` | literal + report | footnote still emitted with decimal/`numFmt` numbering — the custom marker silently becomes decimal |
@@ -159,9 +148,9 @@ flowchart LR
 
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
-| `#bibliography` | `w:sdt` + `w:bibliography` gallery + ` BIBLIOGRAPHY ` field wrapping cached entry paragraphs; `customXml/item1.xml` carries the hayagriva metadata Word's field needs | same | same |
-| bibliography entries | collected from the fragment realization (link marker + `BibEntry` pdf-tag body → `bib-N` bookmarks). On the current corpus the entry grid is not surfaced, so the field renders **empty** + `"bibliography-entries"` (all levels; registered gap — see `fallback-registry.md`) | same | same |
-| `@key` / `#cite` | C3: ` CITATION <key> \l 1033 ` complex field with the rendered marker cached (D2 — the marker stays literal at C1/C2; when the target entry bookmark resolved it is wrapped in `w:hyperlink w:anchor`). `customXml/item1.xml` carries the hayagriva metadata at every level | same | C3 emits the field |
+| `#bibliography` | Editable entries; `customXml/item1.xml` carries the source data. When no entry has custom display, C3 adds a block `w:sdt` with the `BIBLIOGRAPHY` field and cached entries. A custom display stays as editable paragraphs + `"bibliography-field"` at C3 rather than being replaced on refresh. | literal paragraphs | C2 literal; C3 field when eligible |
+| bibliography entries | Use semantic bibliography markers and displayed content when available; fall back to styled CSL entries + `"bibliography-display"` if reconstruction fails. Preserve entry bookmarks, links and measured hanging layout where available. Failure to generate or locate the bibliography can report `"bibliography-entries"`. | same | same |
+| `@key` / `#cite` | C3 can wrap the rendered marker in a `CITATION` complex field. A resolved entry bookmark is linked with `w:hyperlink/@w:anchor`; `customXml/item1.xml` carries source metadata. | literal marker | C2 literal; C3 field when eligible |
 | `#cite(form:)` | rendered form literal | same | same |
 
 ## Outlines and cross-references
@@ -171,7 +160,7 @@ flowchart LR
 | `#outline()` | title paragraph + ` TOC \o "1-N" \h \z \u ` complex field | same | same |
 | `outline(target:)` non-heading | title paragraph only (entries unrecoverable) | + `"outline-target"` | silently title-only |
 | `outline(indent:)` custom | TOC field without per-level indent | + `"outline-indent"` | silently dropped |
-| `#link(url)` | `w:hyperlink r:id` / `HYPERLINK` field | same | same |
+| `#link(url)` | `w:fldSimple` `HYPERLINK` for ordinary URLs; `w:hyperlink r:id` with a part-local External relationship for targets requiring URI encoding, or style-preserving links | same | same |
 | `@label` | ` REF <label> \h ` complex field with the rendered text cached | same | same |
 | `@label` with `supplement: auto`/`Page` | ` PAGEREF <label> \h ` | same | same |
 | unresolved label/link target | literal text + `"unresolved-link"` (all levels) | same | same |
@@ -188,18 +177,18 @@ flowchart LR
 |-------|-------|----|-------|
 | `#set page(width/height/margin)` | `w:pgSz` + `w:pgMar`; `flipped` → `w:orient="landscape"` | same | same |
 | `#set page(columns:)` | `w:cols w:num` + `w:cols w:space` (gutter) | same | same |
-| `#set page(header-ascent/footer-descent)` | `w:header`/`w:footer` in `w:pgMar` | same | same |
+| `#set page(header-ascent/footer-descent)` | `w:header`/`w:footer` in each `w:pgMar`; use supplied distances first, otherwise emit the half-inch default. Binding `w:gutter` is zero, independent of column gutter. | same | same |
 | `#set align(horizon/bottom)` page | `w:vAlign` in `w:sectPr` | same | same |
 | `#set page(numbering: "…")` | `w:pgNumType w:fmt` per section; unmappable pattern → `"page-numbering-pattern"` and glyph-based detection (all levels) | same | same |
 | page number restart | `w:pgNumType w:start` when the rendered footer numbering diverges, stamped once on the section that began the restart — `continuous` breaks inside it (`#columns`) keep `w:fmt` without re-initiating `w:start` | same | same |
-| `#set page(header:/footer:)` | `w:headerReference`/`w:footerReference` (default, first, even) + `w:titlePg`/`w:evenAndOddHeaders`; bare page numbers become ` PAGE ` fields inside the generated part. C3: a zone whose whole content is a heading query (`query(selector(heading).before(here()))`, `where(level: N)` picked up) renders as ` STYLEREF "Heading N" ` with the extracted heading text cached; mixed-markup zones stay literal | page-1 zone kept as literal paragraphs + `"header-footer-variant"` | three slots; mid-document variants beyond what the slots express → `"header-footer-variant"` report |
+| `#set page(header:/footer:)` | `w:headerReference`/`w:footerReference` (default, first, even) + `w:titlePg`/`w:evenAndOddHeaders`; generated page-number footer slots contain ` PAGE ` fields. C3 caches the heading query result inside ` STYLEREF "Heading N" `, preserving surrounding literal runs when the query span can be located. | page-1 zone kept; unrepresented variants report `"header-footer-variant"` | three slots; mid-document variants beyond what the slots express → `"header-footer-variant"` report |
 | `#set page(margin: (inside/outside))` two-sided | `w:mirrorMargins` in `settings.xml` when any section declares inside/outside (`two_sided` accumulates over sections); `w:pgMar` left/right are inside/outside | + `"mirrored-margins"`, no flag | flag emitted; a doc mixing inside/outside with one-sided asymmetric margins → `"mirrored-margins"` approximated (the flag is document-global) |
 | `#set page(foreground:/background:)` | `wp:anchor` (never `wp:inline`) inside the default/even/first **header** part selected by the layer's page-variation shape; `positionH`/`positionV` `relativeFrom="page"`; text editable in `wps:txbx`, images as `pic:pic`, solid rects as `a:solidFill` shapes; background units get `behindDoc="1"`, foreground `behindDoc="0"` | furniture text literalized into the header part + `"page-foreground"` | anchored; transformed/clipped groups keep their content but lose the transform + `"page-foreground"`; unrepresentable per-page variation keeps page 1's layer on `first` + `"page-foreground"` approximated |
 | `page(fill:)` solid | full-page `wp:anchor` `a:solidFill` shape, `behindDoc="1"`, in the default header part | + `"page-foreground"` literalized | non-solid fills → `"page-foreground"` skipped |
 | `#place` inside the header/footer zones | `wp:anchor` paragraph in the same header/footer part (`relativeFrom="page"`), coexisting with the zone's literal/field paragraphs | + `"placed-content"` | anchored in the zone part |
-| `#set document(title/author/description/keywords/date)` | `docProps/core.xml` (`dc:title`, `dc:creator`, `dc:subject`, `cp:keywords`, `dcterms:created`); title falls back to the first heading | same | same |
+| `#set document(title/author/description/keywords/date)` | `docProps/core.xml` (`dc:title`, `dc:creator`, `dc:description`, `cp:keywords`, `dcterms:created`); title falls back to the first heading | same | same |
 | `context document.<field>` reads | C3: ` DOCPROPERTY <name> ` with the rendered text cached — `title`→`Title`, `author`→`Author`, `keywords`→`Keywords`, `description`→`Comments`, `date`→`CreateDate`; other fields stay literal | same | C3 emits the field |
-| `context datetime.today()`/`now()` (any display form) | C3: ` DATE `/` TIME ` with the rendered text cached — an explicit `.display(format)` keeps its rendered text as the cached result; the field carries no `\@` switch | same | C3 emits the field |
+| `context datetime.today()` | C3: ` DATE ` with the rendered text cached and a `\@` switch for a representable explicit format; unmappable/computed formats report `date-format-switch` | literal | C3 emits the field |
 
 ## Sections, breaks, placement
 
@@ -219,18 +208,16 @@ flowchart LR
 
 | Typst | OOXML | C1 | C2/C3 |
 |-------|-------|----|-------|
-| `#rect`/`#square`/`#ellipse`/`#circle`/`#polygon`/`#curve`/`#path` | `wp:inline` + `wps:wsp` drawing: `prstGeom` (`rect`/`roundRect`/`round1Rect`/`round2SameRect`/`round2DiagRect`/`ellipse`) or `a:custGeom` (polygon/curve paths, quads → cubics), solid fill → `a:solidFill`, stroke → `a:ln` (width/cap/join/`custDash`), body in editable `wps:txbx` | body text + `"shape"` report | drawn; unrepresentable pieces report `"shape"` Approximated; unresolvable geometry falls back to `w:shd`-shaded body |
-| `#line` horizontal (only `length`) | paragraph `w:pBdr` bottom border | same | same |
-| `#line` angled/vertical | `wp:inline` + `wps:wsp` — corner-to-corner → `prstGeom prst="line"` + `a:xfrm` flips, otherwise a two-point `a:custGeom` | + `"shape"` | drawn |
+| `#rect`/`#square`/`#ellipse`/`#circle`/`#polygon`/`#curve`/`#path` | `wp:inline` + `wps:wsp` drawing: `prstGeom` (`rect`/`roundRect`/`round1Rect`/`round2SameRect`/`round2DiagRect`/`ellipse`) or `a:custGeom` (polygon/curve paths, quads → cubics), solid fill → `a:solidFill`, stroke → `a:ln` (width/cap/join/`custDash`; [compound line syntax](spec-ecma376/drawing.md#line-properties)), body in editable `wps:txbx` | body text + `"shape"` report | drawn; unrepresentable pieces report `"shape"` Approximated; unresolvable geometry falls back to `w:shd`-shaded body |
+| Default full-width horizontal `#line` in ordinary flow | paragraph `w:pBdr` bottom border | same | same |
+| Other `#line` (short, offset, styled, angled, vertical, or measured in a stack) | `wp:inline` + `wps:wsp` — preset `line` + `a:xfrm` flips or `a:custGeom`; compatible lines in a stack can share one shape with separate subpaths, preserving their spacing | skipped + `"shape"` | drawn, with `"shape"` for detected losses |
 | `#move`/`#rotate`/`#scale`/`#skew` | content kept, transform dropped + `"moved-content"` / `"rotated-content"` / `"scaled-content"` / `"skewed-content"` (all levels) | same | same |
 | `#hide` | content and its space dropped + `"hidden-content"` (all levels) | same | same |
 | `#box`/`#block` width/baseline/fill/stroke | `"box-width"`/`"box-baseline"`/`"box-decoration"`/`"block-width"`/`"block-decoration"` (all levels); body kept | same | same |
-| `#pad` | padding dropped, body kept | same | same |
+| `#pad` | non-negative absolute/em horizontal insets → paragraph `w:ind`; top/bottom insets → first/last paragraph `w:spacing` before/after; the inherited weak paragraph gap is retained unless an explicit outer `block(below:)` replaces it; negative or ratio components and padding around non-paragraph bodies remain unrepresented | same | same |
 | `#repeat`/`#layout`/`#state`/`#counter` displays / `#context` | literalized where the rendered text is available + `"context-content"`/`"layouter-body"`/`"page-counter-value"`; otherwise dropped | same | same |
 
-## Design rulings that constrain the code
-
-Carried over from the retired `compat-modes.md`; still binding.
+## Output rules
 
 **C1 skip semantics.** "Skip" means skip the unsupported *aspect*, never the
 whole element when something expressible remains: S1 drop the property, keep
@@ -247,11 +234,8 @@ is additive — removing it leaves valid content, not an empty shell; no fake
 semantics (literal numbers are text, not `w:numPr`); when a trick cannot be
 measured it falls back to the C1 form plus a report, never a misplaced trick.
 
-**Layering.** `C3 = C2 + fields`, strictly: C1 ⊂ C2 ⊂ C3 — decided 2026-11-16
-(D1). The acceptance invariant, now enforced by the C3 field layer: a C3
-field's cached result equals the C2 literal output, so disconnecting all
-fields reproduces C2. `w:updateFields` in `settings.xml` is emitted at C3
-only (D5 — implemented with the field layer).
+**Layering.** A C3 field's cached result preserves the corresponding C2
+literal. Only C3 emits `w:updateFields` in `settings.xml`.
 
 **Aspect-level SVG embedding.** The C2 fallback ladder's last resort, when no
 native or shape encoding exists, is embedding the construct as an SVG part
@@ -259,81 +243,8 @@ native or shape encoding exists, is embedding the construct as an SVG part
 the text is no longer in Word's text layer. It must not replace a native
 encoding that exists.
 
-**Citations.** C1/C2 output keeps literal markers (+ internal links when
-entries resolve), never `CITATION` fields — the L6/D2 ruling; C3 emits
-` CITATION <key> \l 1033 ` with the literal marker cached (D2, decided when
-the C3 field layer landed).
-
 ## Degradation report
 
-Every conversion returns the document plus a `Vec<Degradation>` — `span`,
-`construct` (stable string for tests), `action` (`skipped` / `literalized` /
-`approximated`), and a human message. `--format json` emits them structured;
-text mode prints them after the output path. Collector-raised constructs
-(`hidden-content`, `moved-content`, `text-edge-metrics`, `highlight-geometry`,
-`h-fr-space`, `context-content`, `page-counter-value`, `footnote-counter-reference`,
-`unresolved-link`, `bibliography-entries`, `footnote-entry-not-found`,
-`grid-column-split`, `table-grid-unresolved`, `box-*`,
-`unoutlined-heading`, `placed-content` for non-float placement, …) fire at
-every level; the C1-specific gate adds `grid-layout`, `vector-image`,
-`image-fit`, `image-alt`, `list-marker`, `enum-numbering`,
-`table-cell-fill`, `table-gutter`, `shape`, `page-foreground`,
-`section-break`, `header-footer-variant`, `mirrored-margins`,
-`page-numbering-change`, `footnote-numbering`, `outline-target`,
-`outline-indent`, `figure-placement`, `show-*-rule` and the
-source-AST-set-rule reports. The C3 field layer adds
-`page-counter-final` — a ` NUMPAGES ` cached result the field cannot
-refresh to (physical page count vs final logical number after a restart).
-
-## Open items
-
-Recorded here so future C3 work and known gaps have one permanent home; the
-per-feature *degradation* list above is exhaustive.
-
-- **C3 field layer — remainder.** The layer landed: `w:updateFields`,
-  `NUMPAGES`/`PAGE`/`PAGEREF` with paged-compile cached values, `NOTEREF` +
-  footnote bookmark, `DATE`/`DOCPROPERTY` with `\@` picture switches
-  (unmappable or computed patterns emit bare fields +
-  `date-format-switch`), `SEQ` (figure/table/equation captions — the guard
-  is the rendered numeral's arity — and flat literal enums as `SEQ enum-N`),
-  `STYLEREF` for heading-query page zones (the query-result span is spliced
-  out of zones mixing the query with literal markup, in headers and
-  footers), `CITATION` + the pre-existing `customXml` sources part, and the
-  `HYPERLINK` field form (`w:fldSimple`, already emitted at every level).
-  What it deliberately does not cover:
-  - `SECTIONPAGES` — Typst has no per-section total-page construct;
-    `counter(page).final()` is always whole-document, so ` NUMPAGES ` is the
-    only faithful mapping.
-  - `TIME` — `datetime.now()` does not exist in Typst 0.15, so no source
-    expression can feed it; the mapping lands if Typst adds one.
-  - `SEQ` for nested or reversed literal enums, per-item `number:`
-    overrides, and rendered numerals with genuinely multiple pieces —
-    stays literal + `enum-seq-nested`/`enum-seq-override`/
-    `enum-seq-numeral`/`enum-reversed`/`seq-multi-piece`.
-- **`outline(target:)`** non-heading and custom `outline(indent:)` are silently
-  reduced/dropped at C2/C3; only C1 reports them.
-- **Custom `#footnote(numbering:)`** silently falls back to the `numFmt` in
-  effect at C2/C3; only C1 reports it.
-- **Two-sided margins** emit `w:mirrorMargins` at C2/C3 (`w:pgMar` already
-  carries left=inside, right=outside); a document that also carries a
-  one-sided asymmetric margin reports `mirrored-margins` approximated since
-  the flag is document-global. Only C1 reports the flag's absence.
-- **`page(fill:)`/foreground/background** anchor into header parts at C2/C3
-  (solid fills as a full-page shape, furniture units as `wp:anchor` drawings);
-  what Word cannot carry — non-solid fills, transformed/clipped groups,
-  unsupported item kinds, per-physical-page variation — is reported as
-  `page-foreground`. C1 keeps its literalized-text contract.
-- **Bare/angled shapes** draw as `wp:inline` + `wps:wsp` DrawingML at
-  C2/C3 (preset geometry or `a:custGeom` paths); losses Word cannot carry
-  (non-solid paints, per-side strokes, dash phase, even-odd fill,
-  non-zero outset, unresolvable geometry) report `shape` Approximated.
-  Only C1 still drops them with a `shape` report.
-- **Dual `CompatMode`/`Degradation` definitions** in `tydocx-core` and
-  `tydocx-ir` remain to be unified.
-- **Image `alt:`** is never emitted (`wp:docPr descr` is a backlog item at
-  every level); `fit:` contain/stretch is silently dropped at C2/C3 (cover
-  lowers to `a:srcRect`).
-- **Grid row heights** from Typst layout are emitted as `trHeight` only on
-  rows the planner rewrites (timetable-style coalescing/merging); ordinary
-  grid and table rows carry none, so Word reflows them itself. Wide grids
-  split at 63 columns.
+The conversion returns the document and degradations, each with a source span,
+construct, action and message. `--degradation-report <path>` writes the report
+as JSON.

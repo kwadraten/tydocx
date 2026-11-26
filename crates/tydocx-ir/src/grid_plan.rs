@@ -844,7 +844,8 @@ fn lane_widths_twips(
             .map(|band| {
                 track_twips[band[0]..band[1].min(track_twips.len())]
                     .iter()
-                    .sum()
+                    .copied()
+                    .fold(0, u32::saturating_add)
             })
             .collect(),
     )
@@ -1089,6 +1090,17 @@ mod tests {
         let plan = plan_grid(&g, Some(1000));
         let t = &plan.tables[0];
         assert_eq!(t.col_widths_twips, Some(vec![250, 750]));
+    }
+
+    #[test]
+    fn merged_lane_width_saturates() {
+        let g = grid(
+            vec![vec![cell(0, 2, 1)]],
+            vec![IrTrackSize::Auto],
+            vec![IrTrackSize::Fixed(u32::MAX), IrTrackSize::Fixed(1)],
+        );
+        let plan = plan_grid(&g, Some(1200));
+        assert_eq!(plan.tables[0].col_widths_twips, Some(vec![u32::MAX]));
     }
 
     #[test]

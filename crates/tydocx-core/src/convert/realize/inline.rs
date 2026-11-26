@@ -7,9 +7,10 @@ use crate::convert::page::{
 };
 use tydocx_ir::{
     Degradation, DegradationAction, HangingIndent, IrField, IrFirstLineIndent, IrImage, IrInline,
-    IrPageTarget, IrParStyle, IrParagraph,
+    IrLineSpacing, IrPageTarget, IrParStyle, IrParagraph,
 };
 use tydocx_ooxml::document::Alignment;
+use typst::World;
 use typst_library::diag::SourceResult;
 use typst_library::engine::Engine;
 use typst_library::foundations::{
@@ -17,7 +18,7 @@ use typst_library::foundations::{
 };
 use typst_library::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst_library::layout::{
-    Abs, AlignElem, BlockElem, BoxElem, HAlignment, HElem, HideElem, PadElem, Spacing,
+    Abs, AlignElem, BlockElem, BoxElem, HAlignment, HElem, HideElem, Length, PadElem, Spacing,
 };
 use typst_library::math::EquationElem;
 use typst_library::model::{
@@ -26,18 +27,18 @@ use typst_library::model::{
 };
 use typst_library::routines::Pair;
 use typst_library::text::{
-    BottomEdge, BottomEdgeMetric, DecoLine, Lang, LinebreakElem, Region, SmartQuoteElem,
-    SmartQuoter, SmartQuotes, SpaceElem, TextElem, TopEdge, TopEdgeMetric,
+    BottomEdge, BottomEdgeMetric, DecoLine, FontBook, Lang, LinebreakElem, Region, SmartQuoteElem,
+    SmartQuoter, SmartQuotes, SpaceElem, TextEdgeBounds, TextElem, TopEdge, TopEdgeMetric,
 };
-use typst_library::visualize::{ImageElem, ImageFit, ImageKind};
+use typst_library::visualize::{ImageElem, ImageFit, ImageKind, Stroke};
 use typst_syntax::Source;
 use typst_syntax::Span;
 
 use super::collect::{block_body_content, shape_fill_hex, shape_parts, transparent_container_body};
 use super::shape::resolve_shape;
-use super::style::{StyleDefaults, lower_runs_match, run_from_styles};
+use super::style::{StyleDefaults, lower_runs_match, run_from_styles, runs_from_styles};
 use super::with_fragment;
-use crate::convert::image::hash_bytes;
+use crate::convert::image::{hash_bytes, image_source_key};
 use crate::convert::table_align::paint_to_shd_hex;
 
 /// A footnote seen in the pair stream: its location (matched against the
@@ -51,6 +52,7 @@ pub struct FootnoteMarker {
 
 pub struct InlineCtx<'a> {
     pub defaults: &'a StyleDefaults,
+    pub normal_par_layout: ParLayout,
     pub quoter: SmartQuoter,
     pub prev_char: Option<char>,
     pub label_map: &'a HashMap<Location, String>,
@@ -95,33 +97,7 @@ pub fn collect_inlines(
         content,
         styles,
         |engine, locator, pairs| {
-            let mut depth = 0usize;
-            let mut capture_at: Option<usize> = None;
-            for (content, _) in pairs {
-                let Some(tagged) = content.to_packed::<TagElem>() else {
-                    continue;
-                };
-                match &tagged.tag {
-                    Tag::Start(inner, _) => {
-                        if inner.to_packed::<CiteGroup>().is_some() && capture_at.is_none() {
-                            capture_at = Some(depth + 1);
-                        }
-                        if capture_at.is_some() {
-                            ctx.fragment_tags.push((tagged.tag.clone(), ctx.pair_index));
-                        }
-                        depth += 1;
-                    }
-                    Tag::End(..) => {
-                        if capture_at.is_some() {
-                            ctx.fragment_tags.push((tagged.tag.clone(), ctx.pair_index));
-                        }
-                        if capture_at == Some(depth) {
-                            capture_at = None;
-                        }
-                        depth = depth.saturating_sub(1);
-                    }
-                }
-            }
+            capture_cite_tags(pairs, ctx);
             ctx.scoped_par = ctx.scoped_par.or_else(|| {
                 pairs
                     .iter()
@@ -133,7 +109,37 @@ pub fn collect_inlines(
     )
 }
 
-fn collect_fragment_inlines(
+fn capture_cite_tags(pairs: &[Pair<'_>], ctx: &mut InlineCtx<'_>) {
+    let mut depth = 0usize;
+    let mut capture_at: Option<usize> = None;
+    for (content, _) in pairs {
+        let Some(tagged) = content.to_packed::<TagElem>() else {
+            continue;
+        };
+        match &tagged.tag {
+            Tag::Start(inner, _) => {
+                if inner.to_packed::<CiteGroup>().is_some() && capture_at.is_none() {
+                    capture_at = Some(depth + 1);
+                }
+                if capture_at.is_some() {
+                    ctx.fragment_tags.push((tagged.tag.clone(), ctx.pair_index));
+                }
+                depth += 1;
+            }
+            Tag::End(..) => {
+                if capture_at.is_some() {
+                    ctx.fragment_tags.push((tagged.tag.clone(), ctx.pair_index));
+                }
+                if capture_at == Some(depth) {
+                    capture_at = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+        }
+    }
+}
+
+pub(super) fn collect_fragment_inlines(
     pairs: &[Pair<'_>],
     engine: &mut Engine,
     locator: &mut SplitLocator,
@@ -158,12 +164,26 @@ fn collect_fragment_inlines(
             continue;
         }
         if let Some(text) = content.to_packed::<TextElem>() {
-            push_text(&mut out, &text.text, styles, Some(content.span()), ctx);
+            push_text(
+                &mut out,
+                &text.text,
+                styles,
+                Some(content.span()),
+                ctx,
+                engine.world.book(),
+            );
             i += 1;
             continue;
         }
         if let Some(sq) = content.to_packed::<SmartQuoteElem>() {
-            push_smartquote(sq, styles, content.span(), ctx, &mut out);
+            push_smartquote(
+                sq,
+                styles,
+                content.span(),
+                ctx,
+                &mut out,
+                engine.world.book(),
+            );
             i += 1;
             continue;
         }
@@ -302,7 +322,7 @@ fn push_tracked_space(
         out.push(IrInline::Text(run));
         ctx.prev_char = Some(' ');
     } else {
-        report_spacing_gap(&h.amount, true, span, ctx.degradations);
+        report_spacing_gap(&h.amount, styles, true, span, ctx.degradations);
     }
 }
 
@@ -311,6 +331,7 @@ fn push_tracked_space(
 /// (`h(50%)`/`v(25%)`), and negative space.
 pub(crate) fn report_spacing_gap(
     amount: &Spacing,
+    styles: StyleChain<'_>,
     horizontal: bool,
     span: Span,
     degradations: &mut Vec<Degradation>,
@@ -330,7 +351,7 @@ pub(crate) fn report_spacing_gap(
             },
             "an fr flex space is dropped; it has no fixed-size OOXML equivalent",
         ),
-        Spacing::Rel(rel) if rel.abs.abs < Abs::zero() => (
+        Spacing::Rel(rel) if rel.abs.at(styles.resolve(TextElem::size)) < Abs::zero() => (
             if horizontal {
                 "h-negative-space"
             } else {
@@ -428,18 +449,18 @@ fn push_smartquote(
     span: Span,
     ctx: &mut InlineCtx<'_>,
     out: &mut Vec<IrInline>,
+    book: &FontBook,
 ) {
     let double = sq.double.get(styles);
     let (lang, region) = smart_quotes_for(styles);
     let quotes = SmartQuotes::get(&Smart::Auto, lang, region, false);
     let quote = ctx.quoter.quote(ctx.prev_char, &quotes, double).to_string();
     ctx.prev_char = quote.chars().next_back();
-    out.push(IrInline::Text(run_from_styles(
-        &quote,
-        styles,
-        ctx.defaults,
-        Some(span),
-    )));
+    out.extend(
+        runs_from_styles(&quote, styles, ctx.defaults, Some(span), book)
+            .into_iter()
+            .map(IrInline::Text),
+    );
 }
 
 fn push_image_inline(
@@ -793,6 +814,7 @@ fn handle_tag_start(
         });
         let mut body_ctx = InlineCtx {
             defaults: ctx.defaults,
+            normal_par_layout: ctx.normal_par_layout,
             quoter: SmartQuoter::new(),
             prev_char: None,
             label_map: ctx.label_map,
@@ -878,7 +900,9 @@ fn handle_tag_start(
     }
     if let Some(reference) = inner.to_packed::<RefElem>() {
         let target_label = reference.target.resolve().to_string();
-        if !ctx.label_map.values().any(|label| label == &target_label) {
+        let resolved_target = reference.element.as_ref().and_then(Option::as_ref);
+        if resolved_target.is_none() && !ctx.label_map.values().any(|label| label == &target_label)
+        {
             let end = find_end(pairs, i + 1, location);
             let rendered = ctx
                 .cite_render_map
@@ -894,6 +918,18 @@ fn handle_tag_start(
                 rendered,
                 target,
             });
+            return end + 1;
+        }
+        let end = find_end(pairs, i + 1, location);
+        let group = &pairs[i + 1..end];
+        if group.iter().any(|(content, _)| {
+            content.to_packed::<TagElem>().is_some_and(|tag| {
+                matches!(&tag.tag, Tag::Start(inner, _) if inner.to_packed::<LinkElem>().is_some())
+            })
+        }) {
+            let body = collect_fragment_inlines(group, engine, locator, ctx);
+            ctx.prev_char = Some('\u{FFFC}');
+            out.extend(body);
             return end + 1;
         }
         let display_text = next_marker_text(pairs, i + 1).unwrap_or_default();
@@ -1195,14 +1231,38 @@ fn report_text_aspects(styles: StyleChain<'_>, span: Option<Span>, ctx: &mut Inl
     for decoration in styles.get_cloned(TextElem::deco) {
         match decoration.line {
             DecoLine::Underline {
-                offset: Smart::Custom(_),
-                ..
-            } => degrade_once(
-                ctx.degradations,
-                span,
-                "underline-offset",
-                "an underline offset is dropped; the underline uses the default position",
-            ),
+                stroke,
+                offset,
+                evade,
+                background,
+            } => {
+                if offset.is_custom() {
+                    degrade_once(
+                        ctx.degradations,
+                        span,
+                        "underline-offset",
+                        "an underline offset is dropped; the underline uses the default position",
+                    );
+                }
+                if stroke != Stroke::default()
+                    || !evade
+                    || background
+                    || decoration.extent != Abs::zero()
+                {
+                    report_text_decoration_loss("underline-style", span, ctx);
+                }
+            }
+            DecoLine::Strikethrough {
+                stroke,
+                offset,
+                background,
+            } if stroke != Stroke::default()
+                || offset.is_custom()
+                || background
+                || decoration.extent != Abs::zero() =>
+            {
+                report_text_decoration_loss("strikethrough-style", span, ctx);
+            }
             DecoLine::Highlight {
                 stroke,
                 top_edge,
@@ -1230,26 +1290,51 @@ fn report_text_aspects(styles: StyleChain<'_>, span: Option<Span>, ctx: &mut Inl
     }
 }
 
+fn report_text_decoration_loss(
+    construct: &'static str,
+    span: Option<Span>,
+    ctx: &mut InlineCtx<'_>,
+) {
+    degrade_once(
+        ctx.degradations,
+        span,
+        construct,
+        "custom decoration stroke, extent, position or layering is not stored; native text decoration is kept",
+    );
+}
+
 fn push_text(
     out: &mut Vec<IrInline>,
     text: &str,
     styles: StyleChain<'_>,
     span: Option<Span>,
     ctx: &mut InlineCtx<'_>,
+    book: &FontBook,
 ) {
     if text.is_empty() {
         return;
     }
     report_text_aspects(styles, span, ctx);
-    let run = run_from_styles(text, styles, ctx.defaults, span);
-    ctx.prev_char = run.text.chars().next_back();
-    if let Some(IrInline::Text(prev)) = out.last_mut()
-        && lower_runs_match(prev, &run)
-    {
-        prev.text.push_str(&run.text);
-        return;
+    for chunk in text.split_inclusive('\n') {
+        let line_end = chunk.strip_suffix('\n');
+        let line = line_end.map_or(chunk, |s| s.strip_suffix('\r').unwrap_or(s));
+        if !line.is_empty() {
+            for run in runs_from_styles(line, styles, ctx.defaults, span, book) {
+                ctx.prev_char = run.text.chars().next_back();
+                if let Some(IrInline::Text(prev)) = out.last_mut()
+                    && lower_runs_match(prev, &run)
+                {
+                    prev.text.push_str(&run.text);
+                } else {
+                    out.push(IrInline::Text(run));
+                }
+            }
+        }
+        if line_end.is_some() {
+            out.push(IrInline::LineBreak { justify: false });
+            ctx.prev_char = Some('\n');
+        }
     }
-    out.push(IrInline::Text(run));
 }
 
 pub(crate) fn image_inline(
@@ -1298,7 +1383,7 @@ pub(crate) fn image_inline(
     };
     Some(IrInline::Image(IrImage {
         bytes,
-        source_hash,
+        source_hash: image_source_key(image, styles, source_hash),
         width_emu: 0,
         height_emu: 0,
         mime,
@@ -1363,20 +1448,140 @@ fn rasterize_svg(bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn collect_paragraph(
-    content: &Content,
+    par: &Packed<ParElem>,
     styles: StyleChain<'_>,
     engine: &mut Engine,
     locator: &mut SplitLocator,
     ctx: &mut InlineCtx<'_>,
 ) -> SourceResult<IrParagraph> {
-    let inlines = collect_inlines(content, styles, engine, locator, ctx)?;
-    Ok(IrParagraph {
-        inlines,
+    with_fragment(
+        engine,
+        locator,
+        &par.body,
+        styles,
+        |engine, locator, pairs| {
+            Ok(collect_inline_paragraph(
+                pairs,
+                styles,
+                Some(par),
+                engine,
+                locator,
+                ctx,
+            ))
+        },
+    )
+}
+
+pub(super) fn collect_inline_paragraph(
+    pairs: &[Pair<'_>],
+    styles: StyleChain<'_>,
+    elem: Option<&Packed<ParElem>>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    ctx: &mut InlineCtx<'_>,
+) -> IrParagraph {
+    capture_cite_tags(pairs, ctx);
+    let mut par = par_style_from_styles(styles);
+    let layout = elem.map_or_else(
+        || ParLayout::from_styles(styles),
+        |elem| ParLayout {
+            leading: elem.leading.get(styles),
+            spacing: elem.spacing.get(styles),
+        },
+    );
+    if layout != ctx.normal_par_layout {
+        layout.apply(&mut par, styles, pairs, engine);
+    }
+    IrParagraph {
+        inlines: collect_fragment_inlines(pairs, engine, locator, ctx),
         alignment: alignment_from_styles(styles),
-        par: par_style_from_styles(styles),
+        par,
         hanging_indent: hanging_indent_from_styles(styles),
         ..IrParagraph::default()
-    })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct ParLayout {
+    leading: Length,
+    spacing: Length,
+}
+
+impl ParLayout {
+    pub(super) fn from_styles(styles: StyleChain<'_>) -> Self {
+        Self {
+            leading: styles.get(ParElem::leading),
+            spacing: styles.get(ParElem::spacing),
+        }
+    }
+
+    fn apply(
+        self,
+        out: &mut IrParStyle,
+        styles: StyleChain<'_>,
+        pairs: &[Pair<'_>],
+        engine: &Engine,
+    ) {
+        let em = styles.resolve(TextElem::size);
+        let leading = self.leading.at(em);
+        out.line_spacing = nominal_line_height(styles, pairs, engine)
+            .map(|height| crate::convert::page::pt_to_twips((leading + height).to_pt()))
+            .map(IrLineSpacing::AtLeast);
+        out.spacing_after = Some(self.spacing_after(em));
+    }
+
+    pub(super) fn spacing_after(self, em: Abs) -> u32 {
+        crate::convert::page::pt_to_twips((self.spacing - self.leading).at(em).to_pt())
+    }
+}
+
+fn nominal_line_height(styles: StyleChain<'_>, pairs: &[Pair<'_>], engine: &Engine) -> Option<Abs> {
+    let em = styles.resolve(TextElem::size);
+    let variant = typst_library::text::variant(styles);
+    let sample = pairs.iter().find_map(|(content, _)| {
+        let text = &content.to_packed::<TextElem>()?.text;
+        text.chars()
+            .find(|c| !c.is_whitespace())
+            .map(|c| (c, text.as_str()))
+    });
+    let book = engine.world.book();
+    let mut families = typst_library::text::families(styles)
+        .filter(|family| {
+            sample.is_none_or(|(c, _)| {
+                family
+                    .covers()
+                    .is_none_or(|pattern| pattern.is_match(c.encode_utf8(&mut [0; 4])))
+            })
+        })
+        .filter_map(|family| book.select(family.as_str(), variant));
+    let matching = families.clone().find(|&index| {
+        sample.is_none_or(|(c, _)| {
+            book.info(index)
+                .is_some_and(|info| info.coverage.contains(u32::from(c)))
+        })
+    });
+    let index = matching
+        .or_else(|| {
+            styles.get(TextElem::fallback).then_some(())?;
+            let like = families.clone().next().and_then(|index| book.info(index));
+            book.select_fallback(like, variant, sample?.1)
+        })
+        .or_else(|| families.next())?;
+    let variations = styles.get_cloned(TextElem::variations);
+    let font = engine
+        .world
+        .font(index)?
+        .instantiate(variant, em, &variations);
+    let bounds = sample
+        .and_then(|(c, _)| font.ttf().glyph_index(c))
+        .map_or(TextEdgeBounds::Zero, |glyph| TextEdgeBounds::Glyph(glyph.0));
+    let (top, bottom) = font.edges(
+        styles.get(TextElem::top_edge),
+        styles.get(TextElem::bottom_edge),
+        em,
+        bounds,
+    );
+    Some(top.max(Abs::zero()) + bottom.max(Abs::zero()))
 }
 
 /// `par` settings resolved on the element's own `StyleChain` — the values
@@ -1399,6 +1604,7 @@ pub(crate) fn par_style_from_styles(styles: StyleChain<'_>) -> IrParStyle {
     IrParStyle {
         first_line_indent: Some(IrFirstLineIndent { twips, chars }),
         justify: Some(styles.get(ParElem::justify)),
+        ..IrParStyle::default()
     }
 }
 
@@ -1422,6 +1628,9 @@ pub(crate) fn spacing_twips(amount: &Spacing, styles: StyleChain<'_>) -> Option<
     let Spacing::Rel(rel) = amount else {
         return None;
     };
+    if rel.rel != typst_library::layout::Ratio::zero() {
+        return None;
+    }
     let abs = rel.abs.at(styles.resolve(TextElem::size));
     if abs <= Abs::zero() {
         return None;

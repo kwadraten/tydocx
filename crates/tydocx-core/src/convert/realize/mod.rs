@@ -4,27 +4,33 @@ mod inline;
 mod overline;
 mod patch;
 pub(crate) mod place;
+mod run_sizes;
 mod shape;
 mod style;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use codex::numeral_systems::NamedNumeralSystem;
 use tydocx_ir::{
     CompatMode as IrCompatMode, Degradation as IrDegradation, DegradationAction as IrAction,
-    GeometryInput, IrBlock, IrDocument, IrInline, IrNumeralSystem, IrParagraph, lower,
+    GeometryInput, IrBlock, IrDocument, IrInline, IrParagraph, lower,
 };
-use tydocx_ooxml::document::{Document, FootnoteFormat};
+use tydocx_ooxml::document::{Document, FootnoteFormat, HeaderFooter, SectionFooter};
 use typst::World;
-use typst::diag::{SourceDiagnostic, SourceResult, StrResult};
+use typst::comemo::Track;
+use typst::diag::{At, SourceDiagnostic, SourceResult, StrResult};
 use typst::ecow::{EcoString, EcoVec};
-use typst::engine::Engine;
-use typst::foundations::{Content, Label, Output, Selector, StyleChain, Target};
+use typst::engine::{Engine, Route, Sink};
+use typst::foundations::{Content, Label, Output, Selector, StyleChain, StyledElem, Target};
 use typst::introspection::{
     DocumentPosition, ElementIntrospector, ElementIntrospectorBuilder, Introspector, Location,
     Locator, SplitLocator, Tag, TagElem,
 };
-use typst::model::{DocumentInfo, Numbering};
+use typst::layout::{
+    Axis, BlockBody, BlockElem, ColumnsElem, Dir, HElem, PadElem, PlaceElem, StackChild, StackElem,
+    VElem,
+};
+use typst::math::EquationElem;
+use typst::model::{CiteGroup, DocumentInfo, Numbering, ParElem, ParbreakElem};
 use typst::routines::{Arenas, FragmentKind, Pair, RealizationKind};
 use typst::syntax::{Span, VirtualPath};
 use typst_layout::PagedDocument;
@@ -86,6 +92,7 @@ pub struct DocxDocument {
     /// `CollectorState::two_sided_margins`.
     two_sided_margins: bool,
     section_span: Option<Span>,
+    page_anchors: Vec<(usize, Span)>,
     introspector: ElementIntrospector<DocxPosition>,
 }
 
@@ -122,7 +129,7 @@ impl Output for DocxDocument {
             source,
             content,
         )?;
-        let introspector = build_introspector(&pairs, &state.fragment_tags);
+        let introspector = build_introspector(engine, content, &pairs, &state.fragment_tags);
 
         Ok(Self {
             ir,
@@ -133,6 +140,7 @@ impl Output for DocxDocument {
             chain_overrides: state.chain_overrides,
             two_sided_margins: state.two_sided_margins,
             section_span: state.section_span,
+            page_anchors: state.page_anchors,
             introspector,
         })
     }
@@ -218,24 +226,270 @@ impl Introspector for DocxDocument {
 }
 
 fn build_introspector(
+    engine: &mut Engine,
+    original: &Content,
     pairs: &[Pair<'_>],
     fragment_tags: &[(Tag, usize)],
 ) -> ElementIntrospector<DocxPosition> {
-    let mut builder = ElementIntrospectorBuilder::<DocxPosition>::new();
-    let mut extra: std::collections::BTreeMap<usize, Vec<&Tag>> = std::collections::BTreeMap::new();
+    let mut sink = Sink::new();
+    let mut probe = Engine {
+        sink: sink.track_mut(),
+        route: Route::extend(engine.route.track()).unnested(),
+        ..*engine
+    };
+    let mut feed = DeferredTagFeed::new(original, fragment_tags);
+    let mut locator = Locator::root().split();
+    let mut extra: BTreeMap<usize, Vec<&Tag>> = BTreeMap::new();
     for (tag, index) in fragment_tags {
         extra.entry(*index).or_default().push(tag);
     }
-    for (index, (content, _)) in pairs.iter().enumerate() {
+    for (index, (content, styles)) in pairs.iter().enumerate() {
         let position = DocxPosition { pair: index };
-        collect_nested_tags(content, position, &mut builder);
+        feed.visit(content, *styles, position, &mut probe, &mut locator);
         if let Some(tags) = extra.get(&index) {
             for tag in tags {
-                builder.discover_tag(tag, position);
+                feed.builder.discover_tag(tag, position);
             }
         }
     }
-    builder.finalize()
+    if let Some(error) = feed.recursion_error {
+        engine.sink.delayed_error(error);
+    }
+    feed.builder.finalize()
+}
+
+struct DeferredTagFeed<'a> {
+    builder: ElementIntrospectorBuilder<DocxPosition>,
+    layouters: HashMap<Span, &'a Content>,
+    skipped_cites: HashSet<Location>,
+    suppressed_equations: HashMap<(usize, Span), usize>,
+    skipped_equation_ends: HashSet<Location>,
+    active_fragments: HashSet<u128>,
+    recursion_error: Option<SourceDiagnostic>,
+}
+
+impl<'a> DeferredTagFeed<'a> {
+    fn new(original: &'a Content, fragment_tags: &[(Tag, usize)]) -> Self {
+        let mut layouters = HashMap::new();
+        index_deferred_containers(original, &mut layouters);
+        let mut suppressed_equations = HashMap::new();
+        for (tag, index) in fragment_tags {
+            if let Tag::Start(inner, _) = tag
+                && inner.is::<EquationElem>()
+            {
+                *suppressed_equations
+                    .entry((*index, inner.span()))
+                    .or_insert(0) += 1;
+            }
+        }
+        Self {
+            builder: ElementIntrospectorBuilder::new(),
+            layouters,
+            skipped_cites: HashSet::new(),
+            suppressed_equations,
+            skipped_equation_ends: HashSet::new(),
+            active_fragments: HashSet::new(),
+            recursion_error: None,
+        }
+    }
+
+    fn visit(
+        &mut self,
+        content: &Content,
+        styles: StyleChain<'_>,
+        position: DocxPosition,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) {
+        if let Some(tagged) = content.to_packed::<TagElem>() {
+            if let Tag::Start(inner, _) = &tagged.tag
+                && inner.is::<EquationElem>()
+                && let Some(count) = self
+                    .suppressed_equations
+                    .get_mut(&(position.pair, inner.span()))
+                && *count > 0
+            {
+                *count -= 1;
+                if let Some(location) = inner.location() {
+                    self.skipped_equation_ends.insert(location);
+                }
+                return;
+            }
+            if let Tag::End(location, ..) = &tagged.tag
+                && self.skipped_equation_ends.remove(location)
+            {
+                return;
+            }
+            self.discover_tag(&tagged.tag, position);
+        } else if let Some(styled) = content.to_packed::<StyledElem>() {
+            self.visit(
+                &styled.child,
+                styles.chain(&styled.styles),
+                position,
+                engine,
+                locator,
+            );
+        } else if let Some(par) = content.to_packed::<ParElem>() {
+            self.visit(&par.body, styles, position, engine, locator);
+        } else if let Some(place) = content.to_packed::<PlaceElem>() {
+            self.fragment(&place.body, styles, position, engine, locator);
+        } else if let Some(stack) = content.to_packed::<StackElem>() {
+            let mut locator = stack_locator(locator, content.span());
+            for child in stack_child_bodies(stack, stack.dir.get(styles)) {
+                self.fragment(
+                    &stack_fragment_body(child),
+                    styles,
+                    position,
+                    engine,
+                    &mut locator,
+                );
+            }
+        } else if let Some(block) = content.to_packed::<BlockElem>() {
+            match block.body.get_ref(styles) {
+                Some(BlockBody::Content(body)) => {
+                    self.fragment(body, styles, position, engine, locator);
+                }
+                Some(BlockBody::SingleLayouter(_) | BlockBody::MultiLayouter(_)) => {
+                    if let Some(original) = self.layouters.remove(&content.span()) {
+                        if original.is::<StackElem>() {
+                            self.visit(original, styles, position, engine, locator);
+                        } else {
+                            for child in collect::content_children(original) {
+                                self.fragment(child, styles, position, engine, locator);
+                            }
+                        }
+                        self.layouters.insert(content.span(), original);
+                    }
+                }
+                None => {}
+            }
+        } else {
+            for child in collect::content_children(content) {
+                if !std::ptr::eq(child, content) {
+                    self.visit(child, styles, position, engine, locator);
+                }
+            }
+        }
+    }
+
+    fn fragment(
+        &mut self,
+        body: &Content,
+        styles: StyleChain<'_>,
+        position: DocxPosition,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) {
+        if self.recursion_error.is_some() {
+            return;
+        }
+        let key = typst_utils::hash128(&(body, styles.to_map()));
+        if !self.active_fragments.insert(key) {
+            self.recursion_error = Some(SourceDiagnostic::error(
+                body.span(),
+                "recursive layout reenters the same deferred content",
+            ));
+            return;
+        }
+        engine.route.increase();
+        match engine.route.check_layout_depth().at(body.span()) {
+            Ok(()) => self.realize_fragment(body, styles, position, engine, locator),
+            Err(errors) => self.recursion_error = errors.into_iter().next(),
+        }
+        engine.route.decrease();
+        self.active_fragments.remove(&key);
+    }
+
+    fn realize_fragment(
+        &mut self,
+        body: &Content,
+        styles: StyleChain<'_>,
+        position: DocxPosition,
+        engine: &mut Engine,
+        locator: &mut SplitLocator,
+    ) {
+        let mut kind = FragmentKind::Block;
+        let arenas = Arenas::default();
+        let mut locator = locator.next(&body.span()).split();
+        let route = engine.route.clone();
+        let pairs = match realize(
+            RealizationKind::Fragment { kind: &mut kind },
+            engine,
+            &mut locator,
+            &arenas,
+            body,
+            styles,
+        ) {
+            Ok(pairs) => pairs,
+            Err(errors) => {
+                if engine.route.check_show_depth().is_err() {
+                    self.recursion_error = errors.into_iter().next();
+                }
+                engine.route = route;
+                return;
+            }
+        };
+        for (content, styles) in pairs {
+            self.visit(content, styles, position, engine, &mut locator);
+        }
+    }
+
+    fn discover_tag(&mut self, tag: &Tag, position: DocxPosition) {
+        match tag {
+            Tag::Start(inner, _)
+                if !self.active_fragments.is_empty()
+                    && inner.to_packed::<CiteGroup>().is_some() =>
+            {
+                self.skipped_cites.extend(inner.location());
+            }
+            Tag::End(location, ..) if self.skipped_cites.remove(location) => {}
+            tag => {
+                self.builder.discover_tag(tag, position);
+                if self.active_fragments.is_empty()
+                    && let Tag::Start(inner, _) = tag
+                {
+                    collect_nested_tags(inner, position, &mut self.builder);
+                }
+            }
+        }
+    }
+}
+
+fn stack_locator<'a>(locator: &mut SplitLocator<'a>, span: Span) -> SplitLocator<'a> {
+    locator.next(&("stack", span)).split()
+}
+
+fn stack_child_bodies(stack: &StackElem, dir: Dir) -> impl Iterator<Item = &Content> {
+    stack.children.iter().filter_map(move |child| {
+        let StackChild::Block(body) = child else {
+            return None;
+        };
+        match dir.axis() {
+            Axis::X if body.is::<HElem>() => None,
+            Axis::Y if body.is::<VElem>() => None,
+            _ => Some(body),
+        }
+    })
+}
+
+fn stack_fragment_body(body: &Content) -> Content {
+    (body.clone() + ParbreakElem::shared().clone()).spanned(body.span())
+}
+
+fn index_deferred_containers<'a>(content: &'a Content, layouters: &mut HashMap<Span, &'a Content>) {
+    let span = content.span();
+    if span.id().is_some()
+        && (content.to_packed::<ColumnsElem>().is_some()
+            || content.to_packed::<PadElem>().is_some()
+            || content.to_packed::<StackElem>().is_some())
+    {
+        layouters.entry(span).or_insert(content);
+    }
+    for child in collect::content_children(content) {
+        if !std::ptr::eq(child, content) {
+            index_deferred_containers(child, layouters);
+        }
+    }
 }
 
 /// Layouter bodies hold closures, not content, so only plain `Content`
@@ -245,6 +499,9 @@ fn collect_nested_tags(
     position: DocxPosition,
     builder: &mut ElementIntrospectorBuilder<DocxPosition>,
 ) {
+    if content.is::<BlockElem>() {
+        return;
+    }
     if let Some(tagged) = content.to_packed::<TagElem>() {
         builder.discover_tag(&tagged.tag, position);
         if let Tag::Start(inner, _) = &tagged.tag {
@@ -266,18 +523,30 @@ pub(super) fn with_fragment<R>(
     styles: StyleChain<'_>,
     f: impl FnOnce(&mut Engine, &mut SplitLocator, &[Pair<'_>]) -> SourceResult<R>,
 ) -> SourceResult<R> {
+    let fragment = locator.next(&content.span()).split();
+    with_fragment_at(engine, fragment, content, styles, |engine, _, pairs| {
+        f(engine, locator, pairs)
+    })
+}
+
+fn with_fragment_at<R>(
+    engine: &mut Engine,
+    mut locator: SplitLocator,
+    content: &Content,
+    styles: StyleChain<'_>,
+    f: impl FnOnce(&mut Engine, &mut SplitLocator, &[Pair<'_>]) -> SourceResult<R>,
+) -> SourceResult<R> {
     let mut kind = FragmentKind::Block;
     let frag_arenas = Arenas::default();
-    let mut frag_locator = locator.next(&content.span()).split();
     let pairs = realize(
         RealizationKind::Fragment { kind: &mut kind },
         engine,
-        &mut frag_locator,
+        &mut locator,
         &frag_arenas,
         content,
         styles,
     )?;
-    f(engine, locator, &pairs)
+    f(engine, &mut locator, &pairs)
 }
 
 /// # Errors
@@ -498,6 +767,20 @@ pub fn export_ir_with_ir(
         options.compat,
         &mut degradations,
     );
+    let section_break = !ir.sections.is_empty();
+    if options.compat == CompatMode::C1 {
+        ir.sections.clear();
+    }
+    let section_footer = paged_doc
+        .filter(|_| !ir.sections.is_empty())
+        .and_then(|paged| prepare_numbered_sections(&mut ir, paged, &mut tmp));
+    let numbered_blank_pages = if section_footer.is_some() {
+        paged_doc.map_or_else(BTreeMap::new, |paged| {
+            source_blank_pages(&ir, &docx_doc.page_anchors, paged)
+        })
+    } else {
+        BTreeMap::new()
+    };
     apply_headers_and_footers(
         paged_doc,
         world,
@@ -505,21 +788,12 @@ pub fn export_ir_with_ir(
         options.compat,
         &mut degradations,
         &place::place_location_hashes(&ir.body),
+        section_footer,
     );
-    let section_break = !ir.sections.is_empty();
-    if options.compat == CompatMode::C1 {
-        ir.sections.clear();
-    }
     if ir.sections.is_empty() {
         ir.page = tmp.page_settings.clone();
     }
     ir.style = tmp.style.clone();
-    if !ir.sections.is_empty()
-        && let Some(paged) = paged_doc
-    {
-        assign_numbering_starts(&mut ir.sections, ir.first_numbering, paged);
-    }
-
     if docx_doc.footnote_circled {
         ir.style.footnote_format = FootnoteFormat::CircledNumber;
     }
@@ -532,28 +806,9 @@ pub fn export_ir_with_ir(
         ir.info.title = first_heading_text(&ir);
     }
 
-    let geometry = GeometryInput {
-        page_size: (
-            tmp.page_settings.width_twips,
-            tmp.page_settings.height_twips,
-        ),
-        page_numbering: tmp.page_numbering,
-        page_number_start: tmp.page_number_start,
-        supplement: None,
-        header: tmp.header.clone(),
-        header_even: tmp.header_even.clone(),
-        header_first: tmp.header_first.clone(),
-        footer: tmp.footer.clone(),
-        footer_even: tmp.footer_even.clone(),
-        footer_first: tmp.footer_first.clone(),
-        page_number_footers: tmp.page_number_footers.clone(),
-        even_and_odd_headers: tmp.even_and_odd_headers,
-        mirror_margins: tmp.mirror_margins,
-        title_page: tmp.title_page,
-    };
+    let geometry = geometry_input(tmp, numbered_blank_pages);
 
     if let Some(paged) = paged_doc {
-        patch_outline_page_numbers(&mut ir, paged, &mut degradations);
         let style = ir.style.clone();
         let patch_degradations = patch_document(
             &mut ir,
@@ -579,6 +834,7 @@ pub fn export_ir_with_ir(
     apply_paragraph_formatting(&mut doc);
     canonicalize_font_names(world, &mut doc);
     localize_cjk_fonts(world, &mut doc);
+    run_sizes::strip_redundant(&mut doc);
     coalesce_runs(&mut doc);
 
     if options.compat == CompatMode::C1 {
@@ -594,35 +850,191 @@ pub fn export_ir_with_ir(
     (ConvertOutcome::new(doc, degradations), ir)
 }
 
-fn assign_numbering_starts(
-    sections: &mut [tydocx_ir::IrSection],
-    first_numbering: Option<tydocx_ooxml::document::PageNumberFormat>,
-    paged: &PagedDocument,
-) {
-    let rendered = paged.pages();
-    if rendered.len() < 2 {
-        return;
+fn geometry_input(doc: Document, numbered_blank_pages: BTreeMap<usize, usize>) -> GeometryInput {
+    GeometryInput {
+        page_size: (
+            doc.page_settings.width_twips,
+            doc.page_settings.height_twips,
+        ),
+        page_numbering: doc.page_numbering,
+        page_number_start: doc.page_number_start,
+        supplement: None,
+        header: doc.header,
+        header_even: doc.header_even,
+        header_first: doc.header_first,
+        footer: doc.footer,
+        footer_even: doc.footer_even,
+        footer_first: doc.footer_first,
+        page_number_footers: doc.page_number_footers,
+        even_and_odd_headers: doc.even_and_odd_headers,
+        mirror_margins: doc.mirror_margins,
+        title_page: doc.title_page,
+        numbered_blank_pages,
     }
-    let fmts: Vec<Option<tydocx_ooxml::document::PageNumberFormat>> = rendered
+}
+
+fn prepare_numbered_sections(
+    ir: &mut IrDocument,
+    paged: &PagedDocument,
+    doc: &mut Document,
+) -> Option<HeaderFooter> {
+    let rendered = paged.pages();
+    let first = rendered.first()?;
+    let formats: Vec<_> = rendered
         .iter()
         .map(|p| page::numbering_page_format(p.numbering.as_ref()))
         .collect();
-    let mut prev_fmt = first_numbering;
-    let mut scan_from = 1_usize;
-    for section in sections.iter_mut() {
-        if let Some(fmt) = section.numbering
-            && Some(fmt) != prev_fmt
-            && let Some(index) = (scan_from..rendered.len()).find(|&i| fmts[i] == Some(fmt))
+    let footers = rendered
+        .iter()
+        .map(page::numbered_footer)
+        .collect::<Result<Vec<_>, _>>()
+        .ok();
+    let first_footer = footers.as_ref().and_then(|all| all.iter().flatten().next());
+    let footer_at = |index: usize| footers.as_ref().and_then(|all| all[index].as_ref());
+    let show_footer = |fmt, settings: &_| fmt && *settings != SectionFooter::Omitted;
+    let mut previous = (
+        ir.first_numbering,
+        show_footer(ir.first_numbering.is_some(), &ir.page.footer_reference),
+    );
+    if ir.first_numbering.is_some() && first.number != 1 {
+        doc.page_number_start = u32::try_from(first.number).ok();
+    }
+    let mut index = 0;
+    let mut seen_footer = false;
+    if first_footer.is_some() {
+        set_section_footer(
+            &mut ir.page,
+            footer_at(index).map(|f| f.distance),
+            &mut seen_footer,
+        );
+    }
+    for section in &mut ir.sections {
+        let target = (
+            section.numbering,
+            show_footer(
+                section.numbering.is_some(),
+                &section.settings.footer_reference,
+            ),
+        );
+        if target != previous
+            && let Some(next) = (index + 1..rendered.len()).find(|&i| {
+                formats[i] == target.0
+                    && (first_footer.is_none() || footer_at(i).is_some() == target.1)
+            })
         {
-            let number = rendered[index].number;
-            let prev_number = rendered[index - 1].number;
-            if number != prev_number + 1 {
+            index = next;
+            let number = rendered[next].number;
+            if section.numbering.is_some()
+                && (previous.0.is_none() || number != rendered[next - 1].number.saturating_add(1))
+            {
                 section.numbering_start = u32::try_from(number).ok();
             }
-            scan_from = index + 1;
         }
-        prev_fmt = section.numbering.or(prev_fmt);
+        if first_footer.is_some() {
+            let distance = if target.1 && formats[index] == target.0 {
+                footer_at(index).map(|f| f.distance)
+            } else {
+                None
+            };
+            set_section_footer(&mut section.settings, distance, &mut seen_footer);
+        } else {
+            section.settings.footer_reference = SectionFooter::Shared;
+        }
+        previous = target;
     }
+    first_footer.map(|f| f.part.clone())
+}
+
+fn set_section_footer(
+    settings: &mut tydocx_ooxml::document::PageSettings,
+    distance: Option<u32>,
+    seen_footer: &mut bool,
+) {
+    settings.footer_reference = if let Some(distance) = distance {
+        settings.footer_twips = Some(distance);
+        *seen_footer = true;
+        SectionFooter::Shared
+    } else if *seen_footer {
+        SectionFooter::Empty
+    } else {
+        SectionFooter::Omitted
+    };
+}
+
+fn source_blank_pages(
+    ir: &IrDocument,
+    anchors: &[(usize, Span)],
+    paged: &PagedDocument,
+) -> BTreeMap<usize, usize> {
+    let mut spans = HashMap::new();
+    let mut blank = Vec::new();
+    let wanted: HashSet<_> = anchors.iter().map(|&(_, span)| span).collect();
+    for (index, page) in paged.pages().iter().enumerate() {
+        if let Some(body) = page::body_spans(&page.frame) {
+            for span in body.into_iter().filter(|s| wanted.contains(s)) {
+                let range = spans.entry(span).or_insert((index, index));
+                range.1 = index;
+            }
+        } else {
+            blank.push(index);
+        }
+    }
+    let mut found = BTreeMap::new();
+    let mut previous = None;
+    for &(block, span) in anchors {
+        let Some(&(start, end)) = spans.get(&span) else {
+            continue;
+        };
+        if blank
+            .get(blank.partition_point(|&p| p < start))
+            .is_some_and(|&p| p < end)
+        {
+            continue;
+        }
+        if let Some((prev_block, prev_page)) = previous
+            && start > prev_page + 1
+            && let Some(boundary) =
+                locate_blank_boundary(ir, prev_block, block, prev_page, start, &blank, paged)
+        {
+            found.insert(boundary, start - prev_page - 1);
+        }
+        if previous.is_none_or(|(_, prev_page)| end >= prev_page) {
+            previous = Some((block, end));
+        }
+    }
+    found
+}
+
+fn locate_blank_boundary(
+    ir: &IrDocument,
+    left: usize,
+    right: usize,
+    first_page: usize,
+    last_page: usize,
+    blank: &[usize],
+    paged: &PagedDocument,
+) -> Option<usize> {
+    let gap = first_page + 1..last_page;
+    if !gap.clone().all(|p| blank.binary_search(&p).is_ok()) {
+        return None;
+    }
+    let blocks = &ir.body[left + 1..right];
+    let parity = blocks
+        .iter()
+        .any(|b| matches!(b, IrBlock::PageBreak { to: Some(_), .. }));
+    if parity && gap.clone().all(|p| paged.pages()[p].numbering.is_none()) {
+        return None;
+    }
+    let explicit_break = blocks
+        .iter()
+        .rposition(|b| matches!(b, IrBlock::PageBreak { .. }))
+        .map(|index| left + 2 + index);
+    let section_start = ir
+        .sections
+        .iter()
+        .rfind(|s| (left + 1..=right).contains(&s.start_block))
+        .map(|s| s.start_block);
+    explicit_break.max(section_start)
 }
 
 fn ir_compat(mode: CompatMode) -> IrCompatMode {
@@ -672,81 +1084,6 @@ fn ir_plain_text(inlines: &[IrInline]) -> String {
         }
     }
     text
-}
-
-/// Render `n` in a `#set page(numbering:)` pattern — `prefix + numeral` per
-/// piece plus the trailing `suffix`. Function numberings and numeral systems
-/// the IR cannot render return `None`.
-fn render_page_number(numbering: &Numbering, n: usize) -> Option<String> {
-    let Numbering::Pattern(pattern) = numbering else {
-        return None;
-    };
-    let mut out = String::new();
-    for (prefix, system) in &pattern.pieces {
-        let system = match system {
-            NamedNumeralSystem::Arabic => IrNumeralSystem::Arabic,
-            NamedNumeralSystem::LowerLatin => IrNumeralSystem::LowerLatin,
-            NamedNumeralSystem::UpperLatin => IrNumeralSystem::UpperLatin,
-            NamedNumeralSystem::LowerRoman => IrNumeralSystem::LowerRoman,
-            NamedNumeralSystem::UpperRoman => IrNumeralSystem::UpperRoman,
-            _ => return None,
-        };
-        out.push_str(prefix);
-        out.push_str(&system.render(n as u64));
-    }
-    out.push_str(&pattern.suffix);
-    Some(out)
-}
-
-/// Fill `IrOutlineEntry.page_number` from the companion `PagedDocument` — the
-/// only representation that knows rendered page positions and the page
-/// numbering format applying at each target. Locations are content hashes
-/// stable across the two compiles. A numbering the pattern renderer cannot
-/// express falls back to decimal digits and is reported — the `PAGEREF`
-/// field still re-renders correctly on update.
-fn patch_outline_page_numbers(
-    ir: &mut IrDocument,
-    paged: &PagedDocument,
-    degradations: &mut Vec<Degradation>,
-) {
-    let mut unrenderable = false;
-    for block in &mut ir.body {
-        let IrBlock::Outline { entries, .. } = block else {
-            continue;
-        };
-        for entry in entries.iter_mut() {
-            if entry.page_number.is_none()
-                && let Some(hash) = entry.page_loc
-            {
-                let location = typst_library::introspection::Location::new(hash);
-                let Some(page) = paged.introspector().page(location) else {
-                    continue;
-                };
-                let formatted = paged
-                    .introspector()
-                    .page_numbering(location)
-                    .and_then(|numbering| {
-                        render_page_number(numbering, page.get()).or_else(|| {
-                            unrenderable = true;
-                            None
-                        })
-                    })
-                    .unwrap_or_else(|| page.get().to_string());
-                entry.page_number = Some(formatted);
-            }
-        }
-    }
-    if unrenderable {
-        degradations.push(Degradation::new(
-            None,
-            "outline-page-number",
-            DegradationAction::Approximated,
-            "a page numbering format not renderable in isolation (a numbering function or \
-             an unsupported numeral system) fell back to decimal digits in the cached TOC \
-             page numbers; a field update re-renders them"
-                .to_string(),
-        ));
-    }
 }
 
 /// Extract the Word style name from a bibliography XSL: Office styles declare
@@ -835,4 +1172,107 @@ fn apply_bibliography_style_option(
              system, at which point a field update re-renders the entries"
         ),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use typst::diag::{FileError, FileResult};
+    use typst::foundations::{Bytes, Datetime, Duration, NativeElement};
+    use typst::introspection::MetadataElem;
+    use typst::syntax::{FileId, Source};
+    use typst::text::{Font, FontBook};
+    use typst::utils::LazyHash;
+    use typst::{Library, LibraryExt};
+
+    struct ProbeWorld {
+        source: Source,
+        book: LazyHash<FontBook>,
+        library: LazyHash<Library>,
+    }
+
+    impl World for ProbeWorld {
+        fn library(&self) -> &LazyHash<Library> {
+            &self.library
+        }
+
+        fn book(&self) -> &LazyHash<FontBook> {
+            &self.book
+        }
+
+        fn main(&self) -> FileId {
+            self.source.id()
+        }
+
+        fn source(&self, id: FileId) -> FileResult<Source> {
+            if id == self.main() {
+                Ok(self.source.clone())
+            } else {
+                Err(FileError::AccessDenied)
+            }
+        }
+
+        fn file(&self, id: FileId) -> FileResult<Bytes> {
+            Ok(Bytes::from_string(self.source(id)?.text().to_owned()))
+        }
+
+        fn font(&self, _: usize) -> Option<Font> {
+            None
+        }
+
+        fn today(&self, _: Option<Duration>) -> Option<Datetime> {
+            None
+        }
+    }
+
+    fn probe_docx(source: &str) -> SourceResult<DocxDocument> {
+        let world = ProbeWorld {
+            source: Source::detached(source),
+            book: LazyHash::new(FontBook::new()),
+            library: LazyHash::new(Library::default()),
+        };
+        typst::compile::<DocxDocument>(&world).output
+    }
+
+    #[test]
+    fn deferred_show_rule_cannot_reenter_the_same_fragment() {
+        // A fresh metadata node has no show-rule guard. The rule only
+        // repeats when another pass opens the generated place's body.
+        let errors = probe_docx(
+            "#show metadata: it => place(top)[#metadata(it.value)]\n#metadata(\"probe\")",
+        )
+        .err()
+        .expect("recursive layout must return a diagnostic, not overflow the stack");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("reenters the same deferred content")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn deferred_show_rules_with_changing_bodies_respect_layout_depth() {
+        // Each recursive body differs, so a repeated-content check alone cannot stop it.
+        let errors =
+            probe_docx("#show metadata: it => place(top)[#metadata(it.value + 1)]\n#metadata(0)")
+                .err()
+                .expect("the layout depth must also bound changing fragments");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("depth exceeded")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn deferred_tag_probe_keeps_distinct_sibling_occurrences() {
+        let docx =
+            probe_docx("#let body = [#metadata(\"probe\")]\n#place(top, body)\n#place(top, body)")
+                .expect("the repeated body in a sibling place is not recursive");
+        let tags = docx.query(&MetadataElem::ELEM.select());
+        assert_eq!(tags.len(), 2, "{tags:?}");
+        assert_ne!(tags[0].location(), tags[1].location());
+    }
 }

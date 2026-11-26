@@ -378,9 +378,11 @@ pub enum ShapePathSeg {
 pub struct ShapeStroke {
     /// `a:ln@w` — the stroke thickness in EMU.
     pub width_emu: u64,
+    pub compound: ShapeCompound,
     /// Solid stroke colour; `None` = the paint was not a solid colour and
     /// the loss was reported upstream — the writer draws black.
     pub color_hex: Option<String>,
+    pub alpha: Option<u32>,
     /// `a:cap` — the stroke cap.
     pub cap: ShapeCap,
     /// `a:miter`/`a:round`/`a:bevel` — the line join (with the miter limit).
@@ -399,6 +401,16 @@ pub enum ShapeCap {
     Round,
     /// `cap="sq"` — Typst `square`.
     Square,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ShapeCompound {
+    #[default]
+    Single,
+    Double,
+    ThickThin,
+    ThinThick,
+    Triple,
 }
 
 /// The `a:ln` join element.
@@ -465,13 +477,10 @@ pub enum InlineElement {
         bold: bool,
         size_half_pt: Option<u32>,
     },
-    /// An external hyperlink using `fldSimple` with HYPERLINK field code. The
-    /// body holds the link's full inline content — OOXML allows drawings,
-    /// `m:oMath`, tabs, and fields inside a hyperlink, so image/math/tab
-    /// children of a Typst `#link` stay inside it instead of being dropped.
     Hyperlink {
         url: String,
         body: Vec<InlineElement>,
+        preserve_style: bool,
     },
     /// An internal hyperlink (`w:hyperlink w:anchor`) to a bookmark — e.g. a
     /// citation marker linking to its bibliography entry. The runs keep their own
@@ -544,6 +553,13 @@ pub enum EquationNumber {
         display: String,
         suffix: String,
     },
+    Bookmarked {
+        prefix: String,
+        display: String,
+        instruction: Option<String>,
+        suffix: String,
+        bookmarks: Vec<(u32, String)>,
+    },
 }
 
 impl EquationNumber {
@@ -553,6 +569,12 @@ impl EquationNumber {
         match self {
             Self::Text(text) => text.clone(),
             Self::Seq {
+                prefix,
+                display,
+                suffix,
+                ..
+            }
+            | Self::Bookmarked {
                 prefix,
                 display,
                 suffix,
@@ -855,6 +877,8 @@ pub struct Paragraph {
     /// Tab stop positions in twips (e.g., for grid/multi-column recovery).
     /// Emitted as `<w:tabs><w:tab w:val="right" w:pos="..."/></w:tabs>` in `w:pPr`.
     pub tab_stops: Vec<u32>,
+    pub left_tab_stop: Option<u32>,
+    pub break_latin_words: bool,
     /// Override the paragraph's `w:before` spacing (twips).
     /// Used to suppress heading above-spacing at the start of a page/document.
     pub spacing_before: Option<u32>,
@@ -870,6 +894,7 @@ pub struct Paragraph {
     /// Timetable whitespace cells pin 1pt paragraphs so Word does not inflate
     /// empty rows to its minimum.
     pub line_twips: Option<u32>,
+    pub min_line_twips: Option<u32>,
     /// Paragraph shading fill (`w:pPr/w:shd w:fill`), a six-digit hex like
     /// `Run::shading`.
     pub shading: Option<String>,
@@ -1052,13 +1077,18 @@ impl Paragraph {
         self.inlines.push(InlineElement::Hyperlink {
             url,
             body: runs.into_iter().map(InlineElement::Text).collect(),
+            preserve_style: false,
         });
     }
 
     /// Add an external hyperlink whose body is already lowered inlines
     /// (images, math, and tabs inside a `#link` stay inside the hyperlink).
     pub fn add_hyperlink_body(&mut self, url: String, body: Vec<InlineElement>) {
-        self.inlines.push(InlineElement::Hyperlink { url, body });
+        self.inlines.push(InlineElement::Hyperlink {
+            url,
+            body,
+            preserve_style: false,
+        });
     }
 
     /// Add an internal hyperlink to a bookmark `anchor` (e.g. a citation marker
@@ -1138,8 +1168,7 @@ pub struct TableCell {
     /// borders show through; `Some` reproduces the grid's exact stroke
     /// geometry, including `nil` sides.
     pub borders: Option<CellBorders>,
-    /// Zero cell margins (`w:tcMar` 0) so empty timetable rows do not inflate.
-    pub zero_margins: bool,
+    pub margins: Option<TableCellMargins>,
 }
 
 /// Per-side cell borders (`w:tcBorders`).
@@ -1233,7 +1262,7 @@ pub struct TableBorders {
 }
 
 /// Default cell margins for a table (`w:tblCellMar` in `w:tblPr`), in twips.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TableCellMargins {
     pub top: u32,
     pub left: u32,
@@ -1573,6 +1602,7 @@ pub struct PageSettings {
     pub header_twips: Option<u32>,
     /// `<w:pgMar w:footer>` distance (twips) — Typst `page(footer-descent:)`.
     pub footer_twips: Option<u32>,
+    pub footer_reference: SectionFooter,
     /// When set, emit `<w:lnNumType w:distance="…">` — Typst
     /// `par.line(numbering:)` enabled, value = `number-clearance`.
     pub line_number_distance_twips: Option<u32>,
@@ -1593,10 +1623,19 @@ impl Default for PageSettings {
             column_spacing: None,
             header_twips: None,
             footer_twips: None,
+            footer_reference: SectionFooter::Shared,
             line_number_distance_twips: None,
             vertical_align: None,
         }
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SectionFooter {
+    #[default]
+    Shared,
+    Omitted,
+    Empty,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1733,7 +1772,6 @@ pub struct DocumentStyle {
     /// Body font's cap-height ratio (em units). Used to compute line pitch:
     /// `line_pitch = cap_height_ratio × body_size + leading`.
     pub body_cap_height_ratio: f64,
-    /// `#set text(hyphenate: false)` → `w:suppressAutoHyphens` in settings.
     pub suppress_auto_hyphens: bool,
     /// `set footnote.entry(...)` overrides (indent, clearance, gap, separator).
     pub footnote_entry: FootnoteEntryStyle,

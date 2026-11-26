@@ -1,6 +1,7 @@
 use codex::numeral_systems::NamedNumeralSystem;
 use tydocx_ooxml::document::{
-    Alignment, HeaderFooter, PageNumberFormat, PageSettings, Paragraph, Run,
+    Alignment, FirstLineIndent, HeaderFooter, InlineElement, PageNumberFormat, PageSettings,
+    Paragraph, Run,
 };
 use typst::layout::{Frame, FrameItem};
 use typst_layout::PagedDocument;
@@ -1008,6 +1009,131 @@ pub fn detect_multi_format_page_numbering(
         }
     }
     last_fmt
+}
+
+pub(in crate::convert) struct NumberedFooter {
+    pub part: HeaderFooter,
+    pub distance: u32,
+}
+
+pub(in crate::convert) fn body_spans(frame: &Frame) -> Option<Vec<typst::syntax::Span>> {
+    use typst::introspection::Tag;
+    use typst_library::pdf::{ArtifactElem, ArtifactKind};
+
+    let mut artifacts = Vec::new();
+    let mut spans = Vec::new();
+    let mut painted = false;
+    super::super::frames::visit_frame_items(frame, false, &mut |_, item| match item {
+        FrameItem::Tag(Tag::Start(elem, _))
+            if elem.to_packed::<ArtifactElem>().is_some_and(|artifact| {
+                matches!(
+                    artifact.kind.as_option(),
+                    Some(ArtifactKind::Header | ArtifactKind::Footer | ArtifactKind::Background)
+                )
+            }) =>
+        {
+            artifacts.extend(elem.location());
+        }
+        FrameItem::Tag(Tag::End(location, ..)) if artifacts.last() == Some(location) => {
+            artifacts.pop();
+        }
+        FrameItem::Tag(Tag::Start(elem, _)) if artifacts.is_empty() => spans.push(elem.span()),
+        FrameItem::Text(text) if artifacts.is_empty() && !text.text.trim().is_empty() => {
+            painted = true;
+            spans.extend(text.glyphs.iter().map(|glyph| glyph.span.0));
+        }
+        FrameItem::Image(..) | FrameItem::Shape(..) if artifacts.is_empty() => painted = true,
+        _ => {}
+    });
+    painted.then_some(spans)
+}
+
+pub(in crate::convert) fn numbered_footer(
+    page: &typst_layout::Page,
+) -> Result<Option<NumberedFooter>, ()> {
+    use typst::introspection::Tag;
+    use typst_library::pdf::{ArtifactElem, ArtifactKind};
+
+    let mut footer = None;
+    let mut text = None;
+    let mut complex = false;
+    super::super::frames::visit_frame_items(&page.frame, false, &mut |pos, item| match item {
+        FrameItem::Tag(Tag::Start(elem, _))
+            if elem.to_packed::<ArtifactElem>().is_some_and(|artifact| {
+                matches!(artifact.kind.as_option(), Some(ArtifactKind::Footer))
+            }) =>
+        {
+            footer = elem.location();
+        }
+        FrameItem::Tag(Tag::End(location, ..)) if footer == Some(*location) => footer = None,
+        FrameItem::Text(item) if footer.is_some() && !item.text.trim().is_empty() => {
+            complex |= text.replace((pos, item)).is_some();
+        }
+        FrameItem::Image(..) | FrameItem::Shape(..) if footer.is_some() => complex = true,
+        _ => {}
+    });
+    if complex {
+        return Err(());
+    }
+    let Some((pos, text)) = text else {
+        return Ok(None);
+    };
+    let Some(Numbering::Pattern(pattern)) = &page.numbering else {
+        return Err(());
+    };
+    if numbering_page_format(page.numbering.as_ref()).is_none()
+        || pattern
+            .apply(None, &[page.number])
+            .map_err(|_| ())?
+            .as_str()
+            != text.text.trim()
+    {
+        return Err(());
+    }
+    let extent = text.bbox();
+    let center = pos.x + (extent.min.x + extent.max.x) / 2.0;
+    let half_width = page.frame.width() / 2.0;
+    let alignment = if (center - half_width).abs() < half_width * MARGIN_CENTER_TOLERANCE_RATIO {
+        Alignment::Center
+    } else if center > half_width {
+        Alignment::Right
+    } else {
+        Alignment::Left
+    };
+    let distance = page.frame.height() - pos.y + text.font.metrics().descender.at(text.size);
+    Ok(Some(NumberedFooter {
+        part: make_numbered_footer(text, alignment),
+        distance: pt_to_twips(distance.to_pt()),
+    }))
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "rendered font sizes in half-points are small and non-negative"
+)]
+fn make_numbered_footer(
+    text: &typst_library::text::TextItem,
+    alignment: Alignment,
+) -> HeaderFooter {
+    let mut para = Paragraph::new();
+    let size = (text.size.to_pt() * 2.0).round().max(1.0) as u32;
+    para.alignment = Some(alignment);
+    para.mark_size_half_pt = Some(size);
+    para.spacing_before = Some(0);
+    para.spacing_after = Some(0);
+    para.first_line_indent = Some(FirstLineIndent {
+        twips: 0,
+        chars: Some(0),
+    });
+    para.inlines.push(InlineElement::FieldPage {
+        display_text: text.text.trim().to_string(),
+        bold: effective_weight(&text.font) >= 600,
+        size_half_pt: Some(size),
+    });
+    HeaderFooter {
+        paragraphs: vec![para],
+    }
 }
 
 /// Get the numeric value of a page number string for a given format.

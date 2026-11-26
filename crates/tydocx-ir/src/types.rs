@@ -15,6 +15,7 @@ pub struct IrDocument {
     pub page: PageSettings,
     pub style: DocumentStyle,
     pub body: Vec<IrBlock>,
+    pub equation_refs: HashMap<String, (String, Option<String>)>,
     /// Sections after the first, in body order. Each starts at
     /// `start_block` in `body`; the section's own settings end the body
     /// (`w:sectPr`), while earlier sections close via a section break on the
@@ -39,7 +40,7 @@ pub struct IrSection {
     pub start_block: usize,
     /// The section's resolved page settings (`w:pgSz`/`w:pgMar`/`w:cols`).
     pub settings: PageSettings,
-    /// `w:pgNumType w:fmt` for the section (`None` = continue previous).
+    /// `w:pgNumType w:fmt` for the section.
     pub numbering: Option<PageNumberFormat>,
     /// `w:pgNumType w:start` restart (`None` = continue numbering).
     pub numbering_start: Option<u32>,
@@ -142,6 +143,13 @@ pub struct IrShapeGeometry {
     pub stroke: Option<ShapeStroke>,
     /// `wps:bodyPr` insets in EMU positioning the shape's text body.
     pub inset_emu: ShapeInsets,
+    pub cell_rect: Option<IrCellRect>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrCellRect {
+    pub margins: TableCellMargins,
+    pub bottom_border: Option<IrBorder>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -200,6 +208,7 @@ pub enum IrBlock {
     Raw(IrRaw),
     Outline {
         title: Vec<IrInline>,
+        title_bookmark: Option<String>,
         entries: Vec<IrOutlineEntry>,
         depth: u8,
         custom_target: bool,
@@ -353,6 +362,14 @@ pub struct IrParStyle {
     pub first_line_indent: Option<IrFirstLineIndent>,
     /// `par.justify` — `true` = justified (`w:jc both`), `false` = left.
     pub justify: Option<bool>,
+    pub line_spacing: Option<IrLineSpacing>,
+    pub spacing_after: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IrLineSpacing {
+    AtLeast(u32),
+    Exact(u32),
 }
 
 /// `par.first-line-indent` expressed the way OOXML wants it: a twip amount
@@ -779,14 +796,22 @@ pub struct IrEquation {
     pub bookmarks: Vec<String>,
 }
 
-/// A block equation's rendered number. `display` holds the full literal text
-/// the pattern produced (affixes included — "(1)"); `seq` splits the numeral
-/// out of it when the pattern is a single piece in a SEQ-mappable system, so
-/// C3 can field-wrap the numeral while the affixes stay literal.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrEquationNumber {
     pub display: String,
+    pub prefix: String,
+    pub suffix: String,
     pub seq: Option<IrSeqSplit>,
+}
+
+impl IrEquationNumber {
+    #[must_use]
+    pub fn value(&self) -> &str {
+        self.display
+            .strip_prefix(&self.prefix)
+            .and_then(|value| value.strip_suffix(&self.suffix))
+            .unwrap_or(&self.display)
+    }
 }
 
 /// The caption numeral's location inside a figure caption's flattened text —
@@ -839,8 +864,10 @@ pub struct IrOutlineEntry {
 #[derive(Debug, Clone, PartialEq)]
 pub struct IrBibEntry {
     pub bookmark: String,
-    pub marker: Option<String>,
+    pub marker: Option<Vec<IrInline>>,
     pub body: Vec<IrInline>,
+    pub hanging_twips: Option<u32>,
+    pub custom_display: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
