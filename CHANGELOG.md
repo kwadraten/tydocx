@@ -5,6 +5,12 @@ All notable changes to tydocx are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-11-27
+
+- First independently versioned tydocx release. The version series restarts at
+  0.1.0; the earlier entries below document the project's typort ancestry, not
+  prior tydocx releases.
+
 ### Changed
 
 - The project is renamed from typort to tydocx throughout: crates are now
@@ -14,7 +20,9 @@ All notable changes to tydocx are documented here. The format follows
 - Preset schema: the unused `[font]` section is removed (it was parsed but never
   applied). Presets now carry `[journal]`, `[page]`, `[footnote]`.
 
-## [0.2.0] — 2026-09-01
+## Historical upstream development
+
+## typort 0.2.0 — 2026-09-01
 
 Baseline moved from typst 0.14.2 to **typst 0.15.1**. HTML export in 0.15 emits
 MathML equations, groups paragraphs differently, and embeds every image as a
@@ -86,7 +94,7 @@ before. The 0.14 line is no longer supported.
 - Integration tests are split into one module per area under
   `crates/typort-cli/tests/integration/`.
 
-## [0.1.1] — 2026-05-21
+## typort 0.1.1 — 2026-05-21
 
 - Show-rule style recovery (per-run font, size, color, bold, italic from the
   paged rendering) and source-AST parsing for `#set text` / `#set par` /
@@ -96,14 +104,12 @@ before. The 0.14 line is no longer supported.
   headings and TOC, inline box fill, metadata case deduplication.
 - License changed to Apache-2.0.
 
-## [0.1.0]
+## typort 0.1.0
 
 - Initial release: headings, inline formatting, OMML math, tables, lists,
   footnotes, images, code blocks, cross-references, hyperlinks, page/section
   breaks, headers & footers, page numbering, columns, TOC, figure captions, CJK
   typography, document metadata, `@preview` packages.
 
-[Unreleased]: https://github.com/kwadraten/tydocx/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/dianzuan/typort/compare/v0.1.1...v0.2.0
-[0.1.1]: https://github.com/dianzuan/typort/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/dianzuan/typort/releases/tag/v0.1.0
+[Unreleased]: https://github.com/kwadraten/tydocx/commits/main/
+[0.1.0]: https://github.com/kwadraten/tydocx

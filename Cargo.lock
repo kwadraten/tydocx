@@ -2630,7 +2630,7 @@ dependencies = [
 
 [[package]]
 name = "tydocx"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "rayon",
@@ -2646,7 +2646,7 @@ dependencies = [
 
 [[package]]
 name = "tydocx-core"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "base64",
  "codex",
@@ -2674,7 +2674,7 @@ dependencies = [
 
 [[package]]
 name = "tydocx-ir"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "tydocx-ooxml",
  "typst-syntax",
@@ -2682,7 +2682,7 @@ dependencies = [
 
 [[package]]
 name = "tydocx-math"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "codex",
  "quick-xml 0.37.5",
@@ -2693,7 +2693,7 @@ dependencies = [
 
 [[package]]
 name = "tydocx-ooxml"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "quick-xml 0.37.5",
  "typst-syntax",

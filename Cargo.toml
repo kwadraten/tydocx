@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Universal Typst to Word (.docx) converter"
@@ -75,10 +75,10 @@ clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 
 # Internal crates
-tydocx-core = { version = "0.2.0", path = "crates/tydocx-core" }
-tydocx-ir = { version = "0.2.0", path = "crates/tydocx-ir" }
-tydocx-ooxml = { version = "0.2.0", path = "crates/tydocx-ooxml" }
-tydocx-math = { version = "0.2.0", path = "crates/tydocx-math" }
+tydocx-core = { version = "0.1.0", path = "crates/tydocx-core" }
+tydocx-ir = { version = "0.1.0", path = "crates/tydocx-ir" }
+tydocx-ooxml = { version = "0.1.0", path = "crates/tydocx-ooxml" }
+tydocx-math = { version = "0.1.0", path = "crates/tydocx-math" }
 
 # Bibliography — the same version typst-library 0.15 uses, so only one copy
 # resolves (tydocx re-parses .bib/.yaml itself; see convert/bibliography.rs).
