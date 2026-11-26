@@ -43,6 +43,7 @@ pub struct IrSection {
     pub numbering: Option<PageNumberFormat>,
     /// `w:pgNumType w:start` restart (`None` = continue numbering).
     pub numbering_start: Option<u32>,
+    pub start_location: Option<u128>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

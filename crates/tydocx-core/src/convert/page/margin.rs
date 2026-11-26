@@ -324,20 +324,31 @@ pub fn extract_zone_parts(
     declared: Option<PageNumberFormat>,
     maps: Option<&FurnitureMaps>,
 ) -> ZoneParts {
-    let page_count = paged.pages().len();
-    if page_count == 0 {
+    extract_zone_parts_in(paged, zone, margins, declared, maps, 0..paged.pages().len())
+}
+
+pub fn extract_zone_parts_in(
+    paged: &PagedDocument,
+    zone: MarginZone,
+    margins: MarginsPt,
+    declared: Option<PageNumberFormat>,
+    maps: Option<&FurnitureMaps>,
+    page_range: std::ops::Range<usize>,
+) -> ZoneParts {
+    if page_range.is_empty() {
         return ZoneParts::default();
     }
     let furn_at = |i: usize| maps.and_then(|m| m.per_page.get(i));
-    let texts: Vec<String> = (0..page_count)
+    let texts: Vec<String> = page_range
+        .clone()
         .map(|i| zone_text_at(paged, zone, margins, i, furn_at(i)))
         .collect();
     let norm: Vec<String> = texts
         .iter()
         .enumerate()
-        .map(|(i, t)| {
+        .map(|(pos, t)| {
             let mut n = normalize_zone_text_for_comparison(t);
-            if let Some(furn) = furn_at(i) {
+            if let Some(furn) = furn_at(page_range.start + pos) {
                 let sig = super::furniture::zone_sig(furn, zone);
                 if !sig.is_empty() {
                     n.push('\u{1F}');
@@ -353,22 +364,30 @@ pub fn extract_zone_parts(
 
     let first = &norm[0];
     if norm.iter().all(|n| n == first) {
-        let indices: Vec<usize> = (0..page_count.min(3)).collect();
+        let indices: Vec<usize> = (0..norm.len().min(3)).collect();
         return ZoneParts {
             default: extract_margin_zone_on(
                 paged,
                 zone,
                 margins,
                 declared,
-                0,
+                page_range.start,
                 &rest_after(&texts, &indices),
-                furn_at(0),
+                furn_at(page_range.start),
             ),
             ..ZoneParts::default()
         };
     }
 
-    classify_zone_parts(paged, zone, margins, declared, &texts, &norm, maps)
+    classify_zone_parts(
+        paged,
+        zone,
+        margins,
+        declared,
+        page_range.start,
+        (&texts, &norm),
+        maps,
+    )
 }
 
 /// Consecutive same-group pages for page-number verification:
@@ -406,20 +425,21 @@ fn classify_zone_parts(
     zone: MarginZone,
     margins: MarginsPt,
     declared: Option<PageNumberFormat>,
-    texts: &[String],
-    norm: &[String],
+    base: usize,
+    runs: (&[String], &[String]),
     maps: Option<&FurnitureMaps>,
 ) -> ZoneParts {
+    let (texts, norm) = runs;
     let page_count = norm.len();
-    let extract = |index: usize, rest: &[(String, u32)], declared| {
+    let extract = |pos: usize, rest: &[(String, u32)], declared| {
         extract_margin_zone_on(
             paged,
             zone,
             margins,
             declared,
-            index,
+            base + pos,
             rest,
-            maps.and_then(|m| m.per_page.get(index)),
+            maps.and_then(|m| m.per_page.get(base + pos)),
         )
     };
     let first = &norm[0];
@@ -445,15 +465,23 @@ fn classify_zone_parts(
         };
     }
 
-    let odd: Vec<usize> = (0..page_count).step_by(2).collect();
-    let even: Vec<usize> = (1..page_count).step_by(2).collect();
-    let odd_uniform = odd.iter().all(|&i| norm[i] == *first);
+    let odd: Vec<usize> = (0..page_count)
+        .filter(|&pos| (base + pos).is_multiple_of(2))
+        .collect();
+    let even: Vec<usize> = (0..page_count)
+        .filter(|&pos| !(base + pos).is_multiple_of(2))
+        .collect();
+    let odd_uniform = odd.iter().all(|&i| norm[i] == norm[odd[0]]);
     let even_uniform = even.iter().all(|&i| norm[i] == norm[even[0]]);
     if odd_uniform && even_uniform {
-        let default = if norm[0].is_empty() {
+        let default = if norm[odd[0]].is_empty() {
             None
         } else {
-            extract(0, &rest_after(texts, &odd[..odd.len().min(3)]), declared)
+            extract(
+                odd[0],
+                &rest_after(texts, &odd[..odd.len().min(3)]),
+                declared,
+            )
         };
         let declared_even = declared
             .or_else(|| has_page_field(default.as_ref()).then_some(PageNumberFormat::Decimal));
@@ -475,7 +503,10 @@ fn classify_zone_parts(
     }
 
     let indices: Vec<usize> = (0..page_count.min(3)).collect();
-    let differing = norm.iter().position(|n| n != first).map(|i| i + 1);
+    let differing = norm
+        .iter()
+        .position(|n| n != first)
+        .map(|pos| base + pos + 1);
     ZoneParts {
         default: extract(0, &rest_after(texts, &indices), declared),
         unrepresentable_page: differing,

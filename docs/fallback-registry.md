@@ -208,12 +208,19 @@ bodies — now comes from `StyleChain`s or element identity.
   Word numFmt renders parentheses.
 
 ### Header/footer mid-document variants
-- **What:** a margin zone that changes mid-document in a way the three
-  OOXML slots (default/even/first) cannot express — e.g. a new header
-  starting on page 3 — reports `header-footer-variant`. C1 keeps page 1's
-  zone and reports any variant.
-- **Delete when:** per-section `w:headerReference`/`w:footerReference` is
-  emitted (each `IrSection` would carry its zone parts).
+- **What:** the top margin zone is classified per `IrSection` page range
+  (resolved from the section's first located element through the
+  introspector): each section's `w:sectPr` emits `w:headerReference`s to
+  its own header parts — the document-level slots (1–3) for the first
+  section, deduplicated `word/headerN.xml` parts (4+) for later ones; a
+  headerless mid-document section emits an explicit empty part rather than
+  inheriting the previous section's. A zone that still changes
+  mid-section in a way the three OOXML slots cannot express reports
+  `header-footer-variant` naming the section's first page. C1 keeps page
+  1's zone and reports any variant.
+- **Remaining gap:** footers stay document-global (one footer part set
+  shared by every `w:sectPr`), and `w:footerReference` per section needs
+  the same `SectionHeaderSet` treatment footers have not received.
 
 ### Page `foreground:`/`background:` and `page(fill:)`
 - **Current:** at C2/C3 the page-frame furniture zones (background before
@@ -233,9 +240,10 @@ bodies — now comes from `StyleChain`s or element identity.
   not), and item kinds with no anchored representation report
   `page-foreground` remainders. C1 literalizes the furniture text as
   before.
-- **Remaining gap:** mid-document per-physical-page furniture variation
-  has no OOXML slot; a true fix would need per-section furniture parts
-  plus `w:headerReference` sets per section.
+- **Remaining gap:** mid-section per-physical-page furniture variation
+  has no OOXML slot. Default/even anchors propagate to every section's
+  header slots; a true fix for within-section variation would need
+  per-section furniture parts on top of the per-section header parts.
 
 ### Absolute (non-float) `#place`
 - **Current:** a measured non-float place lowers to a `wp:anchor` with

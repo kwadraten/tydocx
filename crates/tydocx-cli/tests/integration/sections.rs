@@ -111,6 +111,68 @@ fn issue_first_page_header_c2_emits_title_pg() {
     );
 }
 
+/// Per-section header parts: each `w:sectPr` references the parts derived
+/// from that section's own pages — the cover section emits no
+/// `w:headerReference` at all, and the two later sections reference their own
+/// `word/headerN.xml` parts (numbered past the document-level slots 1–3).
+/// Revert proof: at bf52fa5 the top zone is classified once over the whole
+/// document, so the cover's empty zone becomes the default and no
+/// `word/headerN.xml` part is emitted at all.
+#[test]
+fn per_section_headers_c2_each_sectpr_references_its_own_header() {
+    let package =
+        fixture_package_with_options("per_section_headers", &ConvertOptions::new(CompatMode::C2));
+    let document = package.part_text("word/document.xml");
+    assert_eq!(
+        document.matches("<w:sectPr").count(),
+        3,
+        "one w:sectPr per page-settings section, got {document:?}"
+    );
+    let sectprs: Vec<&str> = document.split("<w:sectPr").collect();
+    assert!(
+        !sectprs[1].contains("w:headerReference"),
+        "the cover section's sectPr references no header part, got {:?}",
+        sectprs[1]
+    );
+    assert!(
+        sectprs[2].contains(r#"<w:headerReference w:type="default""#),
+        "the abstract section's sectPr references its header, got {:?}",
+        sectprs[2]
+    );
+    assert!(
+        sectprs[3].contains(r#"<w:headerReference w:type="default""#),
+        "the body section's sectPr references its header, got {:?}",
+        sectprs[3]
+    );
+    let abstract_header = package.part_text("word/header4.xml");
+    assert!(
+        abstract_header.contains("Abstract Header"),
+        "the abstract section's part carries its header, got {abstract_header:?}"
+    );
+    let body_header = package.part_text("word/header5.xml");
+    assert!(
+        body_header.contains("Body Header"),
+        "the body section's part carries its header, got {body_header:?}"
+    );
+    let rels = package.part_text("word/_rels/document.xml.rels");
+    assert!(
+        rels.contains("header4.xml") && rels.contains("header5.xml"),
+        "both section header parts are wired into the package, got {rels:?}"
+    );
+}
+
+/// The same document at C1 keeps the single-section contract: one sectPr,
+/// and the variant is still reported rather than silently dropped.
+#[test]
+fn per_section_headers_c1_reports_variant() {
+    let outcome = c1("per_section_headers");
+    assert_has(&outcome, "header-footer-variant");
+    let package =
+        fixture_package_with_options("per_section_headers", &ConvertOptions::new(CompatMode::C1));
+    let xml = package.part_text("word/document.xml");
+    assert_eq!(xml.matches("<w:sectPr").count(), 1, "C1 keeps one section");
+}
+
 #[test]
 fn issue_page_doi_foreground_c1_reports_and_skips_body() {
     let outcome = c1("issue_page_doi_foreground");

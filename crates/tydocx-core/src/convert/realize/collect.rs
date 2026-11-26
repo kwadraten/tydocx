@@ -543,6 +543,8 @@ impl Collector<'_> {
                                 settings: snapshot.to_page_settings(),
                                 numbering: page::numbering_page_format(snapshot.numbering.as_ref()),
                                 numbering_start: None,
+                                start_location: section_start_location(pairs, i)
+                                    .map(typst::introspection::Location::hash),
                             });
                             if self.section_span.is_none() {
                                 let span = content.span();
@@ -3872,6 +3874,37 @@ fn shallow_plain_text_into(content: &Content, out: &mut String) {
             shallow_plain_text_into(child, out);
         }
     }
+}
+
+fn section_start_location(pairs: &[Pair<'_>], start: usize) -> Option<Location> {
+    pairs[start..]
+        .iter()
+        .take_while(|(content, _)| content.to_packed::<PagebreakElem>().is_none())
+        .find_map(|(content, _)| located_in(content))
+}
+
+fn located_in(content: &Content) -> Option<Location> {
+    if let Some(location) = content.location() {
+        return Some(location);
+    }
+    if let Some(tagged) = content.to_packed::<TagElem>() {
+        return match &tagged.tag {
+            Tag::Start(inner, _) => located_in(inner),
+            Tag::End(..) => None,
+        };
+    }
+    if let Some(sequence) = content.to_packed::<SequenceElem>() {
+        return sequence.children.iter().find_map(located_in);
+    }
+    if let Some(styled) = content.to_packed::<StyledElem>() {
+        return located_in(&styled.child);
+    }
+    if let Some(block) = content.to_packed::<BlockElem>()
+        && let Some(Some(BlockBody::Content(body))) = block.body.as_option()
+    {
+        return located_in(body);
+    }
+    None
 }
 
 pub(super) fn content_children(content: &Content) -> Vec<&Content> {

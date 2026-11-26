@@ -221,6 +221,7 @@ pub fn export(
         options.compat,
         &mut degradations,
         &HashSet::new(),
+        None,
     );
 
     // 5. Run post-processing passes.
@@ -350,6 +351,7 @@ fn apply_headers_and_footers(
     compat: CompatMode,
     degradations: &mut Vec<Degradation>,
     body_places: &HashSet<u64, RandomState>,
+    section_ranges: Option<&[std::ops::Range<usize>]>,
 ) {
     // Extract headers and footers first so header/footer text is not
     // misidentified as body content. All margin-zone consumers
@@ -366,28 +368,26 @@ fn apply_headers_and_footers(
         // The declared page-numbering format (from `#set page(numbering:)`,
         // consumed in `apply_source_overrides`) wins over glyph guessing.
         let declared = doc.page_numbering;
-        let mut top =
-            page::extract_zone_parts(paged, page::MarginZone::Top, margins, declared, maps);
+        let ranges: Vec<std::ops::Range<usize>> = match section_ranges {
+            Some(r) if compat != CompatMode::C1 && r.len() > 1 => r.to_vec(),
+            _ => std::iter::once(0..paged.pages().len()).collect(),
+        };
+        let mut tops: Vec<page::ZoneParts> = ranges
+            .iter()
+            .map(|range| {
+                page::extract_zone_parts_in(
+                    paged,
+                    page::MarginZone::Top,
+                    margins,
+                    declared,
+                    maps,
+                    range.clone(),
+                )
+            })
+            .collect();
         let zones = zone_heading_levels(world, compat);
-        // A pure heading-query header is exactly the case `extract_zone_parts`
-        // calls unrepresentable — the STYLEREF field makes it representable.
-        let header_styleref = zones.header.as_ref().is_some_and(|zref| {
-            styleref_zone(&mut top.default, zref, "header", degradations)
-                | styleref_zone(&mut top.even, zref, "header", degradations)
-                | styleref_zone(&mut top.first, zref, "header", degradations)
-        });
-        let header_first_differs = top.title_page;
-        let header_even_differs = top.even_and_odd;
-        doc.even_and_odd_headers |= top.even_and_odd;
-        doc.title_page |= top.title_page;
-        if !header_styleref {
-            report_zone_unrepresentable(&top, "header", compat, degradations);
-        }
-        if doc.header.is_none() {
-            doc.header.clone_from(&top.default);
-        }
-        doc.header_even.clone_from(&top.even);
-        doc.header_first.clone_from(&top.first);
+        apply_top_stylerefs(&mut tops, &ranges, &zones, compat, degradations);
+        let (top, header_differs, section_differs) = install_header_sets(doc, tops);
         // Detect page numbering before extracting footer. If the footer is just
         // a page number, the writer generates a PAGE field footer instead.
         let numbering = page::detect_page_numbering(paged, margins, maps)
@@ -415,7 +415,7 @@ fn apply_headers_and_footers(
             doc.even_and_odd_headers |= parts.even_and_odd;
             doc.title_page |= parts.title_page;
             if !footer_styleref {
-                report_zone_unrepresentable(&parts, "footer", compat, degradations);
+                report_zone_unrepresentable(&parts, "footer", compat, 1, degradations);
             }
             doc.footer.clone_from(&parts.default);
             doc.footer_even.clone_from(&parts.even);
@@ -448,25 +448,78 @@ fn apply_headers_and_footers(
             doc.page_number_footers.even = doc.page_number_footers.default && !footer_even_differs;
         }
         let differs = ZoneDiffers {
-            header: ZoneSlotDiffers {
-                first: header_first_differs,
-                even: header_even_differs,
-            },
+            header: header_differs,
             footer: ZoneSlotDiffers {
                 first: footer_first_differs,
                 even: footer_even_differs,
             },
         };
         propagate_slot_parts(doc, &differs);
+        propagate_section_headers(doc, &section_differs);
         // Furniture anchors ride in after propagation: parts that the
         // first/even slots just cloned also carry the matching anchors.
         if let Some(maps) = furniture_maps {
-            apply_furniture_plan(&maps, doc, &differs, degradations);
+            apply_furniture_plan(&maps, doc, &differs, &section_differs, degradations);
         }
+        blank_section_headers(doc, &ranges);
         if compat == CompatMode::C1 {
             c1_zone_collapse(paged, margins, doc, &top, bottom.as_ref(), degradations);
         }
     }
+}
+
+fn apply_top_stylerefs(
+    tops: &mut [page::ZoneParts],
+    ranges: &[std::ops::Range<usize>],
+    zones: &page::PageZoneHeadings,
+    compat: CompatMode,
+    degradations: &mut Vec<Degradation>,
+) {
+    for (top, range) in tops.iter_mut().zip(ranges) {
+        let header_styleref = zones.header.as_ref().is_some_and(|zref| {
+            styleref_zone(&mut top.default, zref, "header", degradations)
+                | styleref_zone(&mut top.even, zref, "header", degradations)
+                | styleref_zone(&mut top.first, zref, "header", degradations)
+        });
+        if !header_styleref {
+            report_zone_unrepresentable(top, "header", compat, range.start + 1, degradations);
+        }
+    }
+}
+
+fn install_header_sets(
+    doc: &mut Document,
+    tops: Vec<page::ZoneParts>,
+) -> (page::ZoneParts, ZoneSlotDiffers, Vec<ZoneSlotDiffers>) {
+    let mut tops = tops.into_iter();
+    let top = tops.next().unwrap_or_default();
+    let differs = ZoneSlotDiffers {
+        first: top.title_page,
+        even: top.even_and_odd,
+    };
+    doc.even_and_odd_headers |= top.even_and_odd;
+    doc.title_page |= top.title_page;
+    if doc.header.is_none() {
+        doc.header.clone_from(&top.default);
+    }
+    doc.header_even.clone_from(&top.even);
+    doc.header_first.clone_from(&top.first);
+    let mut section_differs = Vec::new();
+    for part in tops {
+        doc.even_and_odd_headers |= part.even_and_odd;
+        doc.section_headers
+            .push(tydocx_ooxml::document::SectionHeaderSet {
+                default: part.default,
+                even: part.even,
+                first: part.first,
+                title_page: part.title_page,
+            });
+        section_differs.push(ZoneSlotDiffers {
+            first: part.title_page,
+            even: part.even_and_odd,
+        });
+    }
+    (top, differs, section_differs)
 }
 
 /// C1 keeps one header and one footer: variants report, even/first parts
@@ -497,6 +550,7 @@ fn c1_zone_collapse(
     doc.header_first = None;
     doc.footer_even = None;
     doc.footer_first = None;
+    doc.section_headers.clear();
     doc.title_page = false;
     doc.even_and_odd_headers = false;
     doc.page_number_footers.even = false;
@@ -540,6 +594,49 @@ struct ZoneDiffers {
     footer: ZoneSlotDiffers,
 }
 
+fn propagate_section_headers(doc: &mut Document, differs: &[ZoneSlotDiffers]) {
+    if !doc.even_and_odd_headers {
+        return;
+    }
+    for (set, differ) in doc.section_headers.iter_mut().zip(differs) {
+        if !differ.even && set.even.is_none() && set.default.is_some() {
+            set.even = set.default.clone();
+        }
+    }
+}
+
+fn blank_section_headers(doc: &mut Document, ranges: &[std::ops::Range<usize>]) {
+    let blank = || {
+        Some(HeaderFooter {
+            paragraphs: vec![Paragraph::new()],
+        })
+    };
+    let mut emit_default = doc.header.is_some();
+    let mut emit_even = doc.header_even.is_some();
+    let mut emit_first = doc.header_first.is_some();
+    for (i, set) in doc.section_headers.iter_mut().enumerate() {
+        let (had_default, had_even, had_first) = (
+            set.default.is_some(),
+            set.even.is_some(),
+            set.first.is_some(),
+        );
+        if ranges.get(i + 1).is_none_or(|r| !r.is_empty()) {
+            if !had_default && emit_default {
+                set.default = blank();
+            }
+            if doc.even_and_odd_headers && !had_even && emit_even {
+                set.even = blank();
+            }
+            if set.title_page && !had_first && emit_first {
+                set.first = blank();
+            }
+        }
+        emit_default |= had_default;
+        emit_even |= had_even;
+        emit_first |= had_first;
+    }
+}
+
 /// Clone the default header/footer parts into the first/even slots that
 /// `title_page`/`even_and_odd_headers` just enabled — never over a slot the
 /// source left different on purpose.
@@ -569,12 +666,14 @@ fn apply_furniture_plan(
     maps: &page::furniture::FurnitureMaps,
     doc: &mut Document,
     differs: &ZoneDiffers,
+    section_differs: &[ZoneSlotDiffers],
     degradations: &mut Vec<Degradation>,
 ) {
     let plan = page::furniture::plan(maps, degradations);
     doc.title_page |= plan.needs_title_page;
     doc.even_and_odd_headers |= plan.needs_even_odd;
     propagate_slot_parts(doc, differs);
+    propagate_section_headers(doc, section_differs);
     page::furniture::attach(&plan, doc);
 }
 
@@ -726,19 +825,27 @@ fn report_zone_unrepresentable(
     parts: &page::ZoneParts,
     zone_name: &str,
     compat: CompatMode,
+    first_page: usize,
     degradations: &mut Vec<Degradation>,
 ) {
     if compat == CompatMode::C1 {
         return;
     }
     if let Some(page_index) = parts.unrepresentable_page {
+        let message = if first_page == 1 {
+            format!(
+                "page {page_index} {zone_name} differs from page 1; only the first page's {zone_name} is kept"
+            )
+        } else {
+            format!(
+                "page {page_index} {zone_name} differs from page {first_page} (its section's first page); only that page's {zone_name} is kept"
+            )
+        };
         degradations.push(Degradation::new(
             None,
             "header-footer-variant",
             DegradationAction::Skipped,
-            format!(
-                "page {page_index} {zone_name} differs from page 1; only the first page's {zone_name} is kept"
-            ),
+            message,
         ));
     }
 }

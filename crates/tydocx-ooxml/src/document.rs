@@ -1606,6 +1606,22 @@ pub struct SectionBreak {
     pub page_numbering: Option<PageNumberFormat>,
     /// `w:pgNumType w:start` restart of the section that ends here.
     pub page_number_start: Option<u32>,
+    pub header_set: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SectionHeaderSet {
+    pub default: Option<HeaderFooter>,
+    pub even: Option<HeaderFooter>,
+    pub first: Option<HeaderFooter>,
+    pub title_page: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HeaderPartRefs {
+    pub default: Option<u8>,
+    pub even: Option<u8>,
+    pub first: Option<u8>,
 }
 
 /// Header or footer content (a sequence of paragraphs).
@@ -1969,6 +1985,7 @@ pub struct Document {
     /// `Continuous` when a `#columns` block's trailing section carries on
     /// mid-page.
     pub final_section_type: Option<SectionBreakType>,
+    pub section_headers: Vec<SectionHeaderSet>,
 }
 
 impl Default for Document {
@@ -2000,6 +2017,7 @@ impl Default for Document {
             bibliography_style_xsl: None,
             update_fields: false,
             final_section_type: None,
+            section_headers: Vec::new(),
         }
     }
 }
@@ -2057,6 +2075,11 @@ impl Document {
         ]
         .into_iter()
         .flatten()
+        .chain(self.section_headers.iter_mut().flat_map(|set| {
+            [&mut set.default, &mut set.even, &mut set.first]
+                .into_iter()
+                .flatten()
+        }))
     }
 
     /// Immutable iterator over every header/footer part that will be serialized.
@@ -2071,6 +2094,61 @@ impl Document {
         ]
         .into_iter()
         .flatten()
+        .chain(
+            self.section_headers
+                .iter()
+                .flat_map(|set| [&set.default, &set.even, &set.first].into_iter().flatten()),
+        )
+    }
+
+    #[must_use]
+    pub fn header_parts(&self) -> Vec<(u8, &HeaderFooter)> {
+        let mut parts: Vec<(u8, &HeaderFooter)> = Vec::new();
+        for (slot, hf) in [
+            (1_u8, &self.header),
+            (2, &self.header_even),
+            (3, &self.header_first),
+        ] {
+            if let Some(hf) = hf {
+                parts.push((slot, hf));
+            }
+        }
+        let mut next = 4_u8;
+        for set in &self.section_headers {
+            for hf in [&set.default, &set.even, &set.first].into_iter().flatten() {
+                if parts.iter().any(|(_, part)| *part == hf) {
+                    continue;
+                }
+                parts.push((next, hf));
+                next = next.saturating_add(1);
+            }
+        }
+        parts
+    }
+
+    #[must_use]
+    pub fn section_header_refs(&self, set: u32) -> HeaderPartRefs {
+        let parts = self.header_parts();
+        let find = |hf: &Option<HeaderFooter>| {
+            hf.as_ref()
+                .and_then(|hf| parts.iter().find(|(_, part)| *part == hf).map(|(n, _)| *n))
+        };
+        let (default, even, first) = if set == 0 {
+            (&self.header, &self.header_even, &self.header_first)
+        } else {
+            match self
+                .section_headers
+                .get(usize::try_from(set).unwrap_or(usize::MAX).saturating_sub(1))
+            {
+                Some(s) => (&s.default, &s.even, &s.first),
+                None => return HeaderPartRefs::default(),
+            }
+        };
+        HeaderPartRefs {
+            default: find(default),
+            even: find(even),
+            first: find(first),
+        }
     }
 
     /// Immutable twin of [`Self::for_each_run_mut`].

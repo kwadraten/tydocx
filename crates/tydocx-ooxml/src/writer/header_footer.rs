@@ -41,6 +41,7 @@ impl<'a> PartCtx<'a> {
             image_counter: &self.image_counter,
             citation_id_counter: shared.citation_id_counter,
             shape_id_counter: shared.shape_id_counter,
+            header_refs: &[],
         }
     }
 }

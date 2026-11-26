@@ -68,6 +68,7 @@ pub struct LowerCtx {
     /// `SEQ` identifiers for literal enums are document-global (`enum-1`,
     /// `enum-2`, …) — allocated in lowering order.
     pub next_enum_seq: u32,
+    pub ambient_header_set: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -142,6 +143,7 @@ pub fn lower(
     // C1 keeps the report-and-no-flag contract for inside/outside margins.
     doc.mirror_margins = geometry.mirror_margins && !compat.is_c1();
     doc.title_page = geometry.title_page;
+    doc.section_headers.clone_from(&geometry.section_headers);
     doc.update_fields = compat.is_c3();
 
     let mut ctx = LowerCtx {
@@ -172,6 +174,7 @@ pub fn lower(
             .filter_map(|f| f.label.clone())
             .collect(),
         next_enum_seq: 0,
+        ambient_header_set: None,
     };
 
     lower_footnotes(ir, compat, &mut doc, &mut ctx);
@@ -257,6 +260,7 @@ fn lower_footnotes(ir: &IrDocument, compat: CompatMode, doc: &mut Document, ctx:
 /// too.
 fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx: &mut LowerCtx) {
     let mut sections = ir.sections.iter().peekable();
+    let per_section_headers = !geometry.section_headers.is_empty();
     let mut state = SectionState {
         settings: ir.page.clone(),
         numbering: if ir.sections.is_empty() {
@@ -266,6 +270,8 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
         },
         numbering_start: geometry.page_number_start,
         start_type: SectionBreakType::NextPage,
+        section_index: 0,
+        header_set: per_section_headers.then_some(0),
     };
     let mut first_break_emitted = false;
     // Once a columns block has run, `state.settings` is the ambient
@@ -278,7 +284,10 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
             if !doc.body.elements.is_empty() {
                 attach_section_break(
                     &mut doc.body.elements,
-                    state.ending_break(!first_break_emitted && geometry.title_page),
+                    state.ending_break(
+                        (state.section_index > 0 || !first_break_emitted)
+                            && section_title_page(geometry, state.section_index),
+                    ),
                     true,
                 );
                 first_break_emitted = true;
@@ -288,7 +297,10 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
             state.numbering = next.numbering.or(state.numbering);
             state.numbering_start = next.numbering_start;
             state.start_type = SectionBreakType::NextPage;
+            state.section_index += 1;
+            state.header_set = per_section_headers.then_some(state.section_index);
         }
+        ctx.ambient_header_set = state.header_set;
         if let IrBlock::Columns {
             count,
             gutter_twips,
@@ -296,7 +308,8 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
             ..
         } = block
         {
-            let title_page = !first_break_emitted && geometry.title_page;
+            let title_page = (state.section_index > 0 || !first_break_emitted)
+                && section_title_page(geometry, state.section_index);
             lower_columns_block(
                 *count,
                 *gutter_twips,
@@ -316,7 +329,14 @@ fn lower_body(ir: &IrDocument, geometry: &GeometryInput, doc: &mut Document, ctx
                 None | Some(IrBlock::PageBreak { .. }) => true,
                 _ => sections.peek().is_some_and(|s| s.start_block == index + 1),
             };
-            page = lower_body_break(*weak, *to, page, next_transition, &mut doc.body.elements);
+            page = lower_body_break(
+                *weak,
+                *to,
+                page,
+                next_transition,
+                &mut doc.body.elements,
+                state.header_set,
+            );
             continue;
         }
         let lowered = lower_block(block, doc, ctx);
@@ -348,6 +368,22 @@ struct SectionState {
     /// How this section opened — the `w:type` written on the break that
     /// ends it.
     start_type: SectionBreakType,
+    section_index: u32,
+    header_set: Option<u32>,
+}
+
+fn section_title_page(geometry: &GeometryInput, section_index: u32) -> bool {
+    if section_index == 0 {
+        return geometry.title_page;
+    }
+    geometry
+        .section_headers
+        .get(
+            usize::try_from(section_index)
+                .unwrap_or(usize::MAX)
+                .saturating_sub(1),
+        )
+        .is_some_and(|set| set.title_page)
 }
 
 impl SectionState {
@@ -359,6 +395,7 @@ impl SectionState {
             title_page,
             page_numbering: self.numbering,
             page_number_start: self.numbering_start,
+            header_set: self.header_set,
         }
     }
 }
@@ -446,6 +483,7 @@ fn lower_columns_block(
             // in-break, so its section carries the initial restart itself;
             // either way the value is consumed by the first sectPr emitted.
             page_number_start: state.numbering_start.take(),
+            header_set: state.header_set,
         },
         false,
     );
@@ -465,18 +503,19 @@ fn lower_body_break(
     page: FreshPage,
     next_transition: bool,
     elements: &mut Vec<BlockElement>,
+    header_set: Option<u32>,
 ) -> FreshPage {
     if weak {
         if page != FreshPage::No || next_transition {
             return page;
         }
-        elements.extend(lower_pagebreak(false, to));
+        elements.extend(lower_pagebreak(false, to, header_set));
         return FreshPage::Unarmed;
     }
     if to.is_none() && page == FreshPage::Unarmed {
         return FreshPage::Armed;
     }
-    elements.extend(lower_pagebreak(false, to));
+    elements.extend(lower_pagebreak(false, to, header_set));
     FreshPage::Armed
 }
 
@@ -615,7 +654,7 @@ fn lower_block_in(
             doc,
             ctx,
         ),
-        IrBlock::PageBreak { weak, to } => lower_pagebreak(*weak, *to),
+        IrBlock::PageBreak { weak, to } => lower_pagebreak(*weak, *to, ctx.ambient_header_set),
         IrBlock::Shape {
             kind,
             span,
@@ -1381,7 +1420,11 @@ fn force_paragraph_alignment(element: &mut BlockElement) {
     }
 }
 
-fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockElement> {
+fn lower_pagebreak(
+    weak: bool,
+    to: Option<IrSectionBreakType>,
+    header_set: Option<u32>,
+) -> Vec<BlockElement> {
     if weak {
         Vec::new()
     } else if let Some(target) = to {
@@ -1396,6 +1439,7 @@ fn lower_pagebreak(weak: bool, to: Option<IrSectionBreakType>) -> Vec<BlockEleme
             title_page: false,
             page_numbering: None,
             page_number_start: None,
+            header_set,
         });
         vec![BlockElement::Paragraph(para)]
     } else {
