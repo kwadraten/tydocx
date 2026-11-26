@@ -1,0 +1,11 @@
+{
+  "archive_sha256": "4757272947752b004aece89e34a952e70e18366f4e99918cfefc7ff3a2d92157",
+  "files_sha256": {
+    "LICENSE": "67e244806143cecf0bbebf8e208ab62a710b98d4df597a9dadacbc28829947d8",
+    "README.md": "d07a76946c5591e324fbaba7908d42d74b23117b9c94e706f3e66e79ca2922ba",
+    "lib.typ": "cc66b3d3b3bb52d2bbc054079bf1ece4c6a3c6844021da322521bdb7e9d49e0d",
+    "template/bibliografia.bib": "06aa740e3c7a3e9ec0a10e8ec39a401442045ba561ad113ecbac7509fad388a7",
+    "template/main.typ": "bfa98245cacfec44ff857fdcb84dea63c6c461b85ee386488cf3f93ed5bea588",
+    "typst.toml": "ae48b79530b29350a5c6d1a168dfbdc4cbab4cac8a3c2283b55f2255e2dab820"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "archive_sha256": "77644aeba1cb281147b1b04a660f7d006efc35596cbf5d79cd8679ea46336964",
+  "files_sha256": {
+    "LICENSE": "fbd0de10100bc3461f67947b2a1d5bca5bb92234b7d8327f6f8898e938c1e678",
+    "README.md": "e88fda765a6a5e4cf339ebad78ac9bbaa2924581ee93df4d7649bcc654cff5a2",
+    "src/fluent.typ": "bc05aa9e3e4cc5b3555f073070947ccf6b4da1571c04d09b944f16244db15000",
+    "src/lib.typ": "57b2d9c0095c717266542e83c67ad4a15cf43f114af52693e1bedfdbf8e5677f",
+    "src/linguify.typ": "517f7136ef8b0b84602635b2d73bd63068e3911322883b518dd246c9ecd8dbd5",
+    "src/linguify_fluent_rs.wasm": "56b6e710982e9f61a241df32f9979185d2163846d32a5ae7fbe0c12a49d6df37",
+    "src/utils.typ": "aa6d763b2a9f1b543ce1efd9d86ced9be2d821532ba83092a749ae9c3ea07c09",
+    "typst.toml": "6137143ab09cedbcf7b563be4bacdc66b569f7206bc3a098d17179f85ea8b061"
+  }
+}

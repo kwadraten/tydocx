@@ -1,0 +1,28 @@
+{
+  "archive_sha256": "e014349227e5db60f70a7ece61e1bd2028f185eb5b33ca09fa686a08c0cf4187",
+  "files_sha256": {
+    "LICENSE": "50f00229f45fc6844ff287650c1442653b69b88242628e5a0dfca68dc1b09914",
+    "README.md": "4bc5af0fa740f65c9262cb61c85069d5dcc249f84cf437fb884643702f2e970e",
+    "example/acronyms.typ": "35d097cec45bda3a782a1da2d859e333e5c28043ea2331adeda49ac1360e2ecd",
+    "example/bibliography.bib": "b1eea6e5fe6e479aa31b009f23b4023d2e43ccab4ffced619d4645573e46a188",
+    "example/chapters/00_abstract.typ": "88172bd2718b503ed6f8059c1ac94f3c0634d5ac95f92ab52e9eabe182afe4a5",
+    "example/chapters/01_introduction.typ": "d0dae1aa4bb73b9faf6bed17362ee98abf7fb26fe8c2435988687e5f33ffb847",
+    "example/chapters/02_definitions.typ": "f3eb5449d43dae7cbab234e033306c31dccb8ca9fbc429bf1737529ac00ca067",
+    "example/chapters/03_concept.typ": "1c1de6647700a0f8f247c1965a882db6748dd570a6abab09d95fac1d71f11077",
+    "example/chapters/04_implementation.typ": "50e95d07f451673c4c0eb53be02f0a8b597e0e7965650a6b0f5d37923936ec2e",
+    "example/chapters/05_conclusion.typ": "fb7ffe49d88512cd0b5e4b270a544ca57f87136f01207f1e21bd87c4d59837cd",
+    "example/chapters/99_appendix.typ": "81b9e685690c0252e34a87155210b710430753a78bdfe707663c5da3330916bf",
+    "example/images/signature.png": "0fab16b32a6cd02f8168487f8f51dca1297c91fea85761736cdc288082e0c8dc",
+    "example/main.typ": "559ef57476eddc32d4e622e0dd06634bfa882865f44a8a27387cc9071d5297ff",
+    "example/meta.typ": "56b3af6071b7d106bf940b88c1e4d7ba53c380a63f41902ca538daae55b5c05a",
+    "template/elements.typ": "716ff78c2d5eef74720f70ec511e616aceffad61e6c074528ef18871e84d06e5",
+    "template/languages.typ": "2326a39e6e97366477853e9fafd12f159042d819a1c8594261f434d489a591f5",
+    "template/lib.typ": "e6e4f1917d44bdba1dde91d5f393250bf75e9cddacf9fbe174e9bb67aa8f084b",
+    "template/partial/affidavit.typ": "5d358a1e0f6a21f114fd4e3701521fd235e748e7c1f0d28c04c7779c148e24bf",
+    "template/partial/glossar.typ": "a65dfe10aa45a738e13873b289447f9f71fbc3a5fd0ffc2ba653314c129fd809",
+    "template/partial/images/background-gray.jpg": "d44176e0f5f7841d843eae07849ae8c5ed300299e5593ebd695544645b261e57",
+    "template/partial/images/background.jpg": "be04a7282f94763193df9a6e9ba1e6e2100891770d98a276255cd4fb4bbd70d4",
+    "template/partial/title.typ": "bfe70b6fa85046a9ffdbb191a1ab7ac4fcbdca187b53000c2aa95e6f633c6652",
+    "typst.toml": "f762f2979fd6f174aef29328622fbb257b93a4e9a8fb85b52ccd37d2ec7280e9"
+  }
+}

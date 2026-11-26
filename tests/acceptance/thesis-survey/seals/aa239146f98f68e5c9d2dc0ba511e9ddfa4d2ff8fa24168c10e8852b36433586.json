@@ -1,0 +1,13 @@
+{
+  "archive_sha256": "24099dee4958fe68514f31916a6aa10586d0462e12a87f226bff1e4d852cf2ac",
+  "files_sha256": {
+    "LICENSE": "fbd0de10100bc3461f67947b2a1d5bca5bb92234b7d8327f6f8898e938c1e678",
+    "README.md": "d68b14628bd351fd3f7dc6e8321b0925c8a95628d99d1a644166795df816c485",
+    "lib/fluent.typ": "2eb2ffd643bcdf1328ab24c22a7977aeb650e24b59a2b28a7b399d66d56f6aa9",
+    "lib/lib.typ": "10881b4abe223bb35f5ebcd90478666c936b5586bec2745427ffa66fdcd1f509",
+    "lib/linguify.typ": "e2af0fa5cd8b7a70d22dbb8ff3f80c4c8657321b548571971c051a6296af8bb3",
+    "lib/linguify_fluent_rs/linguify_fluent_rs.wasm": "56b6e710982e9f61a241df32f9979185d2163846d32a5ae7fbe0c12a49d6df37",
+    "lib/utils.typ": "a6ac01aeba06bf28bf2ef1a0b2e2e2d3ab6ab7dee5782a552c778b34d6b6e44d",
+    "typst.toml": "5bc40b170794654fb92ae47b866171a77b863c36b095a0f7eea1c40e7a0b4975"
+  }
+}

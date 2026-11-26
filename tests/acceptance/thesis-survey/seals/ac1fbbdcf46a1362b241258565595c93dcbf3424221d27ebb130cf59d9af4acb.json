@@ -1,0 +1,13 @@
+{
+  "archive_sha256": "61f0f36bb1fa3992c63958bc008c98ff757ed730ff2960734a876a2e38a3b2c2",
+  "files_sha256": {
+    "LICENSE": "52a24cce53b91412c5101d0861b0510c2b7e09f53fbeb3bc97168fdc18de32c8",
+    "LOGO_LICENSE.txt": "70700cea488fca3d78c16c9153c7d760c0bb4185beb4e069eb0f081c5eae8a9c",
+    "README.md": "74881d778c6fe387104b2f30f2c79a02d23544e83005eaedf8f599efd7594704",
+    "lib.typ": "aad5c2733e9757323ba172cce3eecde218189640b6c133c3ad11c0e9da6ea8c3",
+    "template/images/logo_unimib.png": "a14afc6e4aa15fbba49efc01b2fcb70d3ef0730ae2e2a59d165ec5a6787121da",
+    "template/main.typ": "6ab73a6cce14f5ef2ca8d3ef68c361d8de9d9d4f8ad82987c3f1d0f26c905136",
+    "template/refs.bib": "7ed0e38652f1b35fde1ff881cfa328596ec3cabd0775b9053af122086051c94c",
+    "typst.toml": "ca33f60471cb0d8bf25ffc0f75f7f2b030b8d1ad747d0f0b9f5f241261184b43"
+  }
+}

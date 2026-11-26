@@ -1,0 +1,24 @@
+{
+  "archive_sha256": "c1701d7c0eea10b789c944fa7532e84e87f6d7702f6c0a46d6681d0866f5b554",
+  "files_sha256": {
+    "LICENSE": "4ad1443cd080f73e0fa7036e45a3e2947c71ca6d5dc501fd99fc549820e3cab1",
+    "README.md": "a8b6bf1c706737d97d462557fbe9089a5423e5f7686a76b6ff0c69f024131040",
+    "src/bisect.typ": "7701252e1012dc06ce2cd602b3e02975498357f9ddf04abf8d1c50d241d24941",
+    "src/contour.typ": "be6281e567aee292b76d3a1e369dd5ecd27f1a6a2019f0424573d04f04c328d8",
+    "src/elems.typ": "233b8f8c55a7054ff0c9ed1ac1136264ef862b9ae682dd46a46b0f348dfde5b1",
+    "src/geometry.typ": "9a77393263758189787ca13a526fd8d71bd33969d30cd27af49a880fca66fcfa",
+    "src/internals.typ": "284181d128469e65dc2fa6e293958e50f4816256ac8204c6eb18a56676330bb3",
+    "src/layouts.typ": "64db839ff649418fd83463348da78c32301f832c0750ab4af810b71db097f512",
+    "src/lib.typ": "ccdc60ed5f78423b8ab31bdd63b26920d1431f0ca3b53b3d3185f075dbeef5e6",
+    "src/opt/debug.typ": "667c27997bcbe31f2b2540d5add04e60b2cb4668afbac0278f53577772d13892",
+    "src/opt/overflow.typ": "4fa04beb4b8e3384d1d6a9741c736ea3ca4171b4f8ef338128a79610ae576144",
+    "src/opt/placement.typ": "dda4c47af4d4d20e9110269fd954634d3fc32c4270ac6204eb950ed8f16b16be",
+    "src/opt.typ": "d930dc04d9392cced6d4f37db65f95fa70ce31e3a9b46eb9b9e1b0a7832c0573",
+    "src/query.typ": "35e94a0beb293529b41b4c83d64e20652cbbe56f5e4d67c656772a89e1bed963",
+    "src/threading.typ": "5d11f9a31b2722d9be1fc74fe354872a90ccfffd9960bb77c908e550277330ef",
+    "src/tiling.typ": "f231b5a309206c68a6fdd26b6b4211f91ba1de839045a6ec6ccc70a150dfd477",
+    "src/types.typ": "411ae8d776713c24a003578f76ad36b9d9ae6962f4d24f830f887e4efe1994d1",
+    "src/utils.typ": "fe4e4119a0c3a004e8fdbd16c8aee88a26dc70e6b47d254fafe0899b67bd0162",
+    "typst.toml": "9a7d071bec9de758e6b9e9eb39a7a09007e11be14ab1e6f86b850a2b6eb13826"
+  }
+}

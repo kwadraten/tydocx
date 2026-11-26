@@ -1,0 +1,10 @@
+{
+  "archive_sha256": "ec58ede28eba3f6a563e7b0df02d501f9bef27e787ab2bb39a99c1f5fa010697",
+  "files_sha256": {
+    "LICENSE": "dde4bbc17e08597384b39412a67d33306e873f10f285300450f33bd51db44f63",
+    "README.md": "1e2f08ab6e0efff6916669d75f2d9b82e2e8334893dddc065b26c2fd64815888",
+    "citegeist.wasm": "0ee415c7224b7aa93b860fd63c225aa338ccc8fe9c760355b4025cc4214554f4",
+    "lib.typ": "9cd050774c6e86dacf971bb56bed2a7dd492277be4bdd46ab7da013573adce3c",
+    "typst.toml": "0077b4d79ee645ca079a611c69eee6d6caa27d6ec904eac386668db082290ec6"
+  }
+}

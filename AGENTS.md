@@ -126,6 +126,19 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   are `#[ignore]`d (those tools aren't in CI) but **panic loudly on a missing
   tool** when opted into â€” they never silently pass. Run them with
   `cargo test -p tydocx -- --ignored`.
+- **Universe/WPS render regressions:** package-free reductions live in
+  [`render_corpus.rs`](crates/tydocx-cli/tests/integration/render_corpus.rs) and
+  [`tests/fixtures/`](tests/fixtures/) (`render_*.typ`). Update the relevant
+  assertion when fixing a reduction. Run structural cases with
+  `cargo test -p tydocx --test integration render_corpus` and opt in to Windows
+  WPS cases with `cargo test -p tydocx --test integration wps_ -- --ignored`.
+  The WPS tests require Writer COM and Poppler; the TOC and compound-line cases
+  also use Python with PyMuPDF. The real TOC case needs the modern-nju-thesis 0.4.1
+  template, cached Typst packages, and fonts locally; set
+  `TYDOCX_MODERN_NJU_SOURCE` to its `thesis.typ` if it is not in
+  `tests/acceptance/sources/modern-nju-thesis/template/`. Keep fixed acceptance
+  templates and drivers in `tests/acceptance/`, retained generated artifacts in
+  `output/`, and package-free reductions in `tests/fixtures/`.
 
 ## What must pass before committing
 
@@ -153,6 +166,10 @@ Do not state a specific test count in prose anywhere (README, docs, comments) â€
 counts drift and become lies. Let `cargo test` report the number.
 
 ## Documentation consistency
+
+- Keep `docs/` for architecture, standards, and contributor references.
+  Do not add report, plan, audit, or verification files there; keep regression
+  checks in tests. The `docs_hygiene` integration test enforces the file names.
 
 - This file, `docs/ARCHITECTURE.md`, `README.md`, and the project memory must not
   contradict each other or the code. If you change architecture, update all of

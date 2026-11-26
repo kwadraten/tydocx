@@ -1,0 +1,23 @@
+{
+  "archive_sha256": "44f3e3cf26fca483f0e682f0159c5026af0a2dd22e55703a6bb2d4e337d5915e",
+  "files_sha256": {
+    "LICENSE": "0e7fe80f58f5a704bba4e76167275006ed1ee63b995a6215443e1a70eca2b06c",
+    "README.md": "36b4a1ed417897255b89a02df4f9e053eecd2186b0c2294e8a77dfc7104a9cd9",
+    "codly.typ": "0ee724fdfd719a1e2af851d1fdb4b69fa19abffcd244a1571463fb73e7598359",
+    "src/args.yaml": "e158291273b5a85fae149e15c25bd7685c91801fa72c403e3401cc1b98e6e4ad",
+    "src/callout.typ": "da1b6ad52f84292a7c4bb0b165144061f324e7866ea9908184337dd512bca7a5",
+    "src/declarations.typ": "d52554715aa65ba8a98248de1ef8cdc1647ea59f53b485da85a930ae7f89a9eb",
+    "src/diff.typ": "d10cc10f88b32d239629eca510d36bbef7c2b3ed6ce5aa0e8e12b03d2edf5223",
+    "src/file.typ": "d3b7a96891ec4d69600d5403c5576139f909490aa8fa78035095ecc04e6ade8d",
+    "src/geometry.typ": "fee9e0ee44872f69972f97debf2a3e126100f95dd294c04e3a5456536badf379",
+    "src/gutter.typ": "9173392fa08077cb21dbde03b0c26bb56a8cac9992e372a3490d23baab115389",
+    "src/indent.typ": "49c9e1c83110f748e55a9f1d9af74e50796ebc21de383c5e571cc284efb64a62",
+    "src/lib.typ": "d527907a9ffe3d6c980bc6db6629068225cd252c3d881757aa83c74929d19831",
+    "src/padding.typ": "3874dadf84f80547c2d8972160eca94af40f0e0d420b75b33646cc46d294cbee",
+    "src/rainbow.typ": "e4093a8a7748599a1ed7e594f93ee21805f8c9f7885d23c94aa37881e8c212aa",
+    "src/themes.typ": "223e3760cd9608479bc4970b50d2d03bf9cc45b5a0b75319b29424f4c0d66e17",
+    "src/typst-small.png": "828a7f6d87ac8a029325f1394631d960fd43fcae46e58db44eab7f5480050fd0",
+    "src/wrap.typ": "d26e1d266ea2c88b38379a3d8658d8bf448e344fe9675be2e4be3a80c7b5d8c7",
+    "typst.toml": "de30eff194c837658954383b4b8b8fd8e4772f680e2615e10a5428ce9ae9f1d9"
+  }
+}

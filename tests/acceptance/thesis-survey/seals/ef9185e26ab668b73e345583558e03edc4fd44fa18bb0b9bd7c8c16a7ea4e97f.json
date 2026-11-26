@@ -1,0 +1,29 @@
+{
+  "archive_sha256": "642e7a1b4b50c054a952064d62bba2fa0c846bf850ae9ca7cc129468699df702",
+  "files_sha256": {
+    "LICENSE": "ad8e14322307875ce05140ef1b2f1d4ee7577d9c834efb81f45129377ba4f17b",
+    "README.md": "e90e524b9560ba7c990cdcf421aab54d837b9e0f2b037328537a3fdfbb1aadb1",
+    "assets/xmu-zi-jiageng.svg": "d9bd041cdda36941550e5da67ec9252c825b00c169e91c0706a4f60aa6832744",
+    "layouts/appendix.typ": "2f0a29e91e3ca0fe2500a0260ebb37f95867214a843ba1ed159d08977c67d674",
+    "layouts/doc.typ": "2a56d8e87037f375211a81d30357cf74cf9c8ca5b659beeb095a15e9d4865e7d",
+    "layouts/mainmatter.typ": "4bfaeb67dd32b92e94917a12ce088bda636c5b32b57aa329d672dfda0039f742",
+    "layouts/preface.typ": "96cd659e58c8bd0aa1cb286be5f9d0f49be4e87ec48c7b8492ca25bab95986af",
+    "lib.typ": "0e9e9eeb7849a0ba30cfcd97dc75a76791484867fae17a2fd3c981c1fd0461c9",
+    "pages/acknowledgement.typ": "f4b0816ebd6eb96ea26e811cf510306ce41d4e6f374806a061497d38911715de",
+    "pages/bachelor-abstract-en.typ": "86d1309a99674ba523a5438f9a33ae2db1dd8bbf24666b9035df2c76058e370a",
+    "pages/bachelor-abstract.typ": "c450c90b09809e71a053956e3ba7d3339620981683e07f098eba4ac6fc3d3f0c",
+    "pages/bachelor-cover.typ": "c4251fcc49b1f15b4cb6d3091cf62711a7c9d72de7318b42910a7bdf9a53c444",
+    "pages/bachelor-integrity.typ": "a54097d1f266fc5b8a386b47b2f1b67ed6d1a36b89774e3ea3fe5e669d196fce",
+    "pages/bachelor-outline-page-en.typ": "d4fc3edaee2bf6d1488065a61260c2f79b12db162299822637c005ce0b0bfa56",
+    "pages/bachelor-outline-page.typ": "be4898379e53308020f95793371620e1edbf18b0f6e8ba437354a4c42877f52c",
+    "pages/bilingual-bibliography.typ": "5fc21288e45a1c4fb82d5ab034a6cb15fc71750232e3e62d1efc3ddd974bda82",
+    "template/images/xmu-logo.svg": "f40ecfc18eea737b7f3d916a6992a74210d86bee178d2eb5cac4e015b90116f3",
+    "template/ref.bib": "04f667dbd594a6b716b783758a67e74de41776785608a1b2594b9f613ef82353",
+    "template/thesis.typ": "3be85a85716f6c48bba63ec43855e2ba00d59d5768729d8b364f51d4d34a1988",
+    "typst.toml": "0ebcddb8de4038b0d40eba71dc02395fbd85a3f20fac3f3a7ad38287e0384839",
+    "utils/datetime-display.typ": "67315baf07b5387927b8950ed6c44de7c10c8a7029717eb7254087170ccf6e2a",
+    "utils/invisible-heading.typ": "b4b045f21fa4671ab8fb78a2c93ee375a6336d88fb483c2bb8f6a71ca502649e",
+    "utils/style.typ": "6b84b46211153a5f02a8fb2ce11c8ed51583cfef3ab9955fa6cf1b4b5a7ad29e",
+    "utils/unpairs.typ": "eb9a4001971c6872d13c9e30cfd6b40d570b46ab15d930b15fc74323d97362b5"
+  }
+}

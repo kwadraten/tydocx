@@ -1,0 +1,15 @@
+{
+  "archive_sha256": "355a8afca97ec28b23110fe1fa1d33dcc98d99ef8b93fc1a29e2ec2c78a6f6cb",
+  "files_sha256": {
+    "LICENSE": "0e7fe80f58f5a704bba4e76167275006ed1ee63b995a6215443e1a70eca2b06c",
+    "README.md": "c37100fcf4bbadbd189ff96764f384be8e96044f6a4b33e8ef02be3bf25a16be",
+    "bench/test-codly-12/main.typ": "59501a74a47ff30c04b3f90f2e1a23c24ef1c194421dea4bd09e21384133d054",
+    "bench/test-codly-main/main.typ": "1058265167c5529eed67274ff62052ebd7c59740e3d0adbddcd4a8496f29eb6a",
+    "codly.typ": "6dd2996102dc304e253a5f44dcbf51223dd7f5a89369c7bf6e52e60c45b4503a",
+    "src/args.json": "e4a7fa942a868efab98da88ed1ea8b57a75309ef8bc5875c33de7e03f6c093f1",
+    "src/args.typ": "1e2488d8e234935e3d32992309ea190dfab3c8e38299870b30e1e42d6438df97",
+    "src/lib.typ": "b74741e9c7714dfbf7c45c7414a8ba04087cdbbcb9d4a3313d2e8175c7351ae2",
+    "src/typst-small.png": "828a7f6d87ac8a029325f1394631d960fd43fcae46e58db44eab7f5480050fd0",
+    "typst.toml": "802159c8ed96acf3d0aae8bcb34c5abb31fd21915af2847979330d466cd57baa"
+  }
+}

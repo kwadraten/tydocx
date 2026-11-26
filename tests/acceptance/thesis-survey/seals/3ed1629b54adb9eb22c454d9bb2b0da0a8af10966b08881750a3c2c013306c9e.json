@@ -1,0 +1,9 @@
+{
+  "archive_sha256": "d952f9296a8dc264c27d05432114b24ffdfddbd0a2ab9bf5bef31751d25dc2c6",
+  "files_sha256": {
+    "LICENSE.txt": "15a018572ca2eb9a4ca6260127f18c21fb1f7d072f950177284ee53411b494cb",
+    "README.md": "54522bfebbeb9b59f4b383e31be1c2f3a0ecea9ba6879a85af80e614defd8d70",
+    "physica.typ": "3a716873861bc871afcd6d593aae8845437359bef5039c616a23a69975b1ed07",
+    "typst.toml": "37143ff066d06d4c4b6b6f3dbaa9d96897eb54cd20c085fda8d4f688cb205d59"
+  }
+}

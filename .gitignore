@@ -2,6 +2,7 @@
 /target
 
 # Output
+/output
 *.docx
 *.pdf
 
@@ -18,6 +19,9 @@ Thumbs.db
 
 # Typst cache
 .typst/
+/tests/acceptance/package-cache/
+/tests/acceptance/thesis-survey/typst/packages/
+__pycache__/
 
 # Development artifacts
 /docs/superpowers/

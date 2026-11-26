@@ -1,0 +1,21 @@
+{
+  "archive_sha256": "c864e885ace3d471ae0b63bd9193a2402943a694d91f6835463d566205233650",
+  "files_sha256": {
+    "LICENSE": "d66fa6047eae941af8c532d6361f73dc36423deb0c50b73094cebb63b36e5b4d",
+    "README.md": "c24c5d3132f15ec276dcf742f248d9c397fe7a75f40d9bf7686a07e95e567bf1",
+    "src/align-column.typ": "0ef04d02cae55d08ed9873194000c71a96a0035ab07294d051d04e2a6855f410",
+    "src/assertations.typ": "9a19fa106320c8d121bd9a7e23ed0e3989adde09cd99e27f940760c6fb886793",
+    "src/formatting.typ": "df17743ce90851163bb5ddc37314dfdd4c069b25eafd045792c9685c8c464bcf",
+    "src/impl.typ": "0528e976706a02eb5eace2870626e9ac0c4d84f786a8742eb1574eb5a25cf051",
+    "src/num.typ": "ed6de60acef5ca5f887bd89acc91b1748bea2de9866c7a457e75869d9c3ae882",
+    "src/parsing.typ": "641fe321350055b4715212e7afefb2090db63eecabe752d7ed16ec51c9666eaa",
+    "src/rounding.typ": "ce31b330cbb74f83bf3da953f9bd1719759f1b58de5fcc24b782f0105c54a905",
+    "src/state.typ": "944894fa287481044e9f03089b9fca2ed05df4fc710fee557fa0a2b7724581cb",
+    "src/units.typ": "98f236574740d17ba80b57a9e27567cc9a66764536c1729feb9bb47cf3e80062",
+    "src/utility.typ": "4824067e2a7b1c12001a94cff08fd8bef32247e69b94f072ba08ba9296c7d440",
+    "src/zero.typ": "031dc1888ad381641800fbe5b5c3625ef6e949f3dc4698d517a7b902f922e368",
+    "src/zi.typ": "31579886f567ded2e2df3f586c1b50ff95530035880d1e68519c1835cb295d5f",
+    "src/ztable.typ": "aa7f64b683885f32d68f4ba264ab7dc489726d7308ba4e8fd27f16ae7f5f729a",
+    "typst.toml": "4a3d27730dae84440da4e746ced72a1dcc11c356ea1a7a201deb52518d4c09e2"
+  }
+}

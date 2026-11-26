@@ -1,0 +1,11 @@
+{
+  "archive_sha256": "6b5790008609ca6e32518a26bf5b9b0a4cd7f1556b3e3e067e7fff73fb9b0b14",
+  "files_sha256": {
+    "LICENSE": "4ad1443cd080f73e0fa7036e45a3e2947c71ca6d5dc501fd99fc549820e3cab1",
+    "README.md": "52ae4dd6bfdb7e6749e95c8b575f0b4b881c7b365ab37ac254f9a0acc4f03d0b",
+    "assets/hypher.wasm": "5b064f1621065008b3537095de5cfac077048b19bd8868efb44908654928db00",
+    "assets/languages.txt": "8a87b2bbdf7b352a70b7cf5e0021608f8e519972043632408da75973b9cf3d93",
+    "lib.typ": "6437dbdd3bf88097ec89a1646e89b9a71b4ebf46988ef034809bfebfd84caf4a",
+    "typst.toml": "7203f2ea717bd398cd8af20e4d7b01d1be711ab6fad65ffeb31552a34c87ffb3"
+  }
+}

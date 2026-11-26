@@ -1,0 +1,21 @@
+{
+  "archive_sha256": "a97d869d825d74a12f93933999e6dcff9afdf1c65579fa6905848a4974738a58",
+  "files_sha256": {
+    "LICENSE": "6df665d24fd4810d8a76db5b3ee5178b9b90a38fa7d3e0c079498cb13b7bd970",
+    "README.md": "3d3253aeb96377f4d8c10d676f72595576900c8d480e12649520e10d0da3f5f8",
+    "src/edge-indices.typ": "f39565e7feb18e0b0c013fdcc4cf9e2250225e476722c9d419e445ee55d6a07e",
+    "src/lib.typ": "949ee9a43013047bbf9766f5a677ab3ee4f010746eca690d84cec41e5adaf003",
+    "template/appendix.typ": "43d85f6978dff0e096b74c3c99d9ad39a620ca04c05eb41a2400146f4383ee0a",
+    "template/awesomedoc.typ": "60663b228319d67250435b251c8438c53a4435deb1d9284d5fd02caceee943ce",
+    "template/introduction.typ": "882fbee3de415e5e7ba4361f36e35e37a88d1adf8b7c2dc203fffcaaf66799a0",
+    "template/mass-spring.typ": "4d7dfe76371f08c5e8edd7d4a71bea5375c51698e30ac2141385f0deb8e7f1b9",
+    "template/samenvatting.typ": "fc81c56deddc451dbe288e4d3b7a04d485a031ab99172f98c3b5c7af586604c3",
+    "template/summary.typ": "3badf2ebc0365e408f91ff46071f34d77f02173f3831c32a99ad037350808115",
+    "template/thesis.typ": "9d16d67800ff35fb85cfd13f1f4ea7a2cb0dd8e3d278906c7e0766cf68e875c8",
+    "template/title.typ": "bc59b55fed4e06c669105628023dda20afd093bdfd441214c3778661722ebb8f",
+    "template/tud-bieb.jpg": "86a5f21277d62a8cf9ff33a29320cb15de483c3e012e6d5e6953d9764414a2f3",
+    "template/tudelft.svg": "480d4d76f501c8daeabd450a0439dd7d05764928bf1432489c801dc3aea6f741",
+    "template/typst.bib": "526e4060fd70d9f29de547fcee867baac58203892588bdabe1af98ef553dee76",
+    "typst.toml": "f22f85e2c78e41513194301b6c2ad0ed3d89b27460f4224b2b164d3a11d27d6a"
+  }
+}

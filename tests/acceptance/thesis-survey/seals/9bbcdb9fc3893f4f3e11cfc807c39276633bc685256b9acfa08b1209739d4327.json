@@ -1,0 +1,10 @@
+{
+  "archive_sha256": "ae0d829c81fc01caf5a8a8e6c15c608f30b30a21ffda0f7f62caef51e23b4036",
+  "files_sha256": {
+    "LICENSE": "c56f2dd6fe1568d7175631ca1d516a39943c1407e4b56f986518963a46b9c138",
+    "README.md": "03b5b6f37a52a9317f3427053a4fcc270cc806a2c5bdad2c41481647b1488011",
+    "lib.typ": "9f45c058d9ea7d6f1736fc802a5ff2c17aad94cf0f1d840da134f915bc397b7f",
+    "metalogo.typ": "4dbc150b0f9e51c46126bd93993e77aa832a155a484e62b70dabda971bce45e7",
+    "typst.toml": "0a7d267541ae060a9e01c2cc3ab996858f4f55dc887cd800fe99b9326792026a"
+  }
+}

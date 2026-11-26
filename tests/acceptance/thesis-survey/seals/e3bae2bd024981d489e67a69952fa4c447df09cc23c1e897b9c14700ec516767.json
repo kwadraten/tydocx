@@ -1,0 +1,25 @@
+{
+  "archive_sha256": "debdc0f825f33e4b115b753889ec67976304bfdb13522bd6472e751e4c5bf88a",
+  "files_sha256": {
+    "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "README.md": "65b85620ebce3b32c5625552943fd4520be2f41fd5863a67879fc5251e6e422a",
+    "lib.typ": "e8840796bf68576601e30f96d2d7fe67b0504532195431dcfb6d73ce0e3e5ea8",
+    "shared/figures/eth_logo_kurz_pos.svg": "66aac71e7990402d7aecef180b8e05a162470f28bff9100c538dba165ac44c3a",
+    "shared/figures/pulp_logo_icon.svg": "07380c790fa812a627df7ffbba36d8163271598695951ceda52a4dbfbeca7f5c",
+    "shared/figures/pulp_logo_inline.svg": "68651abb785dc74c3ff604fac47031f69c4cc2f3d8a2d067bc71256326aad876",
+    "shared/typst-guide.typ": "929b219ed563c02feaea2cfebf63142568ff525969d131811be615e0d77b5b1a",
+    "shared/utils.typ": "14b30fc7148d700ed54c93880a0f7939379acd53e1b420e00f75d73921d1c97f",
+    "template/acronyms.typ": "196b91dabeb806671c10adcc188b8f5fc3cf660e01f79d3c168cced9c8c5095c",
+    "template/appendices/chip_gallery.typ": "0245a6f7fa3b5c6d1471c3408701a82d8cfbff515eb530511fb77abfbde9db66",
+    "template/chapters/abstract_de.typ": "95c2643ab60cdf70db26ffa0e1db45f30f03def25d36bb28e0acb1ad9f3e9dff",
+    "template/chapters/abstract_en.typ": "870eddc10f4b88ece71d6fdd3b26c6e9663bcca0ed681678729aaed6db1c79eb",
+    "template/chapters/acknowledgements.typ": "837dfc2b0f96b62fe8263eb2e1b3c8e30a8f067db5f009cd22e6d8c5fd7c7b47",
+    "template/chapters/background.typ": "e370b7abd99ff774c9777551468d90c8b86bd74ce810a11a1cf23853b362d7fe",
+    "template/chapters/conclusion.typ": "5805b7973e474b401710441c9fd2e403a41a99db5f83fa11d54babcfc83e475c",
+    "template/chapters/introduction.typ": "9a5b3a4d2cb6b1f6f0a9967bcf22d85e36a6f4875f4daf6ea17ce46a4e07f294",
+    "template/cv.typ": "ce56d0ac15056c2545258477f23312a5dfff8815384aa3149eff21d970bf32f2",
+    "template/main.typ": "ee9c43de2ad5554807b62b7b86ab13a830c9a6fb4a874a66412726f4cdaf9266",
+    "template/references.bib": "deaf50234cdd1e54a1c67d537ae91d67f9590dc9d28475417f4671452497b0ec",
+    "typst.toml": "99b88148f9a4a9b24a3806c79ae15fb86f2aa939b2acc1e3de703dbafad4710c"
+  }
+}

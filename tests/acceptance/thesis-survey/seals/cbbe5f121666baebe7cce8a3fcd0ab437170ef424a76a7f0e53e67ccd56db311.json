@@ -1,0 +1,21 @@
+{
+  "archive_sha256": "44310a9420ef0a5aee582a690f2613263ea0bcae88cfe92aa6518b26e501f94c",
+  "files_sha256": {
+    "LICENSE": "c33a5648cee72a57bdfee4b309998e04569001904d65189cd1204b1772a0fe86",
+    "src/lib.typ": "89f27e11f3fbc161c1a28693f35552f9b316bb771539dd76d5670ee931dcb649",
+    "tests/all-tests.typ": "8f32b562a52ee8406fd18ca72fa0de17e6547b6b703938c4fa31e7f73b872be0",
+    "tests/concat-adjacent-text/test.typ": "fd643069435b5624c7351a82c4b6791adb394f5ecc879221995f3fef946d6ad3",
+    "tests/custom-counters/test.typ": "00a20d391c51da56932b8ff46c212e7a66a679e718f03296b8d207ed1980909a",
+    "tests/exclude/test.typ": "5877ea175a3c1d276b2ddd0255fd5a824e8117153f49e9dd2cb1e30303d7c9cf",
+    "tests/issues/test.typ": "ae5573eab4bfe9486fcdb91a5caed0caf6db68ac849be760805f272f9671a1d4",
+    "tests/sentences/test.typ": "0c027a24b86be120dede50014a42469deb932cb9341a5c20c3803e6329b033f5",
+    "tests/template.typ": "aa10800f2381d71cce027bfb2d8aff5017ff8af0545e91d8df0b9c1a5c8cbdb5",
+    "tests/text-extraction/test.typ": "d7e505539272c2cb174c15b4bcd820f7d976b7653545c633c6780ebc51952eca",
+    "tests/where-selectors/test.typ": "f9e37d0f81d329c9dc5675d0133404bb754b73e3ee37d0f9a0ff0ac6a4b0afd0",
+    "tests/word-count/test.typ": "e0d4dd1132d64fe018f7001226788fa254c95c1d6dd31488ecf7354e5ef1a5fb",
+    "tests/word-count-callback/test.typ": "19cabb4e2ddf1300774b22e34dc086679d98cedac02e03bf5c1c4280674f8229",
+    "tests/word-count-of/test.typ": "86aa47940abc2efb86bfbcef53395379a413992734bf8b3c799124499c091529",
+    "tests/word-edge-cases/test.typ": "ae8680720505c17b272fbcfb2dbfaf311c8e6715fb539bfe59516538a58e26a0",
+    "typst.toml": "cfc6be598bb3a54c0b3ca720034824752e1890f1ee5109b7de63ab750a1db43f"
+  }
+}

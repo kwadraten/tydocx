@@ -1,0 +1,24 @@
+{
+  "archive_sha256": "649daf6efdd03fd6fc76c5333f04ee1139db80d8e7026482332932ddefcdf61e",
+  "files_sha256": {
+    "LICENSE": "5a3966727daee0ab9ae924330442cd664e1828d6e6846181265d123dbd2905e6",
+    "README.md": "c6ebf177a921435b1dc2ef7b0bbad93f8b0d2a60af274fa171ae9ad1904aab7c",
+    "lib/base.typ": "20921011cc3a7c6331d2cecc8205ab077549e55ec7261d4648183f9bfd9e55e6",
+    "lib/chinese.typ": "3a660956a51d8e13323acea5042c17a9cec1c0c96e0184847ac51c21821a170a",
+    "lib/fonts.typ": "c277130ef6f47139b9d541a7503f4077b12bf482207c28f02eb748b26068cf66",
+    "lib/hyperref.typ": "de7cc0db5b8f49da5d23faa74d4a70691273fc227f9ddd54178050e36b161caf",
+    "lib/i18n.typ": "eba8d6be22eb6531f12edce3acf4d435d4a5678180516b708bf9925c5133a175",
+    "lib/utils.typ": "e0f482e9f318f277f598ed4bedbd54be626da28a85484497b7386fcba3771d25",
+    "lib.typ": "0f451906d9a3efa99533ff187edbca71b8f45130d85293b3c5b43063e9b0fe9b",
+    "template/images/logo.pdf": "8ee2ebc97dadb904329be5e12ae11eba7c37a8f68868175afbfb6523ccc2bd25",
+    "template/ref.bib": "8e9fd5ba2106b061f4b20a30c8c149bbdbe6dc7bd3555b54c97bdcf5238bd059",
+    "template/thesis.typ": "b6c9b790cd923e7c25316f3d1afa7a9100f6eca5ce693cadd824fdab0b59b7a5",
+    "themes/upc/code-theme.tmTheme": "cbfe99815c154c54e30dbd64b44f2773008b07a4c8b99fd64019f8016d4d64b6",
+    "themes/upc/colors.typ": "a298cbae598942226e4265c62488867af3a2bec96a1fc8d922cbd3cd66c1d0f8",
+    "themes/upc/defaults.typ": "af158ca9ad2540e9c35e8a0dbf923ed2bcf0fbad19db4d711f61ec6d3fd47f50",
+    "themes/upc/logo.pdf": "8ee2ebc97dadb904329be5e12ae11eba7c37a8f68868175afbfb6523ccc2bd25",
+    "themes/upc/style.typ": "fccebc9901803322472431797eb3175946f2811ee736c03a8f55e36f6a29a43e",
+    "themes/upc/titlepage.typ": "dd155bd23d972e4629c6417a6a38f1af18f18b96f2d3ca2e9ef1dda3f904452f",
+    "typst.toml": "f16d33b04d3ecce54aad69c92d7afcdb7abcbcce8be52ed71b6474eec607db41"
+  }
+}

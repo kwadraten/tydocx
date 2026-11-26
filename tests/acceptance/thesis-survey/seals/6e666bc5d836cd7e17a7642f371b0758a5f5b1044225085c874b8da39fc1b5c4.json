@@ -1,0 +1,13 @@
+{
+  "archive_sha256": "0bd85571728596beacb6004f36cf52d14753ac9acfd4d1d4717190765146ece1",
+  "files_sha256": {
+    "LICENSE": "3af4f903ceca643f7dff7f6087e97c8c756682c23605b68e760d193a12145447",
+    "README.md": "a3fed9190767dc9c3c9f332ada4f09aa0db94eaf514ef216fbd0b15f3be1637a",
+    "graphviz_interface/diagraph.wasm": "05ff5801ff4c7bf32f2eac26464bb1330cab221bbef083f5d162ec02e1716df9",
+    "graphviz_interface/protocol.typ": "c59ec7f5a153b8b3daa30c6643252497a4b19f4e98d6eda7b901477c83bbe69a",
+    "lib.typ": "73943aa0e08b9695f932819d73dc7cad29e941a51bcbf61e6f24969bdb2b7282",
+    "src/internals.typ": "25222350872532e3f17993d761e3e59e24886c79b34c1ffc04ec3bd9752b7910",
+    "src/renderer.typ": "ef14c5d654796c74cd467ab43ee2184da103d1857ea3c3b82da6fb043d1107ef",
+    "typst.toml": "0a79277a6a4368fda80d9ff301c01707a11c542d2beb39b5e811e84af28327fc"
+  }
+}

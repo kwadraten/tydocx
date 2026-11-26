@@ -1,0 +1,14 @@
+{
+  "archive_sha256": "ad525da5e5d31dc955211496d7a381c83cf5618504937795ca68946355309378",
+  "files_sha256": {
+    "CHANGELOG.md": "3d1362910d81b84825defcf2387682fe701d3bcfd47de54788d2460611944c59",
+    "LICENSE": "fbd0de10100bc3461f67947b2a1d5bca5bb92234b7d8327f6f8898e938c1e678",
+    "README.md": "cc4d310e69095b0161d87d5268b3dfe01a139469f620e41bb375bdc7b6f00b07",
+    "src/fluent.typ": "c5701feeafd315630e0edb28768a9084e796f247ccf2ee70ad51923eebf28c7d",
+    "src/lib.typ": "54917bcaae0cb8399c175ccea295d64ccc2a7ff1adc89e04b72501be574dbdec",
+    "src/linguify.typ": "a3965df2b45ece94e2f9bbbfc600d8b6bd439d3202a6765d930142563841e8d1",
+    "src/linguify_fluent_rs.wasm": "51b01f8bd932ff013914ab4698b1d495ee8b96d53cfa06d5e21528d8e18f9be7",
+    "src/utils.typ": "aa6d763b2a9f1b543ce1efd9d86ced9be2d821532ba83092a749ae9c3ea07c09",
+    "typst.toml": "6c99780e8b098dad1abf906d325a67c57817a8a95d638668a35de0ce79f0d28b"
+  }
+}

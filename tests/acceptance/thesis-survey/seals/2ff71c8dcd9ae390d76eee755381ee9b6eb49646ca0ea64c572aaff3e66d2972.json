@@ -1,0 +1,22 @@
+{
+  "archive_sha256": "ed09de8c7a37b544752df3ad29b0d8b5d64730140ee71ee8d404ac61fc25ab14",
+  "files_sha256": {
+    "LICENSE-MIT": "5f1d0cd3a047607bffc3e9386f6209715927a02b0ab7c97bda8047760b8a9a01",
+    "README.md": "8106fa52067e036286ffae05ef09f273f67f745ba2e7f46e6e1c977b01d45fa3",
+    "assets/LU-BLACK-ENG.png": "1eee4449594df3e4a6d9db011d74d831b0715fe82ddf536b6672f22215ebed0e",
+    "assets/LU-RGB-ENG.png": "ee2dbd176323702487d3586249b4b05bac2f5338d0a2280880e2c567fc11ea24",
+    "assets/LU-sigill.webp": "ba64742320d6c20b07791cfe19f0995a99de2a42c9d7d84d96583b0b8b6b89e0",
+    "src/global.typ": "c45d34098d914e9e53b343d1b1deaf59d342987fd39c106f8e729ac0bd8624a0",
+    "src/lagom-eit-lth.typ": "3fc0e18b65575ff4b876b0c3f441bc74e5fd4be37229e310d5e8173ee1d71ec4",
+    "src/logic.typ": "20e695d0da5ce451487d18d6586526ddce308d71773f14667ac99cce509c490f",
+    "src/print.typ": "8b4656172ecb0e8aa43ca8510324ad05acb9570482eda1ee74775e6873a3a109",
+    "src/style.typ": "1b4ceb867259226414a9d15d4ab777a6730934d35f159b474bc671b15eaf7e41",
+    "src/theme.tmTheme": "c7de0350f8c92c25b1c97f2526dbf8716f8a41c773a0c4e93cc47ef9b3246c7c",
+    "template/goal-document.typ": "d0501fbd1a74ce4a376ee388acc1b7be031c17d8eceef7ba890c7a8807eecddb",
+    "template/metadata.typ": "3f05cc4187ba33271373496385ca1a529d82c19c27cac49f572cdf23c60e06e0",
+    "template/popular-science-summary.typ": "f7af53bdf3833b42cbd0f9e37417bcc300f9c4966641e63d7368d3a24c4d8b2a",
+    "template/refs.bib": "3b2f6443e1bf57eb3359ed88fa94870af7aa3dd97a793f53df28dfe6b30d8c25",
+    "template/thesis.typ": "f22d5427c363ac383561419cafc387fc99dc01a818f94a5b87312b80fc00900d",
+    "typst.toml": "84fd51143d3fb2525b65e42b433746e58d6329b9cfe8a0f0beaa79a78d73255e"
+  }
+}

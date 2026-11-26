@@ -1,0 +1,32 @@
+{
+  "archive_sha256": "f50bb2692bb04cfe888c2bc8df5394c185e3ea818fccea1310669d5411f5cd7c",
+  "files_sha256": {
+    "LICENSE": "fbd0de10100bc3461f67947b2a1d5bca5bb92234b7d8327f6f8898e938c1e678",
+    "README.md": "85a085d4e1cba52e9544637dd0b4ef30094c86f7a51f9b55a539950dbe6aed24",
+    "gc-overview.svg": "c19bb91ab80fec480cab82524ff04d6553b83a0867e76529f9f6408b985257b6",
+    "lib/assets/abstract.svg": "b2a5995f696a2d81ba85b06e417a297bec22c0135b405c843208523730c54ea9",
+    "lib/assets/bell.svg": "d0cd7a69978a05e632ae8dbf1d28819ca087cd060e4dff85ca359f440c2e7ca8",
+    "lib/assets/checkbox.svg": "4957fe336a2b9d98ee372ea22fb5583bfe1bf66cb9329002dc568880ad9ccb68",
+    "lib/assets/code.svg": "1bf26df2da4c7289ebf9f471c588f14296ed5017a8464b2b1682b59efb55c6da",
+    "lib/assets/conclusion.svg": "fe84ca2e21b2130842073dc682269f63e659f462517369e5661a773378833a39",
+    "lib/assets/crossmark.svg": "5fdf68871703f74fb4d947bca2ebd189c91028b47e95fe1c1cd386c5557fed0d",
+    "lib/assets/danger.svg": "9d6ba07c72f739a646835c096ab2125ca4fca68225f7bad80f2f2c12f8ef6936",
+    "lib/assets/excl.svg": "7585f0e7a348d2b2f4fe1cc62831d15db1ba6d36c46f2d3bb0ef3ca7aa5408d6",
+    "lib/assets/experiment.svg": "1f6e67b9d024c6b5418fda4ca5c209cc32cf7696c85d23f5178b74a365983a11",
+    "lib/assets/flag.svg": "569d02ae44e16a56bd188362148ad1174593fa9683baaccdf271c3ebb7ec6969",
+    "lib/assets/info.svg": "e5b841bb26504b7c485aeef06dbc5963078a617e6a0d1ae683bcbf642a46afb5",
+    "lib/assets/lightbulb.svg": "734c22bb5c78dff419df4f87a43d6774da557721a8619380736fb7ca1c83762d",
+    "lib/assets/questionmark.svg": "795021857352bcb3a7ba2086a9efaad5f4c47e34fe70d045775cdb236a1ceb66",
+    "lib/assets/quote.svg": "7daf61f36a06c0e1a5c6f3c5c631fdb38b46621727a62fc570ff468c6dd54d43",
+    "lib/assets/simple-graph.svg": "f767d8836eaa7f764613c1aab86c90915931715571032e134423a9d68f392f1f",
+    "lib/assets/task.svg": "48b78bc843dad9cb9f11c5d7cfed116fe53a09956b87965354e893a629cadb20",
+    "lib/assets/tip.svg": "39de3ca9d3fc9493f0f8891c01429f533599b9e5765c2f7dc100779360717948",
+    "lib/assets/warning.svg": "23c1a5bce924a379498caffe0b62d0ea54ec17a7a0cc2d4acf1bbdd3ed412f9e",
+    "lib/clues.typ": "0c3da664eb5c54a83899d66f2403351f017af28a68fdb242a6fc2599a3b34238",
+    "lib/lang.toml": "aa9b9bb72bc33775c4423627f988b851e085bdd5e4f21bc353b6e6d44c876ba6",
+    "lib/lib.typ": "c7eabcdaffc106dcf8f2fb32edadce2528cd02d36a7330b0295681708667d3da",
+    "lib/predefined.typ": "5ed1cd8ff849293160ef85659e2899ca6c9193d6301ef7b7de4589c6cbbe2917",
+    "lib/theme.typ": "49832806cf29bda7deffc0b513d3d84a6fe7486cef3ebea8a82013d28e3a5d3d",
+    "typst.toml": "a2e033131cb44b2419009847ab98bbeb10654df9331572ea078af745f615b31a"
+  }
+}

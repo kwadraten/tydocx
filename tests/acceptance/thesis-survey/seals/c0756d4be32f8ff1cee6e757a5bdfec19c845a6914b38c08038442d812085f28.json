@@ -1,0 +1,14 @@
+{
+  "archive_sha256": "b72756da99a97c5000252fc6e52d27402b76951d448b676915d87f4af5ddedd2",
+  "files_sha256": {
+    "LICENSE": "6df665d24fd4810d8a76db5b3ee5178b9b90a38fa7d3e0c079498cb13b7bd970",
+    "README.md": "245bade91097ea15b31a8d2d2f1369f7db4be7428c6d3f3c94d98ee1b4f0b3b6",
+    "src/lib.typ": "2936bfeb7ba7501903ed9cfec5c5f237ee6938093f38b455e7b07dcaf4c13a51",
+    "src/tud-color-cmyk.typ": "41cc222996b6ebea014f58b29339b97f0ebec4e41c476845b31682d4b9299482",
+    "src/tud-color-rgb.typ": "4dc9fbd5d16b0a93898cb3b03f42742e18c6256e491cd5671bf800cd2539c0c0",
+    "src/tud-fonts.typ": "2e0100fcf55e687a09eb8f033394762ad58159f926407e816a8105891d9ee5cf",
+    "src/tud-logo.typ": "6df35e5d36365b0f812d5d6e9162cd0c45350efe12b15ca242badd1ecf035640",
+    "src/tudelft.svg": "480d4d76f501c8daeabd450a0439dd7d05764928bf1432489c801dc3aea6f741",
+    "typst.toml": "5aa13ea2056b79edfab61d44160a45e3b440c68daf887df57b0cb48da2d1089a"
+  }
+}

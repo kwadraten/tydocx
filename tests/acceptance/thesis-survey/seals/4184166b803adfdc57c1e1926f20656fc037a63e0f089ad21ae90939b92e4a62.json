@@ -1,0 +1,20 @@
+{
+  "archive_sha256": "823dc69ff2d220a8e3a8d990701847134f6450329235bed0ef8dd6f79bfe9b93",
+  "files_sha256": {
+    "LICENSE": "23a2f90955991d14d57fe3815e57950791bfe75e29aaee815ce2ad337e03308e",
+    "README.md": "4ddebf9be7b01428b8abdefdf8b0a9b1dfa029087ca23bb0cfc7384e3ae70928",
+    "content/abstract.typ": "15770a53abf2ff7aa82661936d00b777f627292e7cde1679470599594ad629c6",
+    "content/acknowledgements.typ": "d7289977b1b7b74f3f25911326863d3339b073bc027fea1eb0c2119b69c5ecab",
+    "content/appendix.typ": "f8be8c4fffd5724b421d02d95ab9a3433a6bdd96e58ade75972db297a0c1984d",
+    "content/ch1.typ": "630abc2f3dcd714e7ab8b31d17988b8b1a020290701baddef4bad81ed330e12e",
+    "content/ch2.typ": "c16e0530024d52499ad327a25bb7b9c70144bc013866661d2ca4326bf8e0e231",
+    "content/ch3.typ": "6283141e282387144507269ca4f1761b0c9f0675f19087c5a48da33b341e7e0c",
+    "content/ch4.typ": "c98bd2264ee310d2bc0e90aa873c6d597b8c5a4dfffd7f96486f6335d185d40d",
+    "content/introduction.typ": "6766abb9deef1d13f9efdc4e275550e055f7d3cdd39ae3b5083b7c4c011fc0dc",
+    "content/main.typ": "450cdb102efcc0703aec51bcaa8f27783f52bc257986fdf130048facf45cf5cf",
+    "content/references.bib": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "content/references.typ": "88be9fb225eb4192304aea4b650b542ea9969215faa85f9f8292f165e0ef62d7",
+    "typst.toml": "ff36e9a914abfdd7350aa729ef8b5e79a07ab44cd4602ad1c720523c8305fde3",
+    "uoft.typ": "5c6284adc10d7be90c8b4be24ff5351d44eef0629cc587a419a73d0e2fdbca1f"
+  }
+}

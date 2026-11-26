@@ -1,0 +1,8 @@
+{
+  "archive_sha256": "fdce69c2cba646c4c2162517aa9f9c90232ffbd5793d98f646b72da155f5add2",
+  "files_sha256": {
+    "LICENSE": "605e9047a563c5c8396ffb18232aa4304ec56586aee537c45064c6fb425e44ad",
+    "outrageous.typ": "d691982492c11d40a7386fae7d81fc5984fff159832306df2de49cb9061dfeca",
+    "typst.toml": "5445205f997f57a09f0920dd7d3efd4c86a79c75a7b5fea61ab125c0ddb6bc78"
+  }
+}

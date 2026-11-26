@@ -1,0 +1,13 @@
+{
+  "archive_sha256": "b85ab1d49bdd920437774c08a696889aa17f9aaab5b31856571f04038d7a5629",
+  "files_sha256": {
+    "LICENSE": "0e7fe80f58f5a704bba4e76167275006ed1ee63b995a6215443e1a70eca2b06c",
+    "README.md": "77ae9b09e3f0e97c733ac7ded68119c6f7325a00afbd2a7681b5f098f02dc812",
+    "codly.typ": "8c2ab9011833baf8fb586f9465695b09f48de8507ebe8317a9d765116e29e5b5",
+    "src/args.json": "caa8ef34cc90962766863851e0a1e2ceae4b90f6c56041a3c5dbcd261ef8e54f",
+    "src/args.typ": "45a808aedd50c8e160feb0d188a90169b1962aa2ee2b4d7f91333d01e13e2457",
+    "src/lib.typ": "59936c6c51f946b93dfa88fb0b8826bc4f9ae8ca20c026b24d625357b83a901b",
+    "src/typst-small.png": "828a7f6d87ac8a029325f1394631d960fd43fcae46e58db44eab7f5480050fd0",
+    "typst.toml": "4a79fdf4255e29c49b5103eaae9ea8a5ca540c25e572bc3d81c1506d4401f768"
+  }
+}

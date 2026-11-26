@@ -1,0 +1,17 @@
+{
+  "archive_sha256": "0237a4e45793ac23e0366f5e68b874ba4df33d00721cba8ba4844949941e01d9",
+  "files_sha256": {
+    "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "README.md": "dc014978eedd3e87da489bd58bc534fc836c8b424c88edb9b5cb52b5535be1d2",
+    "lib.typ": "cb7077c13da034e88c8668efaca349ad067ab75d316da3fdf73e26055bd219a3",
+    "shared/figures/eth_logo_kurz_pos.svg": "66aac71e7990402d7aecef180b8e05a162470f28bff9100c538dba165ac44c3a",
+    "shared/figures/pulp_logo_icon.svg": "07380c790fa812a627df7ffbba36d8163271598695951ceda52a4dbfbeca7f5c",
+    "shared/figures/pulp_logo_inline.svg": "68651abb785dc74c3ff604fac47031f69c4cc2f3d8a2d067bc71256326aad876",
+    "shared/typst-guide.typ": "ce6aa47dbd444a35089ac9b4cc56115035dfd75810db174273684d256753e1bf",
+    "shared/utils.typ": "14b30fc7148d700ed54c93880a0f7939379acd53e1b420e00f75d73921d1c97f",
+    "template/acronyms.typ": "55a917d9a80df7aa3b5c2ffe6f6fbf6ed3dde4e392ed8d6755f9b904abbd648a",
+    "template/main.typ": "28aaaa8bf29c2bcdb2de433fbd06627936a7183e9c3f81ef5b20e073c6c288d8",
+    "template/references.bib": "4900ce6c0b84c3456956104acb7f0c4423f4da739757656c9258515f7bc08aa4",
+    "typst.toml": "9a4f351d0a4274242ac3e50e8ab1cdb3224058bf492f401274b5f3436b01049e"
+  }
+}

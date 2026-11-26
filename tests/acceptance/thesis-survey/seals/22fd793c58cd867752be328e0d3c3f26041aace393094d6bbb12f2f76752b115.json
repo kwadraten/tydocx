@@ -1,0 +1,20 @@
+{
+  "archive_sha256": "a61883a4af4ca923a37c597900e674f40dad3f7bde3f2a3d8fe8042e6ca8a66b",
+  "files_sha256": {
+    "CONTRIBUTING.md": "7f314d5d0a7ecdf22d4413896387ab2ab77ecedc64c2eed9e9d0032771ff49e5",
+    "LICENSE": "c33a5648cee72a57bdfee4b309998e04569001904d65189cd1204b1772a0fe86",
+    "README.md": "dd59c18e46f40e11a6b8dafe55e991644f09d325ed3fb045b9bad57e998d1367",
+    "src/coords.typ": "4607ae288da68e1c7cd4367a1d596cf411352670761026289d182648e1885c77",
+    "src/default-marks.typ": "a9ca1dacaca9f9e5d460e4cf9e380fba8a74d3489b6252768be42c0644a2b175",
+    "src/deps.typ": "b2f64923caf913b16b4506166f4d0f0900def96d485af47edcdef17279fdf9f6",
+    "src/diagram.typ": "83e2b8f4475b3ef4cc7f8b38896d40a7ee33f587dae6e86e91b9ff6855593058",
+    "src/draw.typ": "7085e53642a4c5b7f79f558c6e6b89acefc14ae5ababfebf346b265188a1a2e3",
+    "src/edge.typ": "f2686d44e61f1546cf12f73eb9b218a37a1b746dd447a1f8de8db0ad4409a19c",
+    "src/exports.typ": "93c7e9c42875b1c740829ef1651c41aaec8fcc521c3b18bed2fb73a41635020f",
+    "src/marks.typ": "c43aae459742f19d2c7e6401e0e920f9444b3763cd361559d22dafeb1554bff1",
+    "src/node.typ": "b03295d2429eb1f19941ff9f2fb4219f9522a0c62bf1dae317e15ffc411ae7c7",
+    "src/shapes.typ": "9b975565c4f4d43a45da92f436a73acee2941023b77fda4e7e49aebbf2771c2c",
+    "src/utils.typ": "0bd87517599de5b65d0541f1db019bcd17c1b3c9bf4dda34ce161cb96709840a",
+    "typst.toml": "7c9171d77f84342093646561b8b7009fff982ded6137963f20a993e79d635cab"
+  }
+}

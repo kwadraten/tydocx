@@ -1,0 +1,15 @@
+{
+  "archive_sha256": "a47b415be91c434029420e6e52ae97e8a96cee82c7d4d559f418a41a95130096",
+  "files_sha256": {
+    "LICENSE": "8cb5a8d77e861c96b8ae7205ffac38a7eb2aa6474f6cb067ff909423bb920efe",
+    "README.md": "11037db0932c193060d192b42547a29580cdb01cbb6d4b39acd89e4ca04017cf",
+    "lib.typ": "be1cba0b1c3f0e1bcb69c3c9108da6f7f155eb55e780c3600748e4c69db12cac",
+    "src/counter.typ": "f0d9b677b782e55685cd3490cbee2b90347ea65cedcca950cbed4fe1265abae7",
+    "src/state.typ": "e1243bc1de0cae475f832b73abd5d89dcde8c8fb74844c727dcf49cff77c5fc7",
+    "src/thm.typ": "61200c047a407e5d4cf56b0fff68d9a452ef2418bbea17d6b2775d57b0b7a2de",
+    "themes/ams.typ": "c506b711f54e2d87feb6be99c2bc43dee7d88f764b7038c0019cfda407491fc3",
+    "themes/stripe.typ": "bec4138e3b756d929665de981bcb0efdc072b2d6ab08c4e75b88fc57224fd8a4",
+    "themes/thm-themes.typ": "9742026fff34524ad081c4ef714d262cb6c935f86853f3176d11dbccc5e52901",
+    "typst.toml": "49aee517de7534acb751c42d89fd45172f4a5f3f3b2201ad002d7b11abf41557"
+  }
+}

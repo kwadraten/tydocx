@@ -1,0 +1,762 @@
+{
+  "index_url": "https://packages.typst.org/preview/index.json",
+  "index_sha256": "0202926e51e474e1a8fc002cf9e7ce1e81f179feae07b6e6c34b08ba02d2fe1f",
+  "entries": [
+    {
+      "id": "charged-ieee",
+      "version": "0.1.4",
+      "license": "MIT-0",
+      "minimum_typst": "0.12.0",
+      "universe_url": "https://typst.app/universe/package/charged-ieee/0.1.4/",
+      "repository_url": "https://github.com/typst/templates",
+      "archive_url": "https://packages.typst.org/preview/charged-ieee-0.1.4.tar.gz",
+      "archive_sha256": "ae040669d934fe01915c1a781a5e69db9ebdcab9839f6cd9c73294973882ceca",
+      "archive": "archives/charged-ieee-0.1.4.tar.gz",
+      "root": "sources/charged-ieee/template",
+      "entrypoint": "sources/charged-ieee/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "refs.bib"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/charged-ieee:0.1.4"
+      ],
+      "possible_float_sources": [
+        "lib.typ"
+      ],
+      "coverage": "conference paper"
+    },
+    {
+      "id": "faithful-acmart",
+      "version": "0.2.0",
+      "license": "MIT AND MIT-0",
+      "minimum_typst": "0.14.0",
+      "universe_url": "https://typst.app/universe/package/faithful-acmart/0.2.0/",
+      "repository_url": "https://github.com/fzaiser/faithful-acmart",
+      "archive_url": "https://packages.typst.org/preview/faithful-acmart-0.2.0.tar.gz",
+      "archive_sha256": "f253c2cee8ee8bacc9b7d416e8b8f0e55fb55d09c66cd78baefae197b6b4ae2b",
+      "archive": "archives/faithful-acmart-0.2.0.tar.gz",
+      "root": "sources/faithful-acmart/template",
+      "entrypoint": "sources/faithful-acmart/template/main.typ",
+      "package_entrypoint": "src/lib.typ",
+      "resources_in_template_root": [
+        "LICENSE",
+        "refs.bib"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/faithful-acmart:0.2.0"
+      ],
+      "possible_float_sources": [
+        "src/lib.typ",
+        "src/parts/frontmatter.typ"
+      ],
+      "coverage": "conference paper"
+    },
+    {
+      "id": "blind-cvpr",
+      "version": "0.7.0",
+      "license": "MIT",
+      "minimum_typst": "0.13.1",
+      "universe_url": "https://typst.app/universe/package/blind-cvpr/0.7.0/",
+      "repository_url": "https://github.com/daskol/typst-templates",
+      "archive_url": "https://packages.typst.org/preview/blind-cvpr-0.7.0.tar.gz",
+      "archive_sha256": "f15c4001c59c6ffaa222aca3c4b26648799dfea94cc6c117e0d5b3b961c82de0",
+      "archive": "archives/blind-cvpr-0.7.0.tar.gz",
+      "root": "sources/blind-cvpr/template",
+      "entrypoint": "sources/blind-cvpr/template/main.typ",
+      "package_entrypoint": "cvpr.typ",
+      "resources_in_template_root": [
+        "logo.typ",
+        "main.bib"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/blind-cvpr:0.7.0"
+      ],
+      "possible_float_sources": [
+        "template/main.typ"
+      ],
+      "coverage": "conference paper"
+    },
+    {
+      "id": "clean-math-paper",
+      "version": "0.2.8",
+      "license": "MIT",
+      "minimum_typst": "0.12.0",
+      "universe_url": "https://typst.app/universe/package/clean-math-paper/0.2.8/",
+      "repository_url": "https://github.com/JoshuaLampert/clean-math-paper",
+      "archive_url": "https://packages.typst.org/preview/clean-math-paper-0.2.8.tar.gz",
+      "archive_sha256": "6dfd5c48a57d3f4166e3ce5bf2f361ec55a4364846f3dfeecc3feedcb22ba3ea",
+      "archive": "archives/clean-math-paper-0.2.8.tar.gz",
+      "root": "sources/clean-math-paper/template",
+      "entrypoint": "sources/clean-math-paper/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "bibliography.bib"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/clean-math-paper:0.2.8",
+        "@preview/great-theorems:0.1.2",
+        "@preview/i-figured:0.2.4",
+        "@preview/rich-counters:0.2.2"
+      ],
+      "possible_float_sources": [],
+      "coverage": "mathematics"
+    },
+    {
+      "id": "euler-math",
+      "version": "0.1.0",
+      "license": "MIT",
+      "minimum_typst": "0.13.0",
+      "universe_url": "https://typst.app/universe/package/euler-math/0.1.0/",
+      "repository_url": "https://github.com/gmborjasb/euler-math",
+      "archive_url": "https://packages.typst.org/preview/euler-math-0.1.0.tar.gz",
+      "archive_sha256": "1ed1c58c84b5cf6d953ac689c7242b7263cc00a96601254fda7b140da01daee3",
+      "archive": "archives/euler-math-0.1.0.tar.gz",
+      "root": "sources/euler-math/template",
+      "entrypoint": "sources/euler-math/template/main.typ",
+      "package_entrypoint": "src/lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/euler-math:0.1.0",
+        "@preview/theorion:0.6.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "mathematics"
+    },
+    {
+      "id": "adaptable-pset",
+      "version": "0.2.0",
+      "license": "Unlicense",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/adaptable-pset/0.2.0/",
+      "repository_url": "https://github.com/stuxf/adaptable-pset",
+      "archive_url": "https://packages.typst.org/preview/adaptable-pset-0.2.0.tar.gz",
+      "archive_sha256": "e7124917e98083b104c9a79e8387835d5161ac16e305a8150f4c2b3e1bd734f4",
+      "archive": "archives/adaptable-pset-0.2.0.tar.gz",
+      "root": "sources/adaptable-pset/template",
+      "entrypoint": "sources/adaptable-pset/template/main.typ",
+      "package_entrypoint": "src/lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/adaptable-pset:0.2.0",
+        "@preview/codly-languages:0.1.8",
+        "@preview/codly:1.2.0",
+        "@preview/diverential:0.2.0",
+        "@preview/physica:0.9.4",
+        "@preview/quick-maths:0.2.0",
+        "@preview/showybox:2.0.2"
+      ],
+      "possible_float_sources": [],
+      "coverage": "mathematics"
+    },
+    {
+      "id": "modern-nju-thesis",
+      "version": "0.4.1",
+      "license": "MIT",
+      "minimum_typst": "0.13.0",
+      "universe_url": "https://typst.app/universe/package/modern-nju-thesis/0.4.1/",
+      "repository_url": "https://github.com/nju-lug/modern-nju-thesis",
+      "archive_url": "https://packages.typst.org/preview/modern-nju-thesis-0.4.1.tar.gz",
+      "archive_sha256": "5ba4fd44af46db17a5bb6091529b78167bd50881f148c33d82a49c89221cc640",
+      "archive": "archives/modern-nju-thesis-0.4.1.tar.gz",
+      "root": "sources/modern-nju-thesis/template",
+      "entrypoint": "sources/modern-nju-thesis/template/thesis.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "images/nju-emblem.svg",
+        "ref.bib"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/cuti:0.4.0",
+        "@preview/i-figured:0.2.4",
+        "@preview/modern-nju-thesis:0.4.1",
+        "@preview/pinit:0.2.2",
+        "@preview/tablex:0.0.9"
+      ],
+      "possible_float_sources": [],
+      "coverage": "CJK"
+    },
+    {
+      "id": "canonical-nthu-thesis",
+      "version": "0.2.0",
+      "license": "MIT",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/canonical-nthu-thesis/0.2.0/",
+      "repository_url": "https://codeberg.org/kotatsuyaki/canonical-nthu-thesis",
+      "archive_url": "https://packages.typst.org/preview/canonical-nthu-thesis-0.2.0.tar.gz",
+      "archive_sha256": "b710f493abeeccd5643f0475314ece17bba3ba6bf48f8b450062ffe7bfdf5a40",
+      "archive": "archives/canonical-nthu-thesis-0.2.0.tar.gz",
+      "root": "sources/canonical-nthu-thesis/template",
+      "entrypoint": "sources/canonical-nthu-thesis/template/thesis.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "citations.bib"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/canonical-nthu-thesis:0.2.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "CJK"
+    },
+    {
+      "id": "cv-nikudanngo",
+      "version": "0.1.0",
+      "license": "MIT",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/cv-nikudanngo/0.1.0/",
+      "repository_url": "https://github.com/Nikudanngo/typst-ja-resume-template",
+      "archive_url": "https://packages.typst.org/preview/cv-nikudanngo-0.1.0.tar.gz",
+      "archive_sha256": "faf4f484bf11bc97882eef95e53076c5507b1bda8c655188f9309a9bf1966efc",
+      "archive": "archives/cv-nikudanngo-0.1.0.tar.gz",
+      "root": "sources/cv-nikudanngo/template",
+      "entrypoint": "sources/cv-nikudanngo/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/cv-nikudanngo:0.1.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "CJK"
+    },
+    {
+      "id": "bone-resume",
+      "version": "0.3.1",
+      "license": "Apache-2.0",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/bone-resume/0.3.1/",
+      "repository_url": null,
+      "archive_url": "https://packages.typst.org/preview/bone-resume-0.3.1.tar.gz",
+      "archive_sha256": "7dd1de86b3d92e69236636bdc207fa0d9ae72bec18a5bd93c237e6bd9219add9",
+      "archive": "archives/bone-resume-0.3.1.tar.gz",
+      "root": "sources/bone-resume/template",
+      "entrypoint": "sources/bone-resume/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/bone-resume:0.3.1",
+        "@preview/oxifmt:0.2.1"
+      ],
+      "possible_float_sources": [],
+      "coverage": "CJK"
+    },
+    {
+      "id": "exam-zh-next",
+      "version": "0.1.0",
+      "license": "MIT AND MIT-0",
+      "minimum_typst": "0.15.0",
+      "universe_url": "https://typst.app/universe/package/exam-zh-next/0.1.0/",
+      "repository_url": "https://github.com/pku-lemonade/exam-zh-next",
+      "archive_url": "https://packages.typst.org/preview/exam-zh-next-0.1.0.tar.gz",
+      "archive_sha256": "2aaebfcc52c766884d60691b2165f5ff4433dba5d02f3ff22862c259fca57c8b",
+      "archive": "archives/exam-zh-next-0.1.0.tar.gz",
+      "root": "sources/exam-zh-next/template",
+      "entrypoint": "sources/exam-zh-next/template/main.typ",
+      "package_entrypoint": "src/lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/exam-zh-next:0.1.0"
+      ],
+      "possible_float_sources": [
+        "src/title.typ"
+      ],
+      "coverage": "CJK"
+    },
+    {
+      "id": "basic-resume",
+      "version": "0.2.10",
+      "license": "Unlicense",
+      "minimum_typst": "0.13.0",
+      "universe_url": "https://typst.app/universe/package/basic-resume/0.2.10/",
+      "repository_url": "https://github.com/stuxf/basic-typst-resume-template",
+      "archive_url": "https://packages.typst.org/preview/basic-resume-0.2.10.tar.gz",
+      "archive_sha256": "4fa79549c704bc982576a65d0d4bc92e43169eac010c7ca8338c868b8ae2d46c",
+      "archive": "archives/basic-resume-0.2.10.tar.gz",
+      "root": "sources/basic-resume/template",
+      "entrypoint": "sources/basic-resume/template/main.typ",
+      "package_entrypoint": "src/lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/basic-resume:0.2.10"
+      ],
+      "possible_float_sources": [],
+      "coverage": "resume"
+    },
+    {
+      "id": "cobalt-cv",
+      "version": "0.1.0",
+      "license": "MIT",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/cobalt-cv/0.1.0/",
+      "repository_url": null,
+      "archive_url": "https://packages.typst.org/preview/cobalt-cv-0.1.0.tar.gz",
+      "archive_sha256": "84d4879c3254d74cd087b23394bfc6da8bd41d471afc2ecd7147ac9e56e5b1ec",
+      "archive": "archives/cobalt-cv-0.1.0.tar.gz",
+      "root": "sources/cobalt-cv/template",
+      "entrypoint": "sources/cobalt-cv/template/main.typ",
+      "package_entrypoint": "template/main.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/fontawesome:0.6.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "resume"
+    },
+    {
+      "id": "rendercv",
+      "version": "0.3.0",
+      "license": "MIT",
+      "minimum_typst": "0.14.0",
+      "universe_url": "https://typst.app/universe/package/rendercv/0.3.0/",
+      "repository_url": "https://github.com/rendercv/rendercv",
+      "archive_url": "https://packages.typst.org/preview/rendercv-0.3.0.tar.gz",
+      "archive_sha256": "7d72eb057072ccccac83252499a0417e3ad5dc4781b49d90d1d686dcb25fe927",
+      "archive": "archives/rendercv-0.3.0.tar.gz",
+      "root": "sources/rendercv/template",
+      "entrypoint": "sources/rendercv/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/fontawesome:0.6.0",
+        "@preview/rendercv:0.3.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "resume"
+    },
+    {
+      "id": "biz-report",
+      "version": "0.3.1",
+      "license": "Apache-2.0",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/biz-report/0.3.1/",
+      "repository_url": "https://github.com/garethwebber/business-report",
+      "archive_url": "https://packages.typst.org/preview/biz-report-0.3.1.tar.gz",
+      "archive_sha256": "afb18cb22fc41c8cb4b1c2dbd52b126ca3ba13949a97f239012d70f2bf027a92",
+      "archive": "archives/biz-report-0.3.1.tar.gz",
+      "root": "sources/biz-report/template",
+      "entrypoint": "sources/biz-report/template/example.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "author.png",
+        "mylogo.svg",
+        "techimage.svg"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/biz-report:0.3.1",
+        "@preview/droplet:0.3.1",
+        "@preview/fontawesome:0.6.0",
+        "@preview/wrap-it:0.1.1"
+      ],
+      "possible_float_sources": [],
+      "coverage": "report / running furniture"
+    },
+    {
+      "id": "modern-project-report",
+      "version": "0.1.0",
+      "license": "MIT",
+      "minimum_typst": "0.11.0",
+      "universe_url": "https://typst.app/universe/package/modern-project-report/0.1.0/",
+      "repository_url": "https://github.com/aurghya-0/Project-Report-Typst",
+      "archive_url": "https://packages.typst.org/preview/modern-project-report-0.1.0.tar.gz",
+      "archive_sha256": "0206dae2f23510670af8909d985228ad17b109e1ba84b6acd9630cdf35a88c64",
+      "archive": "archives/modern-project-report-0.1.0.tar.gz",
+      "root": "sources/modern-project-report/template",
+      "entrypoint": "sources/modern-project-report/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/modern-project-report:0.1.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "report / running furniture"
+    },
+    {
+      "id": "ntnu-physics-report-replica",
+      "version": "0.1.0",
+      "license": "MIT",
+      "minimum_typst": "0.12.0",
+      "universe_url": "https://typst.app/universe/package/ntnu-physics-report-replica/0.1.0/",
+      "repository_url": null,
+      "archive_url": "https://packages.typst.org/preview/ntnu-physics-report-replica-0.1.0.tar.gz",
+      "archive_sha256": "be6136832c6ef818af6adac6e0fc0befe4de55c309fad69eca249b3772e7e345",
+      "archive": "archives/ntnu-physics-report-replica-0.1.0.tar.gz",
+      "root": "sources/ntnu-physics-report-replica/template",
+      "entrypoint": "sources/ntnu-physics-report-replica/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/ntnu-physics-report-replica:0.1.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "report / running furniture"
+    },
+    {
+      "id": "tufte-memo",
+      "version": "0.1.2",
+      "license": "MIT",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/tufte-memo/0.1.2/",
+      "repository_url": "https://github.com/nogula/tufte-memo",
+      "archive_url": "https://packages.typst.org/preview/tufte-memo-0.1.2.tar.gz",
+      "archive_sha256": "2f196bc3bb1ec449d6e1e3d6ee121344c48aa4f52569e5018e9bf3a48f6aca05",
+      "archive": "archives/tufte-memo-0.1.2.tar.gz",
+      "root": "sources/tufte-memo/template",
+      "entrypoint": "sources/tufte-memo/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "references.bib",
+        "short_ref.csl"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/drafting:0.2.0",
+        "@preview/tufte-memo:0.1.2"
+      ],
+      "possible_float_sources": [],
+      "coverage": "report / running furniture"
+    },
+    {
+      "id": "yuuko-report",
+      "version": "0.1.0",
+      "license": "MIT AND MIT-0",
+      "minimum_typst": "0.15.0",
+      "universe_url": "https://typst.app/universe/package/yuuko-report/0.1.0/",
+      "repository_url": null,
+      "archive_url": "https://packages.typst.org/preview/yuuko-report-0.1.0.tar.gz",
+      "archive_sha256": "b9952cdf3d012ae25df36a3bca626e55ec4a42cc130cb09863606b99fd9bd3d2",
+      "archive": "archives/yuuko-report-0.1.0.tar.gz",
+      "root": "sources/yuuko-report/template",
+      "entrypoint": "sources/yuuko-report/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "LICENSE"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/kip:0.1.0",
+        "@preview/merman:0.1.0",
+        "@preview/yuuko-report:0.1.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "report / running furniture"
+    },
+    {
+      "id": "touying",
+      "version": "0.3.2",
+      "license": "MIT",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/touying/0.3.2/",
+      "repository_url": "https://github.com/touying-typ/touying",
+      "archive_url": "https://packages.typst.org/preview/touying-0.3.2.tar.gz",
+      "archive_sha256": "16b46a51ac2189f5c7a9615eee385300a3c09066c2a063c7b13799dc4b267a1f",
+      "archive": "archives/touying-0.3.2.tar.gz",
+      "root": "sources/touying/template",
+      "entrypoint": "sources/touying/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/touying:0.3.2"
+      ],
+      "possible_float_sources": [],
+      "coverage": "slides"
+    },
+    {
+      "id": "dudi-colorful-slides",
+      "version": "0.1.0",
+      "license": "MIT-0",
+      "minimum_typst": "0.11.0",
+      "universe_url": "https://typst.app/universe/package/dudi-colorful-slides/0.1.0/",
+      "repository_url": "https://github.com/dudi0D/dudi-colorful-template",
+      "archive_url": "https://packages.typst.org/preview/dudi-colorful-slides-0.1.0.tar.gz",
+      "archive_sha256": "f9004e4a03a5c7db046fc1f3e3186e93ec01c72933a096bc71fbb1bfb5a21cdf",
+      "archive": "archives/dudi-colorful-slides-0.1.0.tar.gz",
+      "root": "sources/dudi-colorful-slides/template",
+      "entrypoint": "sources/dudi-colorful-slides/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/dudi-colorful-slides:0.1.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "slides"
+    },
+    {
+      "id": "barbet-slides",
+      "version": "0.2.1",
+      "license": "GPL-3.0-or-later AND MIT-0",
+      "minimum_typst": "0.15.0",
+      "universe_url": "https://typst.app/universe/package/barbet-slides/0.2.1/",
+      "repository_url": "https://github.com/zhenhuang-tw/barbet-slides",
+      "archive_url": "https://packages.typst.org/preview/barbet-slides-0.2.1.tar.gz",
+      "archive_sha256": "331625d7770c3bdd3b33daba49fc63c51e7ca3946efa8e6c3fd17de2aa183da7",
+      "archive": "archives/barbet-slides-0.2.1.tar.gz",
+      "root": "sources/barbet-slides/template",
+      "entrypoint": "sources/barbet-slides/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "refs.bib"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/barbet-slides:0.2.1",
+        "@preview/typslides:1.4.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "slides"
+    },
+    {
+      "id": "simple-research-poster",
+      "version": "0.2.0",
+      "license": "MIT-0",
+      "minimum_typst": "0.13.0",
+      "universe_url": "https://typst.app/universe/package/simple-research-poster/0.2.0/",
+      "repository_url": "https://github.com/aneziac/simple-research-poster",
+      "archive_url": "https://packages.typst.org/preview/simple-research-poster-0.2.0.tar.gz",
+      "archive_sha256": "34155d5e82b9a94e8ba62076568071cdf8f1fa6c7418186bc8eff975f6c830b1",
+      "archive": "archives/simple-research-poster-0.2.0.tar.gz",
+      "root": "sources/simple-research-poster/template",
+      "entrypoint": "sources/simple-research-poster/template/poster.typ",
+      "package_entrypoint": "simple-research-poster.typ",
+      "resources_in_template_root": [
+        "assets/logo.png",
+        "colors.typ",
+        "references.bib",
+        "sections.typ"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/simple-research-poster:0.2.0",
+        "@preview/valkyrie:0.2.2"
+      ],
+      "possible_float_sources": [],
+      "coverage": "poster"
+    },
+    {
+      "id": "peace-of-posters",
+      "version": "0.6.0",
+      "license": "MIT",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/peace-of-posters/0.6.0/",
+      "repository_url": "https://github.com/jonaspleyer/peace-of-posters",
+      "archive_url": "https://packages.typst.org/preview/peace-of-posters-0.6.0.tar.gz",
+      "archive_sha256": "3ca89cc1b692403afdaaa8251d7bf70e1eac008478154d3939517fa2fd68711c",
+      "archive": "archives/peace-of-posters-0.6.0.tar.gz",
+      "root": "sources/peace-of-posters/templates/pop-uni-fr-poster",
+      "entrypoint": "sources/peace-of-posters/templates/pop-uni-fr-poster/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "Treron_vernans_male_-_Kent_Ridge_Park.jpg",
+        "bibliography.bib",
+        "peace-dove.png"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/peace-of-posters:0.6.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "poster"
+    },
+    {
+      "id": "isc-hei-poster",
+      "version": "0.8.1",
+      "license": "MIT",
+      "minimum_typst": "0.14.0",
+      "universe_url": "https://typst.app/universe/package/isc-hei-poster/0.8.1/",
+      "repository_url": "https://github.com/ISC-HEI/isc-hei-student-templates",
+      "archive_url": "https://packages.typst.org/preview/isc-hei-poster-0.8.1.tar.gz",
+      "archive_sha256": "3e8bff1a0034c2879002b8b0aed0ad0a7c73e9d01eb36d25ef70660b56ae3153",
+      "archive": "archives/isc-hei-poster-0.8.1.tar.gz",
+      "root": "sources/isc-hei-poster/src",
+      "entrypoint": "sources/isc-hei-poster/src/poster.typ",
+      "package_entrypoint": "isc_templates.typ",
+      "resources_in_template_root": [
+        "figs/made.svg",
+        "fonts/README.md",
+        "fonts/install_fonts.sh",
+        "fonts/ofl.md"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/cetz:0.5.2",
+        "@preview/codelst:2.0.2",
+        "@preview/datify:1.0.1",
+        "@preview/gentle-clues:1.3.1",
+        "@preview/isc-hei-poster:0.8.1",
+        "@preview/placard:0.1.0",
+        "@preview/showybox:2.0.4",
+        "@preview/tiaoma:0.3.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "poster"
+    },
+    {
+      "id": "orange-book",
+      "version": "0.7.1",
+      "license": "MIT-0",
+      "minimum_typst": "0.14.0",
+      "universe_url": "https://typst.app/universe/package/orange-book/0.7.1/",
+      "repository_url": "https://github.com/flavio20002/typst-orange-template",
+      "archive_url": "https://packages.typst.org/preview/orange-book-0.7.1.tar.gz",
+      "archive_sha256": "76ee4c0eda69b27c4100d4d796a7ebff6d5b9e5ab7d35c09de912abdd5f0fa3f",
+      "archive": "archives/orange-book-0.7.1.tar.gz",
+      "root": "sources/orange-book/template",
+      "entrypoint": "sources/orange-book/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "background.svg",
+        "creodocs_logo.svg",
+        "orange1.jpg",
+        "orange2.jpg",
+        "orange3.jpg",
+        "placeholder.jpg",
+        "sample.bib"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/orange-book:0.7.1"
+      ],
+      "possible_float_sources": [],
+      "coverage": "book / running furniture"
+    },
+    {
+      "id": "wonderous-book",
+      "version": "0.1.2",
+      "license": "MIT-0",
+      "minimum_typst": "0.12.0",
+      "universe_url": "https://typst.app/universe/package/wonderous-book/0.1.2/",
+      "repository_url": "https://github.com/typst/templates",
+      "archive_url": "https://packages.typst.org/preview/wonderous-book-0.1.2.tar.gz",
+      "archive_sha256": "8037aaf2c409b1d208d19490dbf548923b137427f9a3b78ce219861dc6df4534",
+      "archive": "archives/wonderous-book-0.1.2.tar.gz",
+      "root": "sources/wonderous-book/template",
+      "entrypoint": "sources/wonderous-book/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/wonderous-book:0.1.2"
+      ],
+      "possible_float_sources": [],
+      "coverage": "book / running furniture"
+    },
+    {
+      "id": "araby-book",
+      "version": "0.2.0",
+      "license": "BSD-3-Clause AND 0BSD",
+      "minimum_typst": null,
+      "universe_url": "https://typst.app/universe/package/araby-book/0.2.0/",
+      "repository_url": "https://github.com/Abdelaziz-Islam-Galal/araby-book",
+      "archive_url": "https://packages.typst.org/preview/araby-book-0.2.0.tar.gz",
+      "archive_sha256": "b619733076ed213b86d258163d6dcf07ec71bee31ed267102abf5a62546421b7",
+      "archive": "archives/araby-book-0.2.0.tar.gz",
+      "root": "sources/araby-book/template",
+      "entrypoint": "sources/araby-book/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/araby-book:0.2.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "book / running furniture"
+    },
+    {
+      "id": "latexy-book",
+      "version": "0.0.4",
+      "license": "MIT-0",
+      "minimum_typst": "0.14.0",
+      "universe_url": "https://typst.app/universe/package/latexy-book/0.0.4/",
+      "repository_url": "https://github.com/maobin-xu/latexy-book",
+      "archive_url": "https://packages.typst.org/preview/latexy-book-0.0.4.tar.gz",
+      "archive_sha256": "f140613220e5e93d5bb03003729a56836ac8f9c067e3b208dfdf0614eefb0e1b",
+      "archive": "archives/latexy-book-0.0.4.tar.gz",
+      "root": "sources/latexy-book/template",
+      "entrypoint": "sources/latexy-book/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "ref.bib"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/cetz:0.5.2",
+        "@preview/latexy-book:0.0.4"
+      ],
+      "possible_float_sources": [],
+      "coverage": "book / running furniture"
+    },
+    {
+      "id": "classy-german-invoice",
+      "version": "0.3.2",
+      "license": "MIT-0",
+      "minimum_typst": "0.14.0",
+      "universe_url": "https://typst.app/universe/package/classy-german-invoice/0.3.2/",
+      "repository_url": "https://github.com/erictapen/typst-invoice",
+      "archive_url": "https://packages.typst.org/preview/classy-german-invoice-0.3.2.tar.gz",
+      "archive_sha256": "d3774fece44c7f94c7ebdd8f365c575808858f9f2f9f12034f32c9d879a123df",
+      "archive": "archives/classy-german-invoice-0.3.2.tar.gz",
+      "root": "sources/classy-german-invoice/template",
+      "entrypoint": "sources/classy-german-invoice/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [
+        "example_signature.png"
+      ],
+      "referenced_packages_in_archive": [
+        "@preview/cades:0.3.1",
+        "@preview/classy-german-invoice:0.3.2",
+        "@preview/ibanator:0.1.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "table"
+    },
+    {
+      "id": "neat-timetable",
+      "version": "0.1.0",
+      "license": "AGPL-3.0-only",
+      "minimum_typst": "0.11.1",
+      "universe_url": "https://typst.app/universe/package/neat-timetable/0.1.0/",
+      "repository_url": "https://codeberg.org/Andrew15-5/neat-timetable",
+      "archive_url": "https://packages.typst.org/preview/neat-timetable-0.1.0.tar.gz",
+      "archive_sha256": "1c7e3b4e68f97959b27be2afe986051f8d88b97824963c3a6ed24e8e40efeb8d",
+      "archive": "archives/neat-timetable-0.1.0.tar.gz",
+      "root": "sources/neat-timetable/template",
+      "entrypoint": "sources/neat-timetable/template/timetable.typ",
+      "package_entrypoint": "template.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/neat-timetable:0.1.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "table"
+    },
+    {
+      "id": "chef-cookbook",
+      "version": "0.3.0",
+      "license": "MIT",
+      "minimum_typst": "0.13.1",
+      "universe_url": "https://typst.app/universe/package/chef-cookbook/0.3.0/",
+      "repository_url": "https://github.com/Paulmue0/cookbook",
+      "archive_url": "https://packages.typst.org/preview/chef-cookbook-0.3.0.tar.gz",
+      "archive_sha256": "8e4bb3d2da3846919e1629fb1509b53093d0bcdc5673d0d9f5f3e6bab2438b32",
+      "archive": "archives/chef-cookbook-0.3.0.tar.gz",
+      "root": "sources/chef-cookbook/docs/template",
+      "entrypoint": "sources/chef-cookbook/docs/template/main.typ",
+      "package_entrypoint": "src/lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/chef-cookbook:0.3.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "table"
+    },
+    {
+      "id": "appreciated-letter",
+      "version": "0.1.0",
+      "license": "MIT-0",
+      "minimum_typst": "0.6.0",
+      "universe_url": "https://typst.app/universe/package/appreciated-letter/0.1.0/",
+      "repository_url": "https://github.com/typst/templates",
+      "archive_url": "https://packages.typst.org/preview/appreciated-letter-0.1.0.tar.gz",
+      "archive_sha256": "d12b3d9480b5ed25b59211bbba7d9ae8deb84b8d5cf9652a66a44ea623db246f",
+      "archive": "archives/appreciated-letter-0.1.0.tar.gz",
+      "root": "sources/appreciated-letter/template",
+      "entrypoint": "sources/appreciated-letter/template/main.typ",
+      "package_entrypoint": "lib.typ",
+      "resources_in_template_root": [],
+      "referenced_packages_in_archive": [
+        "@preview/appreciated-letter:0.1.0"
+      ],
+      "possible_float_sources": [],
+      "coverage": "letter"
+    }
+  ],
+  "collection_errors": []
+}

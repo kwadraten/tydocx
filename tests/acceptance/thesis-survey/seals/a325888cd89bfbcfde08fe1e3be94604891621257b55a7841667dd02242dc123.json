@@ -1,0 +1,29 @@
+{
+  "archive_sha256": "e17247077f6c0eb51d11f7a502c2b1f2ce3bec582596a309bbc1b00a7c04f394",
+  "files_sha256": {
+    "CHANGELOG.md": "707dc0d3ac577f8cb1493ca42f84acd666dd79b4342133d229a91923e8f69c7e",
+    "LICENSE": "106973b5781df296e3aef39a0fe8d8b60fa70b3558095eb6e063dcccce37a139",
+    "README.md": "14e0e56b6c558d4eb3ff1723bcc7ea9ea65dd063d3a146c3145afedeef152899",
+    "src/assertions/comparative.typ": "0c9122aa3d4318e7bf310b5e47efcb684ce9930afd16e0c54f470763075db179",
+    "src/assertions/length.typ": "0c176f012c3ed131726e66b1d9370a9d5d732394a0eb02a7b0e524f38072f434",
+    "src/assertions/string.typ": "e457de0fa906c49b7e24e5f7c46263ea91cf06073bf3baa95344c7e800cbdf67",
+    "src/assertions-util.typ": "c77901922d4b1eec86bded213d11fda4b9c16ab6dede57f899c9aa0224be89e6",
+    "src/assertions.typ": "aa2077658b22dd4c4730fe4af41bd56b177ef6a5a7a553015cef81b341aed7a7",
+    "src/base-type.typ": "3917b68fa77213230d2b22cc182e1ac37f7ccd22d367ee0f341e289d92bd1d0e",
+    "src/coercions.typ": "b2ed49b17fde95380511ea7b1b3783d7b14aeb29ade11fa98e453b7a18a05f3b",
+    "src/ctx.typ": "4a718769acde9c0bd91dadc63681721f03f3c0db136e899d30e1546440dade44",
+    "src/lib.typ": "65a9feb303862257eeeed90e7fe31492a838768526f4f18cc8e3e9ab1008b050",
+    "src/schemas/author.typ": "473b22ebb44fdded2e6b49d111a4270400746bebf50d34e705c0ae7f548f2b3a",
+    "src/schemas/enumerations.typ": "42bbc80b9028f0f70539276990190cc93f11693767ab18282f2e3dd99ca1f3ce",
+    "src/schemas.typ": "88b5230b6be90e4bfe76ca1f4b5b688003f9389083cc7217c0f710683fc0ef35",
+    "src/types/array.typ": "be9f6b5c00ddaceb45742ea3de39a690242b92c40cbf59dd07fb1f46928fa6e0",
+    "src/types/dictionary.typ": "4753b693d2336cc4ede77b7879e04caaf8c69168b07ffe56474b2a82ba533287",
+    "src/types/logical.typ": "1f80decbee00084ffcef5ab80110f7dbc8eb9c638e8a5c0a07b3e37a959426b9",
+    "src/types/number.typ": "3a230279aae285ac17967e4def164320895ad5d4c64cbac697d53d17ab6f6ad0",
+    "src/types/sink.typ": "9c0f11eac20e08ffe6b19d2f2e38bb07e74fa729ec5413c2a5286f9d4a0d13a8",
+    "src/types/string.typ": "24443220d1570cdc359c869a5f408dc6c87424e2eca84a7e58ef8a2ee805fb49",
+    "src/types/tuple.typ": "a6a9b4359291becf5bcacdb43961327618442d484ba1796c1c2a7fc3383c332d",
+    "src/types.typ": "f495f18ff9b409f48c02918625190a658cfbc9b261441aff4246d5bf756b8d3c",
+    "typst.toml": "9dd76a578ebc5feff72bfd93e72aaf2ebb74c93d322a915166448cff3e9a98c0"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "archive_sha256": "f2e7391710b79d48fe59e7240f082ad3b89a7d4cad4470c7f22b87d0cbef9d50",
+  "files_sha256": {
+    "LICENSE": "2bd9361c6f27e17733db31c07844db4900f1d734353e6d5d42073b875bef4362",
+    "README.md": "d90c49db07acabd08b9e3b131e944feef41740c3c0295749960d22a8bed9753b",
+    "src/lib.typ": "fc8c92b5b0f0665ad0300d75a8d65fab9208d414d25c5a23a0215b6812257500",
+    "src/template.typ": "89bf02cfe7e2f9a1e3df4d45b762a2c1e459f1891ac86de666e4ec400ed43f11",
+    "template/img/TUDelft_logo_black.svg": "134192d3ece611d1d2cb6db781129ff11a1ac63fac6cebe7055f557984badfd0",
+    "template/img/TUDelft_logo_white.svg": "fad4abec27ca91a991cba1ecf16cb2871c82d8a64d46e3ad35d1a4674b38524b",
+    "template/img/cover-image.jpg": "f47f5d118d2217d4288b9459665daf5953dbef66f50f46f8cfc50bcab686fbd5",
+    "template/img/sample-image.svg": "6bd3c5b11f1b2bdd8e35cccb9f254f5d7ef615176738eaa7ea37895d98db658a",
+    "template/main.typ": "9a812ccca18783e931048be9d1cab706bb06c11a05fbc78499afdba640517514",
+    "template/references.bib": "a19b2a549cc661d38d36328a60ee317a35a0f9282f48dd0aa70e28779c002ceb",
+    "template/sections/0default-template.typ": "f2618b0857d93b58d728a1f8aa2de75e664fb2a8049dbad5e45df6ec6ee9e3e8",
+    "template/sections/1introduction.typ": "2ee5ad6c90e8f472cd3bef772b001e2b2982e94cf5444fc23c135fbe250b2be4",
+    "template/sections/2theory.typ": "2ee5ad6c90e8f472cd3bef772b001e2b2982e94cf5444fc23c135fbe250b2be4",
+    "template/sections/3methods.typ": "2ee5ad6c90e8f472cd3bef772b001e2b2982e94cf5444fc23c135fbe250b2be4",
+    "template/sections/4results.typ": "2ee5ad6c90e8f472cd3bef772b001e2b2982e94cf5444fc23c135fbe250b2be4",
+    "template/sections/5conclusion.typ": "2ee5ad6c90e8f472cd3bef772b001e2b2982e94cf5444fc23c135fbe250b2be4",
+    "template/sections/6appendix.typ": "78bf4abb1d13bc2768eff791a2f918da6b2b28bb94173bbbc6053244169a572c",
+    "typst.toml": "8fd4391169dd64e206a9a8f872e256554ebf647ab35c109ce289b916cbdd411f"
+  }
+}

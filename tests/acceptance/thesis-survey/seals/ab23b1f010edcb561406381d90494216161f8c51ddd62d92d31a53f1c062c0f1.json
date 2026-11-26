@@ -1,0 +1,33 @@
+{
+  "archive_sha256": "c2da5ba28501e074f4c0bf7ce2c2d423d38905a0badcbae110c656cc607c966a",
+  "files_sha256": {
+    "LICENSE-MIT": "ed603a2da112b1d5d73ddceeb7ff9d40d41960898cfdf8bf02d3f0ca324b21e1",
+    "LICENSE-MIT-0": "870168f048cdc5ba566abcc9ed00ab847d1415a16dc84dc83c370bef792eadf6",
+    "README.md": "d2f0a191225c75fe0804ef560edc5b5dd7d67f810acf1bcda710600770839e79",
+    "assets/KTH_logo_RGB_bla.svg": "3a09d17ba96bd0a493cc6ee4a9b5d99fe543014492e917e0f1f545b3ac023dc8",
+    "src/covers.typ": "495531076774777457c8ee35770244023073cae43cf33aed1de885655de2703c",
+    "src/for-diva.typ": "150cb3fd748272542b750dce5613577f8709deec5a94fc49c59faa8dc92d8002",
+    "src/front-matter.typ": "da158b86dcafe7144dead797a4a87f87a9a74c0e660b3898d55bbd79517f1a56",
+    "src/lang.toml": "e08b04fa64dbc1d26dba88c9a60e1b35eb6cd7eaef65e9756069682df7b4138a",
+    "src/lib.typ": "e1c2670ccdf545faae8637464caf2123ac9d2e066cc08c73c61cc27154e84500",
+    "src/styling-setup.typ": "afee66914557386d3dfdd187470f9a59df170b7763dfc8946a65d1f7c477b2d9",
+    "src/utils.typ": "8380dfe7193df093bfd7f2ed2200d7d94c9427ff239cea321e3578561e238ca0",
+    "template/acronyms.typ": "1e8842df582880b28d3cdab583711381f03c93283a2f3db86f33439ba357ba20",
+    "template/content/abstract-1-en.typ": "6bf4b5abd81815c14edae909e202743db5f57538f05bd0d3a3128113f81a6056",
+    "template/content/abstract-2-sv.typ": "6bf4b5abd81815c14edae909e202743db5f57538f05bd0d3a3128113f81a6056",
+    "template/content/abstract-3-pt.typ": "6bf4b5abd81815c14edae909e202743db5f57538f05bd0d3a3128113f81a6056",
+    "template/content/acknowledgements.typ": "403eae7a4647c77a93242bf5e2a822b42be37a779a0c3a0a57997c5b901fb6cd",
+    "template/content/ch01-introduction.typ": "4ce8440f13d08ff89f22bc3014dd083059c4fed3a0036ff44b9c26eaed033227",
+    "template/content/ch02-background.typ": "93ecbf8e635f9e4a05925c71f3ce263dd4ace3f15004e253acbdf6359e48465d",
+    "template/content/ch03-method.typ": "0d8d8e5939e9c302b11f58a3836696100525486c95c572d2bf391ae7ee6fdc0d",
+    "template/content/ch04-the-thing.typ": "97fcd5831e79be9615d59c87152b24ae67569a84fd33a9bd160208392b0bc4c4",
+    "template/content/ch05-results.typ": "63c4aaaeae99410d105657f8ef57fa91571b533f178b6d781cca1b1550303b33",
+    "template/content/ch06-discussion.typ": "1aad627d8c24bcebdca40154948eebddded422b8cd2c8fbdcb1356b428235ae9",
+    "template/content/ch07-conclusion.typ": "625357380c9cc76ea511c71c8ef40f6f690eba8a3cbac1bd838fed68a83a80e7",
+    "template/content/zz-a-usage.typ": "895d885ae4643f361a3aff17bf21409136fa2568284324d3ba8970cd2536dc70",
+    "template/content/zz-b-else.typ": "61cddbdaed31b4d0fa1ade98d4b292bb2646478f549846d15c446d3d57af6422",
+    "template/references.yaml": "b5709d5fd26da4809b57365f46562148bc22634dc659d359a48c36503224ee7d",
+    "template/thesis.typ": "1b4bd55a589d13e534434d84b948e0eac99a07adf038dd9369e2365c924293df",
+    "typst.toml": "b201809c1b02427041e99eacc14c2824e7ff3b743c14383454a2d123a970e855"
+  }
+}

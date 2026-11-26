@@ -1,0 +1,11 @@
+{
+  "archive_sha256": "4557c2347f96333a77e5d6d1188ffbfb95e58334573aa53566b51365ea8ff89e",
+  "files_sha256": {
+    "LICENSE": "680c6b22d40b61e2e727fad63e45b730fcc058ac93ace72bbfd7cf4cd486a036",
+    "README.md": "df1cd042f3aa8ad0ce4e5502710b5fb83a27f097d96575bab9f96df2ac185fc4",
+    "lib/circle_numbers.typ": "88b574be22ddfc0d38ac635ba8664d16c009210d56c3c66fcaf1724d02f05167",
+    "lib/numblex.typ": "b362dafc875a4b5424b0f89f3451f489312f09f3b4f8c524627ce15986236730",
+    "lib.typ": "63536d6dd42520fde489ac58407949ffd6ac9ca3c29c35a401a04dd604d5bc4d",
+    "typst.toml": "6bd17bb822d4ab8994f2293fa438ff86688f89b0a7cfb2bc77034c0caa588a03"
+  }
+}

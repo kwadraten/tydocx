@@ -1,0 +1,16 @@
+{
+  "archive_sha256": "3fc8b244d6571dfda5e5e68245052b06ad643e055d579b3b8a3bd542e6fe13b7",
+  "files_sha256": {
+    "CHANGELOG.md": "c6ac65b2a4ef627b1d988645f0702d85f237cb84d4b7b5b47324506015abe69e",
+    "LICENSE": "8bfbd2e5cd2e5c75b5d548365cb1e90054b598063153d60f93e591842a4cb1f3",
+    "README.md": "bcd9acd69b892db9be1384fa5b9d8792ab4e1cd03cdcb75685b4251bec8703aa",
+    "src/_pkgs.typ": "f5d80ee8c77fcba03e732706416f4a71477ec917ecddc62f1eba08ff39bdd8f1",
+    "src/core.typ": "ca5cc12e3c4536bab8c8e55ea060a3daec0e348fe2e47507e2586d2d2bb8c792",
+    "src/lib.typ": "363bda0c8d1f31e5bece8521391f050602caadf41f7d0224bfaffcd17537163b",
+    "src/selectors.typ": "24efc89986dbf5c38383bbcd03f315f627c4faf2409e75a22a20d5db5830aad1",
+    "src/util/assert.typ": "bb882f4c1488fe90be4aba5645b12e2778d51e45ec50fc1faee9559311b2803c",
+    "src/util/core.typ": "9215fead4b34eb2235f98e0b9565224a01de10649df6f510aab9c81a03c1c5a3",
+    "src/util.typ": "199a4b9547815057ab0dc6557103d86c6bab53a24e3f28fade9ad161cec2fba4",
+    "typst.toml": "15ca6b6735e64469f665265cdc8012d98575f483a5ba25ed1eeedc8a0578dece"
+  }
+}

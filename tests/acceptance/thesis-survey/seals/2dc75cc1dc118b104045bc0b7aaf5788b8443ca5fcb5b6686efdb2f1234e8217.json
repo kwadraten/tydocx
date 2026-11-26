@@ -1,0 +1,11 @@
+{
+  "archive_sha256": "2a30c67aee74d31afe488614864c98689187c6a1ec8fd5ab9b8c123e9f786c97",
+  "files_sha256": {
+    "LICENSE": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+    "README.md": "536aceb5146c3829d3eeb053874988c2b8a69075be63deba17bb0d81fc69eb03",
+    "docs/CONTRIBUTING.md": "6b0f88de6a72ebd5cb9eb5138ffaa9fa6d86cc8aa2d58fe427a01b91a84f648c",
+    "docs/index.md": "1910b77001411b5414651050b958e96307a80c20ecc1f909a1b7a3c631bd78de",
+    "src/lib.typ": "d94d3abd4b4f224d161c222ec29d7f1933eb4cba6b8b4791e57595a5457d56b8",
+    "typst.toml": "be784b3c9d553044ac3d098ddaa893aece152818548067c3bbcd43062915b8f9"
+  }
+}

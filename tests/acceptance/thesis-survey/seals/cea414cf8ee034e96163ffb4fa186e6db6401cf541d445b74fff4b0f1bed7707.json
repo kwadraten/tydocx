@@ -1,0 +1,17 @@
+{
+  "archive_sha256": "b2baccf2581c2450160cd2a0e7f1f0be1d60a9e9cc65770a2bf5ac49a77a74d8",
+  "files_sha256": {
+    "LICENSE": "da7e6aea84bdc7593b75042396a2b4ea7643c6a83193c864cd980a8de8fdc352",
+    "LICENSE-MIT-0": "11a18c569a8011edc545f776642ff5af430256471293c97723c6a483d87ba794",
+    "README.md": "146bb6f2b8ece5f185d2982d820662602a9ca8f9e8460df18eca17195da5a6b8",
+    "src/elements.typ": "c511d8f8af1c4615d435d359bd138a436f8a1da24a9c00243a1bd4a102f28c43",
+    "src/layout.typ": "4c053274920707c8875b06f43a8a0d8552c05ecdc947223067350f2c673e3c6d",
+    "src/lib.typ": "bd405126788e90c48b22288d978f72a3f8ec1258e67f0ac6e62ddcb1a7ad316a",
+    "src/math.typ": "9a8a851e5f93841cc354c45281d9587eccceb2b28dae5a4576cda32f1390c8b7",
+    "src/template/main.typ": "831c62f1b07da9f2f52a9ab8b09b43553c6cdcd9a13155af5c1bcb9e32d1003d",
+    "src/template/references.bib": "f29c89a77767ef67ecf6cc43846c80a3856e52c97c498e2e0119e1fdfacd2b3d",
+    "src/usp-ime.csl": "5af44a536412abbd4bd2c2fd23404a2d614fb862ade7109fcc4da5dabc98373d",
+    "src/usp-thesis.typ": "5a12b0ac935099420b6384c4ca83a1faf76c6a1d61c90c5399f6f7cb05283d34",
+    "typst.toml": "545f8d1a2a3fcd91b3ace779735b0ee71ee7b389356ea792225db3a3d92d8e8e"
+  }
+}

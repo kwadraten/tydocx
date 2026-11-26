@@ -1,0 +1,19 @@
+{
+  "archive_sha256": "b710f493abeeccd5643f0475314ece17bba3ba6bf48f8b450062ffe7bfdf5a40",
+  "files_sha256": {
+    "CHANGES.md": "dc197a7e037dbf145f46be2988790d6947e40f78f9e205126abcf7894cf784ff",
+    "LICENSE": "ab1b19f1b85dc696fdb25c6b6ce41c3a5cddd3e3b6f577ceec43ff6c7c28f573",
+    "README.md": "69bc7bbde45d9edbe2a9142c807caecb08e971bb585d7c7d661211cf758518d0",
+    "layouts/body.typ": "84065b45b8f54b8d6168c1ea409119b8152a2c7a72e9da3891cd932763f6fe59",
+    "layouts/doc.typ": "784ebbf52e22cf820e6edc224ca21fb37eed999bba5a7094719515884491fd90",
+    "layouts/preface.typ": "bb776330f4a4f76c3fd8bd026f61dc90963b77d438887026fbbe86758e3c696e",
+    "lib.typ": "9ffd22bbbeb4547ef8c90cff8e9d4557e9274dd25e6dafeab20a1efd7217cea7",
+    "nthu-logo.svg": "466e04ffced669859faa3a1433c7382c13fee44e08ddaa4cfe13839dd2b2a2af",
+    "pages/en-cover.typ": "fe4adda964eeab520133be89ffba547b775e6c67399c447377bade9bb80cfae4",
+    "pages/outlines.typ": "973b909012b14077dd7faa0ca279761e7d1343aed4371ac40058b3b15ca86ed1",
+    "pages/zh-cover.typ": "7f4855296b4b5fa40a9900c593998c930799115b65b21c4b0f2da02b8556e032",
+    "template/citations.bib": "d5b0ec552302584ddf726b4ff6a60df9bdcd980ac75e678595c7c023533c5fbd",
+    "template/thesis.typ": "ddf7ebe7d7cc7ff5ff1035caf31eb024fa801556cb9212f8d3ba8d91dee13d96",
+    "typst.toml": "ec8e00e17d3e5ff0d795acf5947c2baa7b719e144bbf8578ecd65e2b9735d0fa"
+  }
+}

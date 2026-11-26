@@ -1,0 +1,29 @@
+{
+  "archive_sha256": "4e20241b5a9a178db5a5b667fae2c678a04cb036907f1aaf137dba0ab0f49018",
+  "files_sha256": {
+    "LICENSE": "5c02837d54e8186bfa1e48aad5be9cce0d76968801d5e5fbec98072fb50a2b8c",
+    "README.md": "787f0d131f74471040f8b267b8d46e9002ee74053aeebbc310ad858d4433d8ae",
+    "lib.typ": "f7c023278e8f884942d25b66e9d24bb4eed49bb32e5c67f61879778988345988",
+    "src/advance.typ": "fc2683e7e8c7065fba3f247fa10a62da3e84f6df63c19245d865c6e3a6198aab",
+    "src/config/set-up.typ": "43a5888935193d381edd66afe65acddc0dacc1a196d6e5f7fa570555ce6bfe94",
+    "src/config.typ": "63db84954b1c8a9def4f9b79f9deddafe32f1117c733ad80e815af80c75e7d28",
+    "src/core/feat-enum-list.typ": "00096b2571c21b1efec4241d0cc25124914a5c1b929f776055e6d2aebae5b30c",
+    "src/core/feat-item-lib.typ": "3328b5b5c904c3131a7a6d2bdcdaf2f805ca16cb51bdea7737ef4a281f6abe9e",
+    "src/core/fix-enum-list.typ": "7909af624ba89ad04fb43fa1c0f2152e4fee25703faa2aca1c6cc5a61137390d",
+    "src/core/item-lib.typ": "a109b24d62f4022a486e8d98e227fa21ca84b580f36bb0d889529ac151d59dc3",
+    "src/elem-lib.typ": "e1b13e008afd12424d0d55a3b38ba41679fb00fe2ff79d2fd5ff6f6ee4f91ccd",
+    "src/export-el.typ": "dd4a8d22a8ff9924718349e9b4dd0f24b06ee861b28bc677ed02f775e8044dc5",
+    "src/lib/block-elem-rebuild.typ": "530fff367389b524fba5adbda9b1ed7f637f42787650634455acdf22b3d25af1",
+    "src/lib/checklist.typ": "efcaf47cfd32476195d0240f9ed90ff873c280cd8d25f4f120025cd1a105a591",
+    "src/lib/item-rebuild.typ": "d5af8acfa9fbae1abb469ce77fbc6b17b60e2a8a777789392f1cfa58a3e54a7b",
+    "src/lib/label-width-lib.typ": "8c93186c3ebbb84a6264a0b8603ea9f9f2dfeecb4893ca720e57bf92d43d188c",
+    "src/lib/prevent-label.typ": "b67e98c25842e2c0a50f2de1ff08bc330bfe92d8ba71b614dfe171a0e60eab18",
+    "src/lib/resume-lib.typ": "d3e9d1732d0ce2bdf30ed74d91f0fcd0103a45b5fb927f991a94847c8e887563",
+    "src/util/basic-tool.typ": "68f9e5f490b4d2a7e4d06e33b8076b2580cf2409cde1f982b9524723ee740a2b",
+    "src/util/func-type.typ": "3f653a6fb85ead375ce54b046f4fa70c33c9638d2181c211f68e9ac5871f7e7c",
+    "src/util/identifier.typ": "0adf3bf41e865109e66ef6274fb24cd7c46e24c34615c7a13a78dfb2510bd611",
+    "src/util/level-state.typ": "9d0d73aae785bdecb53410ff63149907b05a12f96c052eb68adbacdf47a9139f",
+    "src/util/numbering.typ": "cd33f8b5e03012a74c9137726415e7857a0d93d8281d6a967959b4838f23eaaa",
+    "typst.toml": "6c7b12b8283994529c0166281707deb7fc695ff6d13c4ba1170a6f5021b0e68a"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "archive_sha256": "83b40bb2821537a19a948ac92bd1ed9d328dd32aa95d7d135189384405941e08",
+  "files_sha256": {
+    "LICENSE": "59746d6285ffa44bfc7ecada352aa5d6a20dc8eab418a60ce091cc739012c135",
+    "README.md": "6400e319e9c8aec2d1fb6d9cf73c398f59dc47e09ee3d3f5a1d9bc46a0e4b2d9",
+    "lib.typ": "d76244512c8eb23e110af22d902b88fb897f4bfd430c6843147b0f74fc03c5f8",
+    "src/frontmatter.typ": "b5ca551aff52cff4a797b6e4614f9860fd0f6d3c61399eff00f47cc78cb994cd",
+    "src/thesis.typ": "5b16039d97da04f158c24c298933da50860bc53f925357f66e3c5ba4b87b0b37",
+    "src/todos.typ": "9d9951de7385b62bea25f3c3dbddc206c4164161c8da31348391e465ffa39bf0",
+    "template/chapters/01_intro.typ": "fa4792263e4dcc8807776e75eab6c62fea5666f0ea6d1e6126ab010b2f1e8524",
+    "template/chapters/02_preliminaries.typ": "bc3089a0bdf06a596e56896c3034c5e6d591ef36140064ad229e9d813c983403",
+    "template/chapters/03_chapter_one.typ": "38b10530d590c8ade4337b40575c03dae0dbc288777dadb732a95a04f3c7014d",
+    "template/chapters/04_chapter_two.typ": "2a9797981c2ffdeb9884917ae4b61ec37c5529836dcef21a9958ce47c947f731",
+    "template/chapters/05_conclusion.typ": "869860cf4bb4d8fe3444d8ebccf6713e4674b7aad4b346e87542afb3fbf9c011",
+    "template/chapters/99_appendix.typ": "90ab1beb388def65e31701526debf89436217a995760f47d74bb08f237936f96",
+    "template/frontback/abstract.typ": "d655c6c03d8d82356671e8702139788adf7d61d7d648586e490fa2bcf639a5b7",
+    "template/frontback/acknowledgments.typ": "ebe31a6162752df25e6133dba8f907df412178f2c2b0afaf4d75feebea8709bb",
+    "template/frontback/cv.typ": "68df02c0f50f81288e87b5e76f0c5a71a84984b72363959dcaae27b8851343ce",
+    "template/frontback/dedication.typ": "8d44ad7a4f35aa2d04dc711d3f5c746eb3c21568af8f452209c977ce7fbbdaf5",
+    "template/frontback/glossary.typ": "454105b86131cd976e7f9d3fa2f7eada9a50ef03df55b0f077c65d6f4a9a19fa",
+    "template/frontback/summary.typ": "407bc0db5993795a1d23a5e3ac8d441928c57d2963c1f757d9d022d97a825db2",
+    "template/macros.typ": "dacdd8e9f4bd80db9ee1fcf228955c2ded5a67f563fa437441a38dfb739320a5",
+    "template/main.typ": "f85da1443eccd1c976a4c3819e9090855a119ae2a7a8e47e7ac80b116cdfd97b",
+    "template/prelude.typ": "13aa2f0c7222a4ec32a0797535c2530b974256015c350bd4dd1c202cb2998c76",
+    "template/refs.bib": "b4c2a3337791a66d580942cf794ecc7c6f81778cf7e05ed0559e6e796bd744d6",
+    "typst.toml": "af4321b291c9950a83fa950fb6dbfc1a29c7ecfb07e74c6e221a3731dec40906"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "archive_sha256": "4a03a98656c194bd1c3c584a99295e9f0b61ca83d0d78a70928ba8429563160a",
+  "files_sha256": {
+    "LICENSE": "97f70e5cade03bc752402d129858f0c5e1c01c5bb576572f8e683001d0c6046e",
+    "README.md": "24b59d14098a77ddf4e51d0a9ecaced1c975c74f84bb38df8953b14514a4c638",
+    "src/IST.png": "e5b66a4c5f16da847779ac0328d6c29591bd8d500e33e7436fde411ad81ed9b7",
+    "src/figure-numbering.typ": "fddf2e36de1c251f5e0243a729146452ec07e9c8201beb244b6eab4bb7bef875",
+    "src/heading-styles.typ": "365a162616edd9439c398beb81d0732aea9e184772442c70aba68e5cbac42713",
+    "src/layout.typ": "8b97375ad470b21d4697503fe800445021afbee8a658f0f082893672ca7c0a1c",
+    "src/utils.typ": "5d9c53f18be19524fe036918b1ea8fb4e230e593ced9e9a7141e3fed03e39d7a",
+    "template/Beginning/Abstract-en.typ": "847ff741bdf5c6ef713be4d46490482726c8eb7045bfb77e969801b18b059d40",
+    "template/Beginning/Abstract-pt.typ": "847ff741bdf5c6ef713be4d46490482726c8eb7045bfb77e969801b18b059d40",
+    "template/Beginning/Acknowledgments.typ": "cb878e20930ac517ab95d1f1a152658f3d7dc18c2216f1f16e1a051624288677",
+    "template/Beginning/Extra.typ": "a4c39821b1f10f220aa76333c5d33e509eb3f9c208a69bb83f0b0f5392fb8144",
+    "template/Beginning/Glossary.typ": "97726f0cd78559862346a3c55694b0e4d7c05018b608072e8e70f00251e83d74",
+    "template/Beginning/Keywords-en.typ": "693851f7ed1f8c2bac9e892a3c6f209668938203b796159a052c46ce52b893d8",
+    "template/Beginning/Keywords-pt.typ": "693851f7ed1f8c2bac9e892a3c6f209668938203b796159a052c46ce52b893d8",
+    "template/Chapters/0-Quick-guide.typ": "420ee5f664f84abbcbc43842c61155adb29693a62ee999a5f64f517e07c9f2c3",
+    "template/Chapters/1-Introduction.typ": "bc5f66e5d537940bdf20c76f855ac69fd3b8b4e9ab5839c2ceb7d5e2a10777cc",
+    "template/Chapters/Appendix-A.typ": "a07d4ae585dbd2ee214713bc2bf3b275c24caec67c91c1d2fc874622d76896fa",
+    "template/Chapters/Appendix-B.typ": "ad96a91c1087ad32822371d2a7b7e2e1f40649f594a163e4b4d46ad3b7c1210a",
+    "template/Images/0-Quick-guide/example.jpg": "4e24796582f8819e243078b5e4b2e1dcb0ccdd23410f639e6a767e719586a7b9",
+    "template/Images/default-alameda.jpg": "9323391d956b1f2ea9d790875a217ee6e42ab034d88084bd145cb838f3e7985d",
+    "template/Images/default-taguspark.jpg": "aa32748c670eec70bec40449347a96ccea0fe90b004abf276c7537f428415a2c",
+    "template/main.typ": "ba50a9818a08e75b26854d5af5fe1ead2253e38af4f973c0596388fa0ee964a4",
+    "template/refs.bib": "67223b57d58a428e943fd609ee4a9c229a61b0202df16635eafd6299c8c314ee",
+    "typst.toml": "4cfb4534f1156ef5a88859ba3a3bf71cf6399636776785ae7d5432f27d692304"
+  }
+}

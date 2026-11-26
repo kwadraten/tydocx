@@ -1,0 +1,19 @@
+{
+  "archive_sha256": "220d36f0bfaf433a9e79eb2d794840b4cc1f5d2c66affd62c0cee9966a919a6d",
+  "files_sha256": {
+    "LICENSE": "0ebc2836549a3509ca3e2fff2ed330530a03c874682bbc94634000844df1a19e",
+    "README.md": "c73818bb1cfc217b17c82283b4cd03a86de4e0c5604fd14dd96f1b74e6050c99",
+    "README_zh.md": "8c714abe35cdf9b1bb08610038e311cba14c54ff4de5939a11c64d0edd617283",
+    "src/html/clipboard-copy.js": "5283d73701e2ca1b8c9cf154a917719cb40379c242f5b7084f5407a82354a53d",
+    "src/html/styles.css": "69c3c33b83655c02529a5cebd0a2d3d2d51aa1b286f1613fe5ab2b57f11c088c",
+    "src/html/utils.typ": "bc19bd208b32d84d062e5acb2cfddcd75314fcfe4631d90ad0005aa24ba54cd5",
+    "src/html.typ": "baa37ac0a087ecfd62880ead212d71d1cf69560df6b7bfb671523a83140b26d7",
+    "src/indentation.typ": "62549c797a948644c40a3fc1c4e8817737a864e0558ce2f96629d5f316fc1a26",
+    "src/lib.typ": "53c80ad95d588499ed92c574d48f52e9f42477486ea9d938506fcc53eee78e08",
+    "src/mod.typ": "a876be6fe4a8e7cca86f10db865e42bb54f35d05ba796fb8b98509349aa818d6",
+    "src/state.typ": "f235c7b4fdceeb715df3f441b4f76aaae78ff07a6c39414ec7cff90cb3dd0b3f",
+    "src/theme.typ": "2aa0bf63e9a137feb1ec57ab1b5be256f4b2f98eb447cdb49c8abee755e7144d",
+    "src/util.typ": "cf5efac1962d79af418947887c80b6ea62ef840686c823744e0c0764b3f8d4de",
+    "typst.toml": "7614aceea872486860585d19b2ddfb6d5463f59a8b5f3c1d27de39dbc442a3d2"
+  }
+}

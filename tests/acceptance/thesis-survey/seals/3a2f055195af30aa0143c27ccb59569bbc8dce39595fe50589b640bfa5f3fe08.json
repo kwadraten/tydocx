@@ -1,0 +1,29 @@
+{
+  "archive_sha256": "72cd7c520b629905c0e90a5b45f244641d72b447b191d422a30e91867ea73d82",
+  "files_sha256": {
+    "LICENSE": "af1e9ce2b43d8f82a8e9d76b0757cb109da023686eee3e75aa40d680b611f714",
+    "README.md": "0f725abfcbe89b0ac2a4d8cf125ae7626f8ea4260e90c68ec3639c4d8445b7b6",
+    "src/assets/text-blobs.typ": "7c60ddb1c78fd3350c57d4ca0530655ca24ebc43a8bbed69af4055ff4ac8b539",
+    "src/core/component.typ": "056d286871e567fac3bf91163762b1dac0e901cfc52c19bd5f3e98ec69bd862e",
+    "src/core/components/abstract.typ": "1c92b046d677cbf0ebd00416daed9b7075fb2e15808155c2693ca0d14dbd56b4",
+    "src/core/components/appendix.typ": "41daff331dd4c906b7ff75dccd86619849099d840fd1b8ef50d36a959d13ebad",
+    "src/core/components/bibliography.typ": "0c6d8b7e06a5e5f26a87eff8ee0d878cab823d4cb954f624e8cafe15bc958773",
+    "src/core/components/copyright.typ": "1ea4a9d46e0d95aa23ea1f39cbb7b047c57cd5ae9fa742b342bb3b963ef2b37a",
+    "src/core/components/cover-page.typ": "9a0a4f34058b95c3fd9f82a4f4a7a58c2e283c3cf865c0cc559a8b520cc4f882",
+    "src/core/components/declaration-of-originality.typ": "2bf32cb158a58c0e60efa57ff1d2df29ff5f53bb77893461c7602319fc3604d4",
+    "src/core/components/dutch-summary.typ": "e3e4c47348250062fdf15832ec0ae483f3d042c05d435f2accc8efef27939edb",
+    "src/core/components/list-of-abbrvs-symbols.typ": "76b3304946fa3ddedbf5521b7406a4f2540c3292976cd3b9d2dcaaa785a251e9",
+    "src/core/components/outline.typ": "18b2a3b1003c9fbe87df3e74a6bb001436010195789b8212fc62c4bdd4c3b355",
+    "src/core/components/preface.typ": "c35cfce8bd8da9f2c3c43dc22f5a2d13e1384dc4cbad65303bfa422cc31a357a",
+    "src/core/utils/footers.typ": "112bc7abe5cb640097d033d592a68d1c2af936d96a6cc498f4c92a2ec485afe1",
+    "src/core/utils/headers.typ": "ac7c4bc2283760f8ab93f5c9669c98782ef10241ecea33fc42ab809a793ea065",
+    "src/core/utils/margins.typ": "31ad1fab03e7954a2bf081f5ceccce84a5d6909d2e0b514092e334668af9685e",
+    "src/core/utils.typ": "f2cc28525b4d2de61da4930db5fdd59e90fdac7b07330e5d0a9b9d70c4977588",
+    "src/lib.typ": "ca3c5ea2fc019c1187769a370e23a73c5d98048b113f34263138c4e6ac5b63f6",
+    "template/references.bib": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "template/sections/chapter-1.typ": "f7ac8078706514a7294903c5c6b25704433a1abf6a2fb743895dba99859208b0",
+    "template/sections/preface.typ": "0d9b1171efb66680a38d761f324bc236767150c290a323c4fa7f9650cfca8261",
+    "template/thesis.typ": "be1949dc381da2fc6bec1582f5ae0f32d8816da187e0e3c2da7e8ee2089e7c65",
+    "typst.toml": "9a9679a69b9bf5251d9137d13d6395ffb2776c5110ffe63c6d30f0acc64ef505"
+  }
+}

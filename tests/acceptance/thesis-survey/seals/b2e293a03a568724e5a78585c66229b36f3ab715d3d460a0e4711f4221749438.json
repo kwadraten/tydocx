@@ -1,0 +1,15 @@
+{
+  "archive_sha256": "bbe5325f02d7f9c7bdeb53922285cb63ad82780b256797140c4c5902c3c0a1b8",
+  "files_sha256": {
+    "LICENSE": "a7d60a0d7e056eea2faa865062651eff205531ba8b5a1c632839d2f53ccbed4a",
+    "README.md": "7de20f998b1af2603bfc05f8c7ef391d7bc662695edd78ae117bf4150614cfc0",
+    "alias.typ": "da78080316c71a168bf324a9d1515791578fa54bd2abf7c4eca732e53b30c798",
+    "assert.typ": "c063a63677f02aaa7cc470fd2798ccd592386364bc95af209c75cbefae1810e8",
+    "def.typ": "124afc22a6b957b96c78a5ba456f9585173d8a6e24c72e244a7ada4b1465d660",
+    "get.typ": "5f4a89dd5d33617b4a214de86021e53acbed5cb4f24d466af48bed70bf948df1",
+    "is.typ": "d6b5720148a1bbba43d1368d43cb3d6deece2947198c3bcbca3c3f1a92aeefce",
+    "math.typ": "3187cf562ac65eb43c70ffbd073f07000dd98f5c620a4fa78e98139518f99619",
+    "tools4typst.typ": "9dbfb133410cbdc58ca54dd8ba8f827d0787c5342affab164e4a47e09f8f797d",
+    "typst.toml": "a07ed73d3bfa0e7e834b95034734301cfaf747f1f032e3800aa7ad893f0dcd9b"
+  }
+}

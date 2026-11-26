@@ -1,0 +1,30 @@
+{
+  "archive_sha256": "e3a8ec6b2ad5f43d93ae31dd5742de7256c57719675636179cd818f26ca7bb88",
+  "files_sha256": {
+    "LICENSE": "36bb253818ac13761081556ff5c457d626da9df1eb4f56194d9ad3926c418a68",
+    "LICENSE-APACHE": "0ad3adeb631c724cf636ab276ce6636816eeb2bc002b852d2989e5ed8bbca694",
+    "LICENSE-MIT": "14f5b5f40f5fbcf613fec86746979319afb7708e835776467c20b797b45864b5",
+    "README.md": "9277988bcf0597ec7a68882515ba9d96d27c2e5ac614223a318506ca5e459f49",
+    "src/data.typ": "9c862c02112a339c4dcd5255e318f7a9c87bc316abd4e691f4bb848794f1da28",
+    "src/element.typ": "7b3670ad68538cf06060e3d4b9cc82219159ba7d8e8c9e0f25df1c3377e4ffa5",
+    "src/fields.typ": "ff096cef2fa4754c97ccc733c72275f071d9a82d420dad6bfd789aa192ae90b9",
+    "src/filters.typ": "9835b1f74399c1c2e9c88ff75f15bc830be94444a2c4e6ea1dfbf75706c4fbe1",
+    "src/lib.typ": "365c8d9927268bee7f2a76272e39ad389eca267f658bfd9ee217b1db5bb52fcd",
+    "src/pub/data.typ": "59f22e72a3a7219f386d14b9758ce3bdc76cdb4d5b418853bee7a3ad07e72b49",
+    "src/pub/element.typ": "dc6142f3bc220dce8c3ecec141cf591cb7d4cab46bd32c002c381bb7b1f81208",
+    "src/pub/filters.typ": "8dc83c743e8eda25f790253983e14b2a9429bd697e7851d4ebba20215f9b9f0d",
+    "src/pub/internal-constants.typ": "acee839039f07025e5c3f46aa704169b929dd6228a4b62eb27715a758acfe66b",
+    "src/pub/internal.typ": "a84a346c3dacc63949b5c634b1382c0b63b0530aabe791c01daf6f6f4d877740",
+    "src/pub/leaky.typ": "9d7e407c79529ba5bccc2fd8608f1497f0bd6e5fec6d501bbe76d2c198e33e00",
+    "src/pub/native.typ": "29300a4367799c9d31b5e2615387b22cf28aafa3cfb6953ff76d0e313426dfee",
+    "src/pub/parsing.typ": "2d60927c96d66104c6772030b77363d274acfcb06d6fbfb3bef364c96eaccc22",
+    "src/pub/result.typ": "516446aeac3be82c9939666bc1de92a6fb5ecaa0857bb4a22e85bc32d9322376",
+    "src/pub/stateful.typ": "d2b43f440caf97d9e2021131a71a4f3da8a18c436450458a5adc8f6f518adc76",
+    "src/pub/types.typ": "5bbd70581d2bd40fd2c028d176f4a1f803773484f2c1a848799dff77b3616322",
+    "src/types/base.typ": "8a897de1807587aaaa6e043a7d25fe0d6097486d1d9e43aa4c3760184fc08f37",
+    "src/types/custom.typ": "af92c28d8d0cf9059bce5cc39342b0f29a729a82bf7275b489dce7267b729f1d",
+    "src/types/native.typ": "332440a7df1e4aa285515018f17f032120b78852ff09029600c7250c5f2c429c",
+    "src/types/types.typ": "65f5d139b30eb5de40c7bc3780b25c86ecebf8b6bbe30cf01286553cca5fb88e",
+    "typst.toml": "ca19fb2982251125786cc6a5605cde2d5f3ccf8302863147ef88e3009d453d87"
+  }
+}

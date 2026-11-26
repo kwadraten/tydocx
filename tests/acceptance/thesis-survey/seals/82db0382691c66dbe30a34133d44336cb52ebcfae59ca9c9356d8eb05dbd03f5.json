@@ -1,0 +1,17 @@
+{
+  "archive_sha256": "4d17271b35425f5cf1cf0dc14b451ea6765dfb8ecdb626d0181b9238ec71e7fd",
+  "files_sha256": {
+    "CHANGELOG.md": "91300fcd75a63b7a862907492245a1a7f9af8fc9dfccad3b91ae25be8bfee188",
+    "LICENSE": "78b3e0c418b94e5292382aa9e218debe26f0ddb7d4fe211e10927505ec0fbe5b",
+    "README.md": "4ac90a5058c0579d8cb2e90506c51913619bd8f75f7147d89954588807b115e1",
+    "src/_deps.typ": "a4eb266bfc9438d8320ece73b1b4225921543fb2c5ef8f66390760bca6a0987f",
+    "src/cmd.typ": "37cbbc4bfbf54dd2c6b1720c2d16d7e53eadd774f1d835e9500d489243013ba4",
+    "src/draw.typ": "94d4143ea0ca9ebcaa613d0ec42a70caa11b86bb00f8b0a1e276bd368cc0ba7b",
+    "src/finite.typ": "d4f31d1d4211431cebd3a93227694395878fa5e96d792823c0d47eef551178bb",
+    "src/flaci.typ": "db3cdb21ccc321d848015a00c4cade4927149260b5a3376f71ce64bdf3d7512b",
+    "src/layout.typ": "b1af8db85eb819630896d4d875c62e93211a9b1603eb4b5db24880b54a511971",
+    "src/util.typ": "85214ab5f566066a3cb11748f1db0228e6a5e776472b964a9afe90c8b575d61e",
+    "tbump.toml": "2f8bb0a09779b4aef6b875a3f36bbba0f219c72d0474f57ab1865055d1d5d0ba",
+    "typst.toml": "c11e19d9345775f50042d34f9e21c3421c7b595d088c1a5301065d7b883a4d7c"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "archive_sha256": "53338a3a37482749af41d745b8e7bed86027c064501fb4beb24307a63255d1a7",
+  "files_sha256": {
+    "CHANGELOG.md": "9230ca997f50fd887f3b5ffdcef5bd012f99e052d16e7c1b6eefe6d949faa8d7",
+    "LICENSE": "a7d60a0d7e056eea2faa865062651eff205531ba8b5a1c632839d2f53ccbed4a",
+    "README.md": "915e497d22a4bbde7af9f2d14f24be24aa1f129c292eda0a0b8ca476833f80a0",
+    "src/assert.typ": "a183d5111f845f209a0ee9af7b98e16ace8ad592e03243e103c74d091738c3ff",
+    "src/def-compat.typ": "f8e2575527f0dd5ef9bd6d27b6e2ed8bc4c0f51f9c741d54c7d101eef64cb3e8",
+    "src/def.typ": "45d94c18a3317b67a3a6906fcc8783e42a6bfbbeabe5a53f14387139c4d5f94c",
+    "src/func.typ": "a43003d632f7f2575bcc478ebc8742352fc7a3b9d0a11934b37a989d7e40e338",
+    "src/get.typ": "82b8ecafd0d3cd82b4a1e7984c9179d047837ea08e6158891da5fbbc863671c4",
+    "src/math.typ": "de9aff082268bce266b3386197e1b57aeb3f0a53bb912e979d45b17a06e05bbf",
+    "src/test.typ": "901b7bf3a6164a12ab40f600db4b08c51566c38b07134e3b331c2c55781926f5",
+    "src/tools4typst.typ": "d5a2196fb7165a316f74b8a46775a3d43e18db85fcc73b6cfd7fb0ac54638a35",
+    "typst.toml": "a4857277bb52648965f909cd2cb2f66b98e58fae070d99d2dd4e8006f3889bee"
+  }
+}

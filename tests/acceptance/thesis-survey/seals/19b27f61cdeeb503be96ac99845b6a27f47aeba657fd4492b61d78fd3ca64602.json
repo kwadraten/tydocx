@@ -1,0 +1,30 @@
+{
+  "archive_sha256": "c5eaa02e68256ca4ce3524ceff2f9984023c48fa355c9a31fdd93e0ca849fb75",
+  "files_sha256": {
+    "CHANGELOG.md": "393b1025b6fb388b6c4df87b31cccc7a014c4b3600461d1f51972ccb412d2478",
+    "LICENSE": "337050f37a4ac120597615e1f1863e087541fb213f5fabb42615204a9416eeae",
+    "README.md": "a97426fa80599c23cf6c4f19ac115e84ef85a6cbb7ffc61be4a1ba673556b7df",
+    "lib.typ": "dce81702a6154764458352fd6a4a9dbdea3a590209d0d3d0b3c30d83802a29c5",
+    "src/api.typ": "8f050a7aa4633a079c274414b3eca1a04878fb61fb643c046fdc31d4fbba9f14",
+    "src/authors.typ": "1d4626ba7a611889cb26c28677789f358e66674b4c5dfaf5c377225b46d0c789",
+    "src/core/language.typ": "5c1c1b6adf76fac86f1cd72f990ce971826010877305d99a83a4b6e686896d03",
+    "src/core/mod.typ": "2428ad5d4d811c044e1a617875da63d83dbefe0aeac0a049dd2abd5df6ae4341",
+    "src/core/state.typ": "55e8bfd76c92e9fec41a19544e150f60b2585c1e84fae22f659009a4a4d3337c",
+    "src/core/utils.typ": "6fb63da27569e0f1a0ca2d5a2c16d3a6060eaa75d16138d879871edd11f9ce3b",
+    "src/renderers/article.typ": "5bf5491ec8962d48fa7cb8e0edfa2e20a53aed8bbca4b7fa98a72091efbb1490",
+    "src/renderers/book.typ": "1a8be3def6249cbe57deaa890a179092a0c46d637752db7cf9aad2a3a4cbd7d5",
+    "src/renderers/conference.typ": "6876d08efa89f823fbff8914c5b0a1ed650e6ea7fd180e5717e09e4bad03f97a",
+    "src/renderers/misc.typ": "3f852d8aa356f9527f4efb5fa447ec9c9bc7b97e75ea3593e666332d972a60c0",
+    "src/renderers/mod.typ": "32f42cc0f9e26920297a70abca32fa005e008baadf43951c8c49806d280da0a8",
+    "src/renderers/patent.typ": "e8a398d3cbbc410432917bfe8421d0a4c8f68e4e0c3b1bde541f19ce4cc44b47",
+    "src/renderers/report.typ": "ffbbd0263b8c9ce584acb939e50abf4afb810aef652b1b0294dec2a102485123",
+    "src/renderers/standard.typ": "ae6b4e48c15f9a3b32f897e9d5e2a435bfd0beb8f8ce961e3c902bb95104ed4d",
+    "src/renderers/thesis.typ": "7710dffb49a72c94ea2d43a94c6b52a627008d351f246394101653516e9464a4",
+    "src/renderers/webpage.typ": "c92660167a4e416e1ad7a0c4d1ab57ab3c3f88a9a60e8a6183d8cfbbfe86d8fd",
+    "src/types.typ": "3eb7d78c422613c39d1dd45ad972c3161361404825f523c1f4c8246ccd27afa9",
+    "src/versions/mod.typ": "a020ed6513084daa365b123790712c46326571f493e2192c0ddedbc449e4a581",
+    "src/versions/v2015.typ": "c838cf4091af472e73b9767912a0449b066ffaa41f8b9d2bf07cd077d9c8e997",
+    "src/versions/v2025.typ": "570465672241b0b33493d39b24ad74ab06e8f0a611a2d0a531b4ab2dd201e045",
+    "typst.toml": "ede85571bc68023c6a3c1d0437d76b1b6a0d62aa73988380350ececea75eaaa7"
+  }
+}

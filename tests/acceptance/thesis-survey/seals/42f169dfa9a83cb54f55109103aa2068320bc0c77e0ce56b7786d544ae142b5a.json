@@ -1,0 +1,17 @@
+{
+  "archive_sha256": "3fd7d065f670de088a170603069788039ed52614c9fd81d5f7c923bedb355786",
+  "files_sha256": {
+    "LICENSE": "50b84f738c0c46aead63372e5d975c2bde5776bb70b291f3d7ab7e41e5e59c47",
+    "README.md": "71556ccd5be593aec325adc9ab296db9bf3d71c975b04a79f043054bb3c52f8d",
+    "src/assertations.typ": "cc507f1d21523c455daf41e44ff56a13071c15e0b79b4d9fcdae1fd67219646a",
+    "src/boxplot.typ": "070afc00378bb75696248b53941f8ecc55b0c88a272db339e2c8e8d9dbb79cda",
+    "src/contour.typ": "e089f679b58f19d0db27f76e539cd1c0a4cd9268b0807588a9b1cbb7553a8540",
+    "src/fft.typ": "2448a833cf37ad028be027d9c5195e29c2c4d220183f34910e6e688130cb8cef",
+    "src/histogram.typ": "253130b3c22bdbca267e316df99c9abaf6a6af9f12a0834e3fa593fae13e6905",
+    "src/komet.typ": "7c477522448e8a5bcd52a47703f005fbdbb80b0106b2bb2bf90d8dec371b49de",
+    "src/komet.wasm": "2d56632d8500d45c754ac31a1fb3eb21b2be99b712d4ebd2258fd5acaf411e92",
+    "src/linear_system.typ": "7fc434281092734fb74f7f4b9365a405cb28f29cfb4856b4f1923ad080b5e58e",
+    "src/plugin.typ": "11dcb589cd0eed4c32b94453016275c0fa0a2ed384d4842b50b27ef5567a9356",
+    "typst.toml": "3c0292683f652751e8bb137f37c24ce5d313303b21bd123e46eb1f6fa5be89b2"
+  }
+}

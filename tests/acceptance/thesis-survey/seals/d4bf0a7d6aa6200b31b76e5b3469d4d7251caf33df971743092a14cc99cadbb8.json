@@ -1,0 +1,12 @@
+{
+  "archive_sha256": "1fec643f426ed3913946122d5ce48c4f930cbb15e14fa47e3cc9f9bd56e486d2",
+  "files_sha256": {
+    "LICENSE": "ec0cfb60bb408b5e81b043bc812fa2f634101debafb3be55ac20440afff081b1",
+    "README.md": "c824dcffd8b942a68ba49858077c8498c5700eab2e1471fef01f37e06dc55d52",
+    "agh.jpg": "635549362143529f44ab06c0f8c1e01b95cc26943e243a3e90281af803b746a4",
+    "lib.typ": "cfa5b824cfa0ea7590b30b248a4deea42befae0dc8cc2872a4cfb63a4292e102",
+    "template/main.typ": "04b1272d2fa1d91bad93ba39d238e4062fd4c31725e6ef30f4546026d557cf0b",
+    "template/refs.bib": "1459e92252dc052d6618c05c6c52652d6e3c7652cd8681d74cbc7ad11d8e9e7d",
+    "typst.toml": "481f6fb498382308c1bb7db3e1edbcc779e1b3bea01151dee47409d3be0a3183"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "archive_sha256": "9bef986d499d6fed15370c48a58bf4c034affae0eaef818ea28331018e46fa8c",
+  "files_sha256": {
+    "LICENSE": "6d867dfb9afd92aa2eecc7d280e312510228c90c529e89a83c636ce5de10b61f",
+    "README.md": "45edd5319c7e8df2a767f99cc851112a73a57c40f4e55be142f90def9d2d9018",
+    "lib/abbr.typ": "36d1858d5b6070c69412bdd28a5e642d810e6e017d677463c6dfd394cc19f826",
+    "lib/lib.typ": "06f750e8d4a716fa7db85db02465d5c1da59ad754358cc7ff8d919d4bf8f8d43",
+    "template/content/ab.typ": "471fcb2918f64c415ba9c315d25d62d17751b88c2f43b7fe7e24bfc1a133c3ce",
+    "template/content/ac.typ": "0933736817843fb08813c311062038cec72976fef3205a66b329eec8e09e19c2",
+    "template/content/acro.csv": "15513748335399f5ff07278b2a0efa03b05e996b2e711e7aa43d9c27fd7e4a52",
+    "template/content/ap.typ": "466e90d703b46dca8ca6d232abc997618b70ca4d570703abfe550e7c55370fbf",
+    "template/content/ref.bib": "74b79903049c4488e1d7814fdff54efacd6a9e401100955aad13006ac051d029",
+    "template/image/DK Effect.png": "a90323b9d8c97c5fdb8149a7db2096c9678bd88ec25958c4a226ea2f25a09bac",
+    "template/sample.typ": "517fa4763293816dbceeab23e0bc2e726c6af5b1266c54c398894344e4855295",
+    "typst.toml": "fb906e653efa0bbadff6e09fecdc881c1816a866a71a5f3e4753fa10219bd997"
+  }
+}

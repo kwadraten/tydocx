@@ -1,0 +1,24 @@
+{
+  "archive_sha256": "0eff356fa09c0cc99ae99bd64290c2d67b7b220f0e2d4f47133d9b8b4f3ec637",
+  "files_sha256": {
+    "LICENSE": "841f0793afc044ce7229f3aebedc8f31c8827e5e2689b87094496b1cf84558a1",
+    "README.md": "d384c9d3f98248585e8fafc662829ed5c4d7e6a62f8a3d04395279fd99a6bc6b",
+    "assets/logo.png": "eb7b047454f21499cef98fdefdb9519a938e1867d0c9cdd4535171d5ebc5a7e6",
+    "lib.typ": "526a4b7c3f403499b4cbfdf800fd45b5da956c4a7d38d6752926dc0f45946dda",
+    "src/abstract.typ": "ea78f42d6da206ac8b8c04dfc363826ca378fd031adecae774ea4e44a67a7762",
+    "src/achievement.typ": "d36d057beea29154d5c7d2ee70098f1dab177ec77c3c11f39504f1f6b62adc41",
+    "src/algorithm.typ": "9052678790c8d48b2358adb4487c28744f5c20b9cda9e6f72c57a0eaa2501c38",
+    "src/appendix.typ": "3efecfc39631a3463159c064a26a4586092d71f278cb3440678436a38fcbd426",
+    "src/constant.typ": "11ba16e6842c2e57fcfb455ff5a86a7ca5c59b0e306ad29170bf3c3e76fad69f",
+    "src/cover.typ": "a6deec81eb5d388b44efdda32fd1a02d6afd815522ede0c2c0dfcefcd7175d41",
+    "src/header-footer.typ": "4f0ea2f48621e7e448320bcae9bf07d39b2634f1d6cbf5bd9018c09b48bc36f1",
+    "src/logo.png": "538a659d5f0db68f63fa8951027d33a4b593977bdc37957610d7e2ae55b90379",
+    "src/main-format.typ": "c3a6d7d10f51a13ebd1869a66c031a74c78ca1081495efff537d6519e693c3d0",
+    "src/outlines.typ": "57498307a30d44355cd094ebf36e583ce659da925c8364e8e1e57d37bd49788c",
+    "src/utils.typ": "7c260278daa90320286b79fa0bd8641927d3cd2ea095c2702eebf2a64e75d7fc",
+    "template/logo.png": "eb7b047454f21499cef98fdefdb9519a938e1867d0c9cdd4535171d5ebc5a7e6",
+    "template/ref.bib": "1bd8c225b038317fcb55d7a1d7aa6bb2e61c5607baf5293ed8f7246eeb132e80",
+    "template/thesis.typ": "97bfc14f4adf984aaa2ab622b993aaeb59fabc018e8620040ba0a5a679a2d43a",
+    "typst.toml": "390878c5b0681e2c38defd9213a369e76931e684cb651782377861f45ab7adbb"
+  }
+}

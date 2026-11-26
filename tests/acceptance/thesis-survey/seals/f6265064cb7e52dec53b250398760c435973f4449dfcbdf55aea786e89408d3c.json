@@ -1,0 +1,14 @@
+{
+  "archive_sha256": "99b140f2ad362f5817bd30396c4e85d918b7e7bb32a0eea4cf55ea0121abecac",
+  "files_sha256": {
+    "LICENSE": "3d7cf8180537a10ea3b5b6246b61293531761e4dac18420d4e7723c4c6b2bc58",
+    "README.md": "005edc25fd0715c9c8732d8b70789d7fd854e13a8437e3e05c56ada15ba7c436",
+    "example/main.typ": "b01efd76d876ce0a9ff8c391a8302693abe2ae4b238ea92756455b4a3c16a1de",
+    "example/references.bib": "046037b0232f6ee1a4cc020348e1bd5a352f574374853c3eb3c43701af3b1b30",
+    "template/hpi-logo.svg": "486efe07e516a94bd9787787c28d2740dcbbf2071f6bb4f17ab4f9ec4cbb52e1",
+    "template/hpi-title-page.typ": "bb199a352a0c44f9eb62a980272483cec50ccc23c32cd0dee374aee40769208d",
+    "template/lib.typ": "0f228cb3b847c6922f424edb25bec3f6d24ba536e16d32e233d5d1024ef4db4d",
+    "template/up-logo.svg": "bf10de8922a37d5e3c4754c0e60f8386fd535a68711175dd56b7bdc89a90ec54",
+    "typst.toml": "5ba5a7cbe117df6507c3e7965de4a7af87c954255993529c472ea92cb6fa95bf"
+  }
+}

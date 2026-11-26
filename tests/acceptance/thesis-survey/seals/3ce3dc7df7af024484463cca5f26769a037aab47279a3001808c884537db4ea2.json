@@ -1,0 +1,15 @@
+{
+  "archive_sha256": "58a7b19fc6e3419e03a189f32cf86cb7d7e3522abe3e463435c31f3fb21f5aa3",
+  "files_sha256": {
+    "LICENSE": "b61133bf0250430dbeb47dc526cb3addbeafc9bebd9e0e636be33b1532f0a43a",
+    "README.md": "44a4cf8369f746569b5066086917a4d7d705ea3675b63138b1ae84751a1735e6",
+    "src/core.wasm": "63fa508c03236c0870da5413cea2cf27757e134cccfb11901a2031b9ec2607a6",
+    "src/lib.typ": "715298ffd404a4518e521c924ee53a688fe24eb2746b44a7acbbcdfc34e59679",
+    "src/quasi-random-fast.typ": "fd8385c8641f68501689fe42259c0ba4a1d285db8989ba9f671f092925c3d73a",
+    "src/quasi-random.typ": "796a9002f0053eb365f79c9358f8178fdbd2587232cd90b9c9f4a1c7941823fa",
+    "src/random-fast.typ": "e0efff4a336b54f740a261afa4b680c2590d0e0eb086c12ca12dff0c9a1f9bcf",
+    "src/random.typ": "b43a3559abdb64ee672a45b898b067bfc9cfcfc55e4164141742975e725e43c4",
+    "src/taus.typ": "b9bc1d88f15fa3b262f92f82aadca905252d5ef403cc7a91e6604a8e5e95d5f5",
+    "typst.toml": "bf128c2a83a82dfb4aa748c03f5939f191b195faa02ae22ba728c1615ebc777b"
+  }
+}

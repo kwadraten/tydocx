@@ -1,0 +1,18 @@
+{
+  "archive_sha256": "0ee6b4760e365d0322c4200944a43d73a6b9a981f5b47eadc44bbee4bbd66e50",
+  "files_sha256": {
+    "LICENSE": "50b84f738c0c46aead63372e5d975c2bde5776bb70b291f3d7ab7e41e5e59c47",
+    "README.md": "d74907d49772f6a55c8a9d2cfb68a56050f25b6dcdc4259c889007c551a2ee97",
+    "src/assertations.typ": "cc507f1d21523c455daf41e44ff56a13071c15e0b79b4d9fcdae1fd67219646a",
+    "src/boxplot.typ": "070afc00378bb75696248b53941f8ecc55b0c88a272db339e2c8e8d9dbb79cda",
+    "src/contour.typ": "e089f679b58f19d0db27f76e539cd1c0a4cd9268b0807588a9b1cbb7553a8540",
+    "src/fft.typ": "2448a833cf37ad028be027d9c5195e29c2c4d220183f34910e6e688130cb8cef",
+    "src/histogram.typ": "253130b3c22bdbca267e316df99c9abaf6a6af9f12a0834e3fa593fae13e6905",
+    "src/kde.typ": "e4c5a19dcbead055f9578af493694a5ea0b9abc6552a57ecad20b57c66357b25",
+    "src/komet.typ": "5921b595175e460f2c1b36d47fb645cb5bffacb66cb6bc1a7e0b34a817654eeb",
+    "src/komet.wasm": "beb0ac8e477de275122b263d6b9f4cf00b231ae451b9def7a1af51c732efa138",
+    "src/linear_system.typ": "7fc434281092734fb74f7f4b9365a405cb28f29cfb4856b4f1923ad080b5e58e",
+    "src/plugin.typ": "11dcb589cd0eed4c32b94453016275c0fa0a2ed384d4842b50b27ef5567a9356",
+    "typst.toml": "0902f807bdba2602f9bbf005ad1c2a31a11bad40ca55ab6ef0d6badaedda2817"
+  }
+}

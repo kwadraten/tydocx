@@ -1,0 +1,12 @@
+{
+  "archive_sha256": "e7eb6281366abeb605ce678ac783a8e3300875311b2e83d1b9bc2a5e77193617",
+  "files_sha256": {
+    "LICENSE": "fe0a04357c339e60366ec7ac08ade5a031a0ae3fc79625f5115541489de99e86",
+    "Logo_Radboud_University.svg": "82d6a2dbe63756ec63f0163030811c8f8b9751c014262b610e96b9c120186130",
+    "README.md": "020cf027dd845124432475c9afc838a58cf9370f41a08a568e4c3fd1cd02bf20",
+    "radboud-thesis.typ": "18faa386f1112f645b3328adc310080e391e84a1533789eb135caae6b77a9f7b",
+    "template/bibliography.bib": "0d6b40527b096deba5f517fcb513d7b84dead94017b4e8da871fadaa3c741443",
+    "template/thesis.typ": "9dd5e81af4512e8865e114423db80e9790d6e56f3f683b25df290604528dac24",
+    "typst.toml": "caffe41ec813835022bcdd8b80132547df5b2602325c86f9431f67f6269cde78"
+  }
+}

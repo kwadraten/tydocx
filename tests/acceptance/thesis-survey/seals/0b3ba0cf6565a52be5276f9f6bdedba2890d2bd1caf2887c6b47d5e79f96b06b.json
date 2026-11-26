@@ -1,0 +1,27 @@
+{
+  "archive_sha256": "9ba5b89253712842b925331759d997cab259ac0472c84c245770e30a3279f170",
+  "files_sha256": {
+    "LICENSE": "f3809dd0e78ecb30fc11ae2c560ea87ef6df9f7b52501d2afd07c5aa04b11731",
+    "README.md": "4f6ab3cefc02ba7917748b185f10e7edcb0e4a2f2c98b171faf3ec031c0c9292",
+    "src/covers.typ": "4755975f6214ec87048e6869ed06d1054a57a34e4975e71ec4f20b79762b9da7",
+    "src/front-matter.typ": "1310f0f5242a6d4a9d900e1e18d7565c85cbd35cb1cdec585a54ee2326f7b085",
+    "src/lib.typ": "ba4ea0c67dae4027a9d2ac83e93102d1cbb695ad629074a2321962287b2d1004",
+    "src/logos/new/cth_horizontal.svg": "8fdb1eef2933b421fcfea31b971e7d4672ac565469544d2f0e1d13bde27763fa",
+    "src/logos/new/en_cth.svg": "68f72ee161ea0af127d643a51b325ad5fd205300a2cf29f9d10a8275014c9fd1",
+    "src/logos/new/en_cth_horizontal.svg": "a2a1eea9d33812f0cc89ca2e82dbba5742d7dec8a644b5fa653bb6a9f0051711",
+    "src/logos/new/sv_cth.svg": "6baf6397042b45a2b36eda082ef66f061588855f10367f5c39ab3a19d7e576a4",
+    "src/logos/new/sv_cth_horizontal.svg": "c8c4a3ee0044de1d92472e0297be6c15d87ef440468f98c9fdfd30f3b4cf7d77",
+    "src/logos/old/en_cth.svg": "ab19b5b7ba02e4ae4eb122aef6b6cca3d8de727e98d025aa15f0fd68e4be6a61",
+    "src/logos/old/en_cth_gu_horizontal.svg": "6a6474cb2948899d4c8832f2c45085a71200a65d64a5950679d0c68d739b2023",
+    "src/logos/old/en_cth_gu_vertical.svg": "2da461202fd86a4564a335603a208f2e3f2e2b92f62b21a2c06fc3068f8cfd50",
+    "src/logos/old/en_cth_horizontal.svg": "190a0840dbd970b1d399c321155345b74f817073e1a30248948c4298c0a2b0fa",
+    "src/logos/old/sv_cth.svg": "e5ca3006884c7126e7a30d7d34bf30e2de29bb915e2b19ae202de981953c83ae",
+    "src/logos/old/sv_cth_gu_horizontal.png": "bed477e0530609ec1cd96403cbe314a51af35a213b0f84c3fa2fcb2b4dece42c",
+    "src/logos/old/sv_cth_gu_vertical.png": "08bdd54dca99d94fb2fd429f090e669a2ea0c2c44d08b77938610dc6f1156eba",
+    "src/logos/old/sv_cth_horizontal.svg": "1f9bc14640fc0463ddb6fd31cfcad3c4abeb5b6a2ccb529e008dffbdccb6b2ce",
+    "src/utils.typ": "4d5b7322ffd0cff6e28007f8adbb642dc7e4bc3aa87a8f45e4ad5a5a5d0f3353",
+    "template/main.typ": "1fa68ab09e714735b199a08bbc1bcf43ed98f1aa750ee8a695c62b4d06cfe57b",
+    "template/references.yaml": "215cdd9df294b0381cda8ada95b4d1c1d4a8153d87ec60293315fcc9dd3f4234",
+    "typst.toml": "760cbd6f67c837ca7f8c47c6339c2de46087a692c6f44e944cd9261f0bfd80c4"
+  }
+}

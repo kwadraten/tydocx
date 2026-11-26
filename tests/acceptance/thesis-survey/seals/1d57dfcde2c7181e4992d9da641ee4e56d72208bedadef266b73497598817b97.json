@@ -1,0 +1,27 @@
+{
+  "archive_sha256": "bbaee9faacb9aa66d963f0e97289f4961293f873b22cf3048650431380a23938",
+  "files_sha256": {
+    "LICENSE": "08c216b6d8b05603bea538d4e92c9e6c2ea1bb093811bee65b279ae578d7b709",
+    "README.md": "54497f66fdd01b610c3da81dd67a5733491cd7eb6c4b2e9c7a385773fbacba0a",
+    "lib.typ": "5b77bfa4107320023d2cd75d1a630856f3632f8ab98f27a048739dc4905fccff",
+    "src/back-matter.typ": "bbb9979385f6de42ef856acd1c7469ec8864e10dfaf88f844d8d369f7213bde6",
+    "src/common.typ": "92c92d4cdb9b337c8b447a45dc9edc61e397593c9210817cd684008a377d5b02",
+    "src/front-matter.typ": "593820221d28669a8665f60cd79026af1f921a67cbe43b3b654ca03a7446334a",
+    "src/style.typ": "eb2c63b347c0fd0d0332f0992956baa37f0d0da5c5a4222b68c1d539cd45c411",
+    "src/title-page.typ": "084ef111e57721390272032d0d1c7e5d73bc9ff8a9ef5d6b6ce22909a7ab2354",
+    "src/vlb.typ": "3685df386f975b54bcfda74dc207c65c42d2b138d7a164934644a9eabc9884ee",
+    "template/assets/placeholder-figure.pdf": "d44e80e32c13583f794053a0230e751c627c843ef0296288687a4b16c4cb89f4",
+    "template/back-matter/appendix.typ": "bc16b77d026f475e37176ec17485dc158ea3a51eaca38ba5bd79001dfeff2c1f",
+    "template/back-matter/lebenslauf.typ": "95bd660d46901696b0dd67d75510c81b4db60a770cca731ef704b1ba177d5328",
+    "template/chapters/01-introduction.typ": "6d1cf6bc992a8ff833403331fed0e9bf7a86ddefcab0edac76fe74ae3f59c508",
+    "template/chapters/02-methods.typ": "d21b4d4d3e5dcf9f0855d8cd433c6ca0a56b25b3aa5203fc0b33baf6d5531603",
+    "template/front-matter/abbreviations.typ": "662b76a2d7d092d02778f223aa2a24b3d569f61efc3e8026c90d153fb0578931",
+    "template/front-matter/abstract.typ": "1095676c05410c04f0df321b4fb4d9d0a713d1d3bffdf6475bef0c0c440dcde9",
+    "template/front-matter/danksagung.typ": "8e4c0072311bd1a10642b70250f2d5c47afe2557db3e46bcb8960f96ffccb363",
+    "template/front-matter/notation.typ": "4f645b6930b3e9eacabad1a30aa15b56ef687aa9ba4a9c82b4c566629c5d54fe",
+    "template/front-matter/zusammenfassung.typ": "1f7ad89c44d91f4320284fad4fcbaa53705d5f5bc5a4125c131f30e857c67f25",
+    "template/main.typ": "028c8cc9c70072ccc521794bd8f53755584b01026d9b686080f3595444476f93",
+    "template/references.bib": "1d72d3240724a2725ea3b04de64e364cc39547d021c3a2c9b47f51c1f25d145f",
+    "typst.toml": "c4123e85cd4e0ad1d44afe3ee5619f17d3250f5ac1df174932010ac5231769ce"
+  }
+}

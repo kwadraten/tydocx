@@ -1,0 +1,10 @@
+{
+  "archive_sha256": "2929c917f6e182aab9fc9b084c8ed49d4fb658efc14516e3640d3726404a8ad8",
+  "files_sha256": {
+    "LICENSE": "1b551ecca31c968f285e54bdd8f502d31ce02e630545a229c9bcf8f8f5766ba6",
+    "NEWS.md": "43d93d4e78e036d055bd27e73caa27463cf82db1cc3bde1dbed9e67b7e1fc21b",
+    "README.md": "507b2ccc562c876aa3feb04280dc415f74223065129ea986b1be4ce0739c4788",
+    "algorithmic.typ": "1694bcaebdb27f49f4d1a9516ff7726a5166818d8e0b30a543bc0b1bc7ff67aa",
+    "typst.toml": "63c6d57686fd5f724da1f22e0c7e9caccc9e228fc806908ddb57ce795e051609"
+  }
+}

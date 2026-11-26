@@ -1,0 +1,15 @@
+{
+  "archive_sha256": "2a50062280ff6ec22ae5899d64d831f61e0827592c12cc6cf4f4abb2f3101761",
+  "files_sha256": {
+    "LICENSE": "c21c81c1ce2995f83f845886fdedda54c4fc3bac36bf21cba2fc603761e9fbc7",
+    "README.md": "5a7026606c6f1a3e36bb5dcb53adec42fb0f62d819d939bf49a576725bc5f361",
+    "lib.typ": "9f57cd7944181e8484d793b0bf11b2ef766dcc657df26b56c3c0cd40f4b234ae",
+    "template/appendices/supporting-material.typ": "8413443dbaa90504cb9f975a0e3add8835e36ff65513dc23ad5fcb8c51d29f48",
+    "template/chapters/conclusion.typ": "791eba6d0cb91359a23f9279a9113fbc6cd665458a9df3d4267b4ea845a58d2a",
+    "template/chapters/introduction.typ": "db3d89921acf5ce05261cc51631934ffcb51eb49ca685df95f5812f3bffd658d",
+    "template/chapters/methods.typ": "79f16742c001f534c40d8be38fa555b1c52f33b251a2aa7bb0978fdf3209ff08",
+    "template/main.typ": "7e88226bfaee46e5ececb0e7392ed32bdf294f636273b8f4a057242a461a94da",
+    "template/references.bib": "c89fff67912dcaaba90ff042b9be65b2aeb3915c6f7b2d893e9b2749bd259b8a",
+    "typst.toml": "6ca404692c89f89788c0ad100c3b119558ed747f4c961df39fa1fa80365b0df3"
+  }
+}

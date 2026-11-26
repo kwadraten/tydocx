@@ -1,0 +1,19 @@
+{
+  "archive_sha256": "b6b07b56118ffad1152c360147cf6ff9bab43734cbfe7d482190d996e31216aa",
+  "files_sha256": {
+    "LICENSE": "3c7a0bb9fdaa93c21d738dd76652960a9588eefd8faebb8b69e21da7eb59ff04",
+    "README.md": "1e1a372e08023bccd66659c999e99151761913046ef1274f10a6c029a9fefc91",
+    "lib.typ": "a932fee1d2dba407999d445a1ecf02cc5cacbeabb5a5020287f8b6bb9c5d773c",
+    "template/abbreviations.typ": "af8c640553d58f13eabbdb84b7637e1c3bf8e81bdb6bda85201f7dba6289e20a",
+    "template/abstract-en.typ": "41647e74ba398c721990884e09b4eaa564b1f500190631e65d2f82608b5a4062",
+    "template/abstract-tr.typ": "ee29558be7f593b66d8afbc5ed18882f43fdcbfb2bdd24c23c7ac964a69ac56c",
+    "template/appendices.typ": "e3c1b6b5331e4059502c3543cbfc451cc397fa5d5b0278f1b586ae2ef584c850",
+    "template/cv.typ": "c25dbad8a87f01d0aea158bf5bf2dc860907ed1bc293c252580d82ea4495defc",
+    "template/foreword.typ": "00d2c58116e85201b40b71f44353934f3249323df6110eb610b6347b8ecb8e2e",
+    "template/main-apa.typ": "a122c3004c7c996280a76c4c3d2abf4188df39fa10e8b6ca6447e26fe3fe8736",
+    "template/main.typ": "8e7d9caac7450e3d9890a19e606e96a643534ccb8d753b38aabfe6bd06b3d253",
+    "template/refs.bib": "3df7777e584c31486df0d66a179aab8695c27116ef6ac34bfc79ef5b3816b1c1",
+    "template/symbols.typ": "90832509aaf5f1ca28b480339898154495a826605af1cd9ec75817e44a33268b",
+    "typst.toml": "01c47858da57c9cb1badcabbc18971d1bd1459e4490e3630a7132502f3600442"
+  }
+}

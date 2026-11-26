@@ -1,0 +1,19 @@
+{
+  "archive_sha256": "ab5cf28a443beb799c7c8c149982041b9cbc33f64213849ef6175aeb5242ba25",
+  "files_sha256": {
+    "LICENSE": "83996e0ee60103cadafd583f3daef1ca895281ee23ef997ed79cf0f45b33a470",
+    "README.md": "4972da3739e1f82ff639e94dd6fe9d7c5786840a033cbce829bf125f3a5c5f6c",
+    "lib.typ": "181d0d0183ae2c5565826bdd6e3c96f8f3fab1e23a0a6fe13150b44e4eae5412",
+    "src/gloss.typ": "7f6507ce39970462514b10960417728a78c7d8478736a9e7eae42021f5ef4549",
+    "src/schemas.typ": "c8fca2a66f1476b3aa37d83818d4035fe4d001073816ff5ae6f67ebf85421fb1",
+    "src/themes/academic.typ": "e60b37f5155b8b0dd83063ca47559d46d85ea90c0a9eb1dd9366c8db32e74b91",
+    "src/themes/basic.typ": "566e1faa0f377ee330d29282d1a36b8da17d9c74a53436f72d31c4ef15fc980e",
+    "src/themes/chicago-index.typ": "0ceb993b1d9bd10df7a467fa556f2eeddad46bf7069e7c893d7392826dca03a4",
+    "src/themes/compact.typ": "ed68a3962ca1541b9d6e2feac438ae54fcf5231e977ce5b1cc2805cfc42536ef",
+    "src/themes/table.typ": "7aeafaa16c07aa96000980018c6ac6850db3f0a0b34b59076a35fa097d8d9a66",
+    "src/themes/twocol.typ": "dae5724e7bfcb69edc57fd1d198076f0176563f85af03f7373f96da2db918377",
+    "src/themes.typ": "c72f1758b9d2006f61b236cf400b5752c04e10401dc4a6cc8ffb56236c3bb658",
+    "src/utils.typ": "7f59e9d10fb1b4a8368476ddc3cd6550825318ca841298a3274edfc546db254d",
+    "typst.toml": "10d58e827c2b3e4718441c0d4b7babe573f4baa3aa421c85660af20ca843ae1d"
+  }
+}

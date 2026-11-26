@@ -1,0 +1,16 @@
+{
+  "archive_sha256": "2798705e7199b660b5323f9ffd6f3fc0f572c756859de2c71c0d5fdb8970ed79",
+  "files_sha256": {
+    "LICENSE": "8ef8acfa93d3bbeeb13c04618dcc058b573f8a4a7fa3c1aab67c0842b1586430",
+    "README.md": "045625ef2f5b2d8b7603fa83792c824ceffc9d95d97598dd3d8bb1616580e7be",
+    "src/show-example.typ": "870da8bb4b51fae7aec819df1ed76c9d95012f475940986bfb9c3c0cad8ebf1d",
+    "src/styles/default.typ": "f0577dbb186239880a65a289700803ab5499f57e7ca9e826ad0cc2c38982172a",
+    "src/styles/minimal.typ": "9230625250fe01164d816fea8a9d7cd50ec7a4da17ad6e35473f72d1daf51a63",
+    "src/styles.typ": "3ccb684fb71579835d8552b68d5f4e07c109fb73ad4acbcdd93eba0a7c51c7da",
+    "src/testing.typ": "34b855931ee264d0ceb073257c000699f28d599255ecbcc038375280b9a4b96f",
+    "src/tidy-parse.typ": "31b7814ce4903dc3bb1ad157d3a8292901f86409a1c5c76ffa264146a73879c8",
+    "src/tidy.typ": "bb80fe1362bd4a3876f7d27b7474eda66ae417ff6cdfc4b94a5fe9c48a3fc2df",
+    "src/utilities.typ": "027fd0814d51f040fb7ae0193919adcce2c1b00599d20120cd1dc1d9a12aa4eb",
+    "typst.toml": "9a7289ee5e4469c99114950d413f60b7925aeee15e3a9c74798b831d25c48171"
+  }
+}

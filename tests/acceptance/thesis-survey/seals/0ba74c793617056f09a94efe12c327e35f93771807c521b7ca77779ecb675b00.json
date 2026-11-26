@@ -1,0 +1,13 @@
+{
+  "archive_sha256": "a84af9e1424206679c97363419cf04c644808bbe779b7a83616b884c4b17a7ff",
+  "files_sha256": {
+    "LICENSE": "5468d2401f65b4c5f12cf70304ebb9a266b111328a1d639d7ae72b008991aef8",
+    "README.md": "997d6725692b7160646220f32a1c61cf0645418dd1d55973eb4fec95e4a94e16",
+    "lib.typ": "cea66499098491f1b4403709254e4311fcb5cac39e1f3fb01de79efd44c08351",
+    "resources/uio-fp-navn-bm.png": "92ca00319c2137a4c5db74941284b7dbad893a1bc11105703d13ddeee56b538a",
+    "resources/uio-fp-navn-eng.pdf": "3a91710f9a704ca22ff43d71576207652861780f22b86cec3f71d0e5efb66998",
+    "resources/uio-fp-segl.pdf": "97dc17b1d7c9f3c754b69ce7fb3cf71b8a5d7dddc5d74f61ef9543249cbe9ee8",
+    "template/main.typ": "d5f34facf9af11c8c0b6668fa135f6fc0db71c5d8b11e3bf7f45221d7dadb5d6",
+    "typst.toml": "21b8b4abe521e7e1cd6a17d44d52646f85a8a95fb8a73ebf2480ded9dcb71f86"
+  }
+}

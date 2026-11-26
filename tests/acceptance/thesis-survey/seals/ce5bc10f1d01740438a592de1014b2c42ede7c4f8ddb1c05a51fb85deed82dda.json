@@ -1,0 +1,22 @@
+{
+  "archive_sha256": "41091c5b3901261b023320e2bd941facd48864a6cd91f4f42190126e89fb48a1",
+  "files_sha256": {
+    "CHANGELOG.md": "fc59ecc5c526f6cf1ad51f00e9858b52cd54139c6599cdb8c5089599de48e970",
+    "LICENSE": "476b03829862ab7e3ed920f87fad3de3c995f7dd93c26476eb40f0117de43fdc",
+    "README.md": "b3bcacbaf2b02e29e2432c3fc57f946c24a54d119c29fb93d93664d1165a2443",
+    "src/datetime.typ": "f2c5c77557c1751ca33cd3ca044e7df6e2a34228bc16739bd09c5c9dbb45aeb6",
+    "src/dependencies.typ": "27201571ddb81d6d167a59ac9d570c9eb27cdfc1b7b6fb6b9a3688caa245e912",
+    "src/dividers.typ": "f047b99ad781718bbdf5e92e9abbba84f1ba89aeb00adc3e806f9b2f24e24b91",
+    "src/drawers.typ": "ec8a43a9c76b535d2c17533fb3a9825bf109a549b37db0ceebf796718766129b",
+    "src/field.typ": "2b4461f005a506def84d05e749d8acdfa8ef1a7c55aad4ae2fb0c0a8f8b0a134",
+    "src/gantt.typ": "e307b914363c2e3414d141ec235e79009c2d083f91f56a3ff37a5b7d71b9f325",
+    "src/header.typ": "6aa36fd13bae3fca5a21043e7e2eab2a07251a5782825379c81537a0f0cacb80",
+    "src/lib.typ": "4ab06916201342efb69033a767bed771df55e8ad8af9e4ff3c4b2322cb5860db",
+    "src/milestones.typ": "2f2630304595e85bcefc11348b786333b140fc30daf02d63219bec1e0721a92f",
+    "src/normalize.typ": "0310d185d93a5959f1751b1cad1705ada1ed948f772fc7d056fc098aac6918ae",
+    "src/sidebar.typ": "0cbaf0ab1a453e433fafbdd0d056638b8630ece8856791277fe5ec02d969d490",
+    "src/task.typ": "f717ee2761d95b114d57628629dd859af113d361e38adfc5ce5070b162798ba6",
+    "src/util.typ": "e9b4367c922b8ac5f5d23b11f195d70499c66bab6b82b3faca1b26a0672d73bd",
+    "typst.toml": "74046e75f9caa9e339a61aaeaf748977eed5e098f688e33d8109fe53a44a4a31"
+  }
+}

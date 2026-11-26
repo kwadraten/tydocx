@@ -1,0 +1,15 @@
+{
+  "archive_sha256": "cfa73fd03c00572fe237769f071b755e9eb71ac426fe8172bf74997b031a09b2",
+  "files_sha256": {
+    "LICENSE": "1608013b2df47daf5710c9ecc8af49e402f6b26325e0ad254ac7f180cc42c76d",
+    "README.md": "fb2a38ac0eaf361210a822540aaa51e0bd6408fbc0cb6349ff58a06681a9fcaa",
+    "header.typ": "21d822addcc31ad1a4a44c3b75b7eb2365c0b68abfaeb28e6f7419ed43b86e45",
+    "template/0_main.typ": "902db872b8382cfe7e9fc1fa6c3f1e4b999cdf6ad289c7aa089090e1c5bafee3",
+    "template/bib/Abschlussarbeit.bib": "129305166e419d9410f25260574573f22896f84fa3c573fe132a34ccedc53fe8",
+    "template/chapter/TitlePage.typ": "cb69ba80268d2918e9dd31f357304df8d20b4ad1889fdcb908d505a8c3cabf46",
+    "template/chapter/glossar.typ": "3c7cddbc038ba0c58185e893b573df7d67e479412ffd39ad844d227789da9076",
+    "template/chapter/vorwort.typ": "b1813210b9e5dae537e9782c263246540da46509e50bcd35ca4a3c315260b90d",
+    "template/dat/HOSTLogo.png": "1938cb5c10b1bf953e33ee8001ca557654fff5c94dbb01d6b9dd550e6b6a75b8",
+    "typst.toml": "a6a0c938588d386337827b4d7a800f3a473c996c1a9ec55eaf11fd229db7fa42"
+  }
+}
