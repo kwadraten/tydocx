@@ -57,8 +57,7 @@ fn text_figure_does_not_steal_drawing_raster() {
 #[test]
 fn image_inside_rounded_container_embedded() {
     let doc_xml = fixture_doc_xml("rounded_container_image");
-    let embedded =
-        doc_xml.matches("<a:blip ").count() - doc_xml.matches("<mc:AlternateContent").count();
+    let embedded = doc_xml.matches("<a:blip ").count();
     assert_eq!(
         embedded, 2,
         "both the rounded-container image and the figure image must embed"
@@ -429,5 +428,29 @@ fn image_alt_text_written_to_doc_pr_descr() {
     assert!(
         xml.contains(r#"descr="sample photo""#),
         "alt text should be written to wp:docPr descr"
+    );
+}
+
+#[test]
+fn aligned_image_paragraph_keeps_its_alignment() {
+    // `#align(center)[#image(…)]` must carry `w:jc` on the image paragraph —
+    // `image_paragraph` used to drop every paragraph property.
+    let xml = fixture_doc_xml("image_aligned");
+    let para = common::paragraph_containing(&xml, "<w:drawing>");
+    assert!(
+        para.contains(r#"<w:jc w:val="center"/>"#),
+        "the image paragraph keeps center alignment:\n{para}"
+    );
+}
+
+#[test]
+fn image_drawing_emits_no_alternate_content() {
+    // The image writer emits a single DrawingML picture — no
+    // `mc:AlternateContent`/`mc:Fallback` wrapper.
+    let xml = fixture_doc_xml("image_test");
+    assert!(xml.contains("<a:blip"), "the image embeds:\n{xml}");
+    assert!(
+        !xml.contains("mc:AlternateContent") && !xml.contains("mc:Fallback"),
+        "a plain DrawingML picture needs no AlternateContent:\n{xml}"
     );
 }

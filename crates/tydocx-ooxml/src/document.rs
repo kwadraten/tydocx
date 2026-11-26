@@ -80,9 +80,6 @@ impl ImageFormat {
 pub struct ImageData {
     pub bytes: Vec<u8>,
     pub format: ImageFormat,
-    /// Original vector bytes when the source was vector: emitted as
-    /// `asvg:svgBlip` in `mc:AlternateContent`, with `bytes` as the PNG
-    /// fallback for consumers without the SVG extension.
     pub svg: Option<Vec<u8>>,
     pub width_emu: u64,
     pub height_emu: u64,
@@ -371,6 +368,64 @@ pub enum ShapePathSeg {
     },
     /// `a:close` — close the current subpath with a straight segment.
     Close,
+}
+
+impl ShapePathSeg {
+    #[must_use]
+    pub fn with_y(&self, y_emu: i64) -> Self {
+        match self {
+            Self::MoveTo { x_emu, .. } => Self::MoveTo {
+                x_emu: *x_emu,
+                y_emu,
+            },
+            Self::LineTo { x_emu, .. } => Self::LineTo {
+                x_emu: *x_emu,
+                y_emu,
+            },
+            Self::CubicTo {
+                c1x_emu,
+                c2x_emu,
+                x_emu,
+                ..
+            } => Self::CubicTo {
+                c1x_emu: *c1x_emu,
+                c1y_emu: y_emu,
+                c2x_emu: *c2x_emu,
+                c2y_emu: y_emu,
+                x_emu: *x_emu,
+                y_emu,
+            },
+            Self::Close => Self::Close,
+        }
+    }
+
+    #[must_use]
+    pub fn with_x(&self, x_emu: i64) -> Self {
+        match self {
+            Self::MoveTo { y_emu, .. } => Self::MoveTo {
+                x_emu,
+                y_emu: *y_emu,
+            },
+            Self::LineTo { y_emu, .. } => Self::LineTo {
+                x_emu,
+                y_emu: *y_emu,
+            },
+            Self::CubicTo {
+                c1y_emu,
+                c2y_emu,
+                y_emu,
+                ..
+            } => Self::CubicTo {
+                c1x_emu: x_emu,
+                c1y_emu: *c1y_emu,
+                c2x_emu: x_emu,
+                c2y_emu: *c2y_emu,
+                x_emu,
+                y_emu: *y_emu,
+            },
+            Self::Close => Self::Close,
+        }
+    }
 }
 
 /// A resolved shape stroke, written as `a:ln`.
@@ -807,6 +862,12 @@ pub struct FirstLineIndent {
     pub chars: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParagraphRule {
+    pub sz_eighths: u32,
+    pub color_hex: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -854,8 +915,7 @@ pub struct Paragraph {
     /// used for section-break markers so they do not spill onto a new
     /// page when the section ends near the page bottom.
     pub mark_size_half_pt: Option<u32>,
-    /// If true, this paragraph represents a horizontal rule (bottom border).
-    pub horizontal_rule: bool,
+    pub horizontal_rule: Option<ParagraphRule>,
     /// Tab stop positions in twips (e.g., for grid/multi-column recovery).
     /// Emitted as `<w:tabs><w:tab w:val="right" w:pos="..."/></w:tabs>` in `w:pPr`.
     pub tab_stops: Vec<u32>,
@@ -1146,6 +1206,7 @@ pub struct TableCell {
     /// borders show through; `Some` reproduces the grid's exact stroke
     /// geometry, including `nil` sides.
     pub borders: Option<CellBorders>,
+    pub margins: Option<TableCellMargins>,
     /// Zero cell margins (`w:tcMar` 0) so empty timetable rows do not inflate.
     pub zero_margins: bool,
 }

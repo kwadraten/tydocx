@@ -872,7 +872,7 @@ mod tests {
                     keep_lines: false,
                     keep_next: false,
                     code_block: false,
-                    horizontal_rule: false,
+                    horizontal_rule: None,
                     tab_stops: Vec::new(),
                     spacing_before: None,
                     spacing_after: None,
@@ -885,7 +885,7 @@ mod tests {
             vmerge: IrVMerge::None,
             fill_hex: None,
             vertical_align: None,
-            inset_twips: None,
+            insets: None,
             borders: IrCellBorders::default(),
             borders_declared: IrCellBorderFlags::default(),
         }
@@ -906,6 +906,7 @@ mod tests {
                 })
                 .collect(),
             column_widths_pct: None,
+            width_pct: None,
             borders: None,
             row_sizes,
             col_sizes,

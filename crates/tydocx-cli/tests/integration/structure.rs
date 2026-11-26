@@ -485,14 +485,14 @@ fn hrule_document_model_has_horizontal_rule_flag() {
     // At least one paragraph should have the horizontal_rule flag set
     let has_hrule = doc.body.elements.iter().any(|e| {
         if let tydocx_ooxml::document::BlockElement::Paragraph(p) = e {
-            p.horizontal_rule
+            p.horizontal_rule.is_some()
         } else {
             false
         }
     });
     assert!(
         has_hrule,
-        "document model should contain at least one paragraph with horizontal_rule=true"
+        "document model should contain at least one paragraph with horizontal_rule set"
     );
 }
 

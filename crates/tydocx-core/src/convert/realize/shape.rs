@@ -22,7 +22,9 @@ use tydocx_ir::{
 use typst_library::engine::Engine;
 use typst_library::foundations::{Content, Packed, Resolve, Smart, StyleChain};
 use typst_library::introspection::SplitLocator;
-use typst_library::layout::{Abs, Axes, Corners, Point, Ratio, Region, Rel, Sides, Size, Sizing};
+use typst_library::layout::{
+    Abs, Axes, Corners, Length, Point, Ratio, Region, Rel, Sides, Size, Sizing,
+};
 use typst_library::visualize::{
     CircleElem, CloseMode, CurveComponent, CurveElem, EllipseElem, FillRule, FixedStroke, LineCap,
     LineElem, LineJoin, Paint, PolygonElem, RectElem, SquareElem, Stroke,
@@ -60,19 +62,15 @@ impl BoxKind {
     }
 }
 
-/// Resolve one bare shape element (`child` matched by `shape_parts`) into
-/// its `DrawingML` geometry. The region base is the page's text area: Typst's
-/// `unbreakable_pod` resolves `width:`/`height:` and the freeform
-/// coordinates against the enclosing region, which at page level is the
-/// text column.
 pub(super) fn resolve_shape(
     content: &Content,
     styles: StyleChain<'_>,
     engine: &mut Engine,
     locator: &mut SplitLocator,
+    container_pt: Option<f64>,
 ) -> ResolvedShape {
     let base = Size::new(
-        Abs::pt(page_content_width_pt(styles)),
+        Abs::pt(container_pt.unwrap_or_else(|| page_content_width_pt(styles))),
         Abs::pt(page_content_height_pt(styles)),
     );
     if let Some(elem) = content.to_packed::<RectElem>() {
@@ -457,7 +455,140 @@ fn line_shape(elem: &Packed<LineElem>, styles: StyleChain<'_>, base: Size) -> Re
             segments: vec![seg_move(p0), seg_line(p1)],
         }
     };
-    finish(size, outline, stroke, Sides::splat(Abs::zero()), &losses)
+    finish_line(size, outline, stroke, &losses)
+}
+
+fn finish_line(
+    size: Size,
+    outline: ShapeOutline,
+    stroke: Option<ShapeStroke>,
+    losses: &[String],
+) -> ResolvedShape {
+    if size.x <= Abs::zero() && size.y <= Abs::zero() {
+        return ResolvedShape {
+            geometry: None,
+            loss: None,
+        };
+    }
+    ResolvedShape {
+        geometry: Some(IrShapeGeometry {
+            width_emu: pt_to_emu(size.x.max(Abs::zero()).to_pt()),
+            height_emu: pt_to_emu(size.y.max(Abs::zero()).to_pt()),
+            outline,
+            stroke,
+            inset_emu: ShapeInsets {
+                left_emu: 0,
+                top_emu: 0,
+                right_emu: 0,
+                bottom_emu: 0,
+            },
+        }),
+        loss: joined_loss(losses),
+    }
+}
+
+pub(super) fn border_rule(
+    geometry: &IrShapeGeometry,
+    container_emu: u64,
+) -> Option<tydocx_ooxml::document::ParagraphRule> {
+    if !matches!(
+        geometry.outline,
+        ShapeOutline::Line {
+            flip_h: false,
+            flip_v: false
+        }
+    ) || geometry.height_emu != 0
+    {
+        return None;
+    }
+    let stroke = geometry.stroke.as_ref()?;
+    if stroke.dash.is_some()
+        || stroke.color_hex.is_none()
+        || stroke.cap != ShapeCap::Flat
+        || stroke.width_emu == 0
+        || geometry.width_emu.abs_diff(container_emu) > pt_to_emu(0.5)
+    {
+        return None;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "stroke widths are small positive lengths"
+    )]
+    let sz_eighths = (stroke.width_emu as f64 / 12700.0 * 8.0).round().max(1.0) as u32;
+    Some(tydocx_ooxml::document::ParagraphRule {
+        sz_eighths,
+        color_hex: stroke.color_hex.clone(),
+    })
+}
+
+pub(super) fn visible_line_geometry(geometry: &IrShapeGeometry) -> IrShapeGeometry {
+    let mut g = geometry.clone();
+    let stroke_w = g
+        .stroke
+        .as_ref()
+        .map_or(pt_to_emu(1.0), |s| s.width_emu)
+        .max(1)
+        .cast_signed();
+    let mid = stroke_w / 2;
+    let zero_i = 0_i64;
+    if g.height_emu == 0 && g.width_emu > 0 {
+        g.outline = match &g.outline {
+            ShapeOutline::Custom {
+                path_w_emu,
+                segments,
+                ..
+            } => ShapeOutline::Custom {
+                path_w_emu: *path_w_emu,
+                path_h_emu: stroke_w,
+                segments: segments.iter().map(|seg| seg.with_y(mid)).collect(),
+            },
+            _ => ShapeOutline::Custom {
+                path_w_emu: g.width_emu.cast_signed(),
+                path_h_emu: stroke_w,
+                segments: vec![
+                    ShapePathSeg::MoveTo {
+                        x_emu: zero_i,
+                        y_emu: mid,
+                    },
+                    ShapePathSeg::LineTo {
+                        x_emu: g.width_emu.cast_signed(),
+                        y_emu: mid,
+                    },
+                ],
+            },
+        };
+        g.height_emu = stroke_w.cast_unsigned();
+    } else if g.width_emu == 0 && g.height_emu > 0 {
+        g.outline = match &g.outline {
+            ShapeOutline::Custom {
+                path_h_emu,
+                segments,
+                ..
+            } => ShapeOutline::Custom {
+                path_w_emu: stroke_w,
+                path_h_emu: *path_h_emu,
+                segments: segments.iter().map(|seg| seg.with_x(mid)).collect(),
+            },
+            _ => ShapeOutline::Custom {
+                path_w_emu: stroke_w,
+                path_h_emu: g.height_emu.cast_signed(),
+                segments: vec![
+                    ShapePathSeg::MoveTo {
+                        x_emu: mid,
+                        y_emu: zero_i,
+                    },
+                    ShapePathSeg::LineTo {
+                        x_emu: mid,
+                        y_emu: g.height_emu.cast_signed(),
+                    },
+                ],
+            },
+        };
+        g.width_emu = stroke_w.cast_unsigned();
+    }
+    g
 }
 
 /// Sizing resolution from `unbreakable_pod`: `Auto` and `fr` take the
@@ -468,6 +599,15 @@ fn resolve_sizing(sizing: &Sizing, base: Abs, styles: StyleChain<'_>) -> Abs {
         Sizing::Auto | Sizing::Fr(_) => base,
         Sizing::Rel(rel) => rel.resolve(styles).relative_to(base),
     }
+}
+
+pub(super) fn block_container_width_pt(
+    width: &Rel<Length>,
+    container_pt: Option<f64>,
+    styles: StyleChain<'_>,
+) -> f64 {
+    let base = Abs::pt(container_pt.unwrap_or_else(|| page_content_width_pt(styles)));
+    width.resolve(styles).relative_to(base).to_pt()
 }
 
 /// `pad::shrink` — subtract the per-axis inset resolved against the size.

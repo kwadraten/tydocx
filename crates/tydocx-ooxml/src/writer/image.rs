@@ -380,48 +380,12 @@ pub(super) fn write_anchored_float<W: Write>(
                 .is_some()
                 .then(|| svg_rel_id(i, ctx.images, ctx.parts));
             let filename = format!("image{i}.{}", img.format.extension());
-            if let Some(svg) = &svg_rid {
-                let choice_image = AnchorImage {
-                    rid: &rid,
-                    svg_rid: Some(svg.as_str()),
-                    filename: filename.clone(),
-                };
-                let fallback_image = AnchorImage {
-                    rid: &rid,
-                    svg_rid: None,
-                    filename,
-                };
-                writer
-                    .create_element("mc:AlternateContent")
-                    .with_attribute((
-                        "xmlns:mc",
-                        "http://schemas.openxmlformats.org/markup-compatibility/2006",
-                    ))
-                    .write_inner_content(|mc| {
-                        mc.create_element("mc:Choice")
-                            .with_attribute((
-                                "xmlns:asvg",
-                                "http://schemas.microsoft.com/office/drawing/2016/SVG/main",
-                            ))
-                            .with_attribute(("Requires", "asvg"))
-                            .write_inner_content(|choice| {
-                                write_anchor_run(choice, float, n, Some(&choice_image), ctx)
-                            })?;
-                        mc.create_element("mc:Fallback")
-                            .write_inner_content(|fallback| {
-                                write_anchor_run(fallback, float, n, Some(&fallback_image), ctx)
-                            })?;
-                        Ok(())
-                    })?;
-                Ok(())
-            } else {
-                let image = AnchorImage {
-                    rid: &rid,
-                    svg_rid: None,
-                    filename,
-                };
-                write_anchor_run(writer, float, n, Some(&image), ctx)
-            }
+            let image = AnchorImage {
+                rid: &rid,
+                svg_rid: svg_rid.as_deref(),
+                filename,
+            };
+            write_anchor_run(writer, float, n, Some(&image), ctx)
         }
         AnchoredContent::Text { .. } => write_anchor_run(writer, float, n, None, ctx),
     }
@@ -691,33 +655,7 @@ pub(super) fn write_image_inline<W: Write>(
     rid: &str,
     svg_rid: Option<&str>,
 ) -> io::Result<()> {
-    if let Some(svg_rid) = svg_rid {
-        writer
-            .create_element("mc:AlternateContent")
-            .with_attribute((
-                "xmlns:mc",
-                "http://schemas.openxmlformats.org/markup-compatibility/2006",
-            ))
-            .write_inner_content(|mc| {
-                mc.create_element("mc:Choice")
-                    .with_attribute((
-                        "xmlns:asvg",
-                        "http://schemas.microsoft.com/office/drawing/2016/SVG/main",
-                    ))
-                    .with_attribute(("Requires", "asvg"))
-                    .write_inner_content(|choice| {
-                        write_drawing_run(choice, img, n, rid, Some(svg_rid))
-                    })?;
-                mc.create_element("mc:Fallback")
-                    .write_inner_content(|fallback| {
-                        write_drawing_run(fallback, img, n, rid, None)
-                    })?;
-                Ok(())
-            })?;
-        Ok(())
-    } else {
-        write_drawing_run(writer, img, n, rid, None)
-    }
+    write_drawing_run(writer, img, n, rid, svg_rid)
 }
 
 fn write_drawing_run<W: Write>(
