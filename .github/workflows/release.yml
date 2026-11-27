@@ -46,49 +46,19 @@ jobs:
           cache: false
           rustflags: ""
       - uses: Swatinem/rust-cache@v2
-      - name: Publish public crates in dependency order
+      - name: Publish tydocx
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           VERSION: ${{ needs.verify.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-
-          publish_crate() {
-            local crate="$1"
-            local output
-
-            if curl --fail --silent --show-error \
-              "https://crates.io/api/v1/crates/${crate}/${VERSION}" > /dev/null; then
-              echo "${crate}@${VERSION} is already published; skipping"
-              return 0
-            fi
-
-            for attempt in 1 2 3 4 5; do
-              if output=$(cargo publish --package "${crate}" \
-                --token "${CARGO_REGISTRY_TOKEN}" 2>&1); then
-                printf '%s\n' "${output}"
-                return 0
-              fi
-              printf '%s\n' "${output}"
-
-              if grep -Eiq 'already (uploaded|exists)' <<< "${output}"; then
-                echo "${crate}@${VERSION} is already published; skipping"
-                return 0
-              fi
-              if (( attempt < 5 )); then
-                echo "Publish attempt ${attempt} failed; retrying after the registry index updates"
-                sleep "$((attempt * 10))"
-              fi
-            done
-            return 1
-          }
-
-          publish_crate tydocx-ooxml
-          publish_crate tydocx-math
-          publish_crate tydocx-ir
-          publish_crate tydocx-core
-          publish_crate tydocx
+          if curl --fail --silent --show-error \
+            "https://crates.io/api/v1/crates/tydocx/${VERSION}" > /dev/null; then
+            echo "tydocx@${VERSION} is already published; skipping"
+          else
+            cargo publish --locked --package tydocx --token "${CARGO_REGISTRY_TOKEN}"
+          fi
 
   build-native:
     name: Build and test ${{ matrix.rid }}
@@ -238,6 +208,8 @@ jobs:
     name: Publish NuGet
     runs-on: ubuntu-latest
     needs: [verify, build-native, pack-nuget, build-python-wheels]
+    permissions:
+      id-token: write
     steps:
       - uses: actions/setup-dotnet@v4
         with:
@@ -246,11 +218,16 @@ jobs:
         with:
           name: nuget-package
           path: dist
+      - name: Log in to nuget.org with OIDC
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
       - name: Push to nuget.org
         run: >-
           dotnet nuget push dist/*.nupkg
           --source https://api.nuget.org/v3/index.json
-          --api-key ${{ secrets.NUGET_API_KEY }}
+          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
           --skip-duplicate
 
   publish-pypi:

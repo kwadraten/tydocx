@@ -86,7 +86,7 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   extraction is split under `convert/page/` (`units`, `style`, `source_ast`,
   `hanging_indent`, `reachable`, `margin`, `furniture`, `run_style`, and `language`);
   `convert/text_norm.rs` holds the shared CJK-space normalisation; and the
-  OOXML writer is split by emitted part under `tydocx-ooxml/src/writer/`.
+  OOXML writer is split by emitted part under `src/ooxml/writer/`.
   Python bindings live in `crates/tydocx-python`; the panic-contained C ABI for
   the managed wrapper lives in `crates/tydocx-ffi`, with its .NET projects under
   `dotnet/`. Both wrappers call the core converter rather than reimplementing
@@ -94,7 +94,7 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   `mod.rs` is a re-exporting facade. Put a new converter, paged-style
   responsibility, or writer part in its matching module rather than growing an
   entry module. Tests are already split this way:
-  `crates/tydocx-cli/tests/integration/` is one file per test area (see the Testing
+  `tests/integration/` is one file per test area (see the Testing
   section below) — add a new area module rather than growing an existing one.
 
 ## Testing
@@ -108,7 +108,7 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   ship with a fixture-based regression test** for the specific case — that code is
   the most fragile part of the system (geometry → semantics inference with magic
   thresholds; see ARCHITECTURE.md "retired seam").
-- **Golden snapshots** (`crates/tydocx-cli/tests/integration/golden.rs`) pin the
+- **Golden snapshots** (`tests/integration/golden.rs`) pin the
   exact `word/document.xml` for a curated set of fixtures under `tests/snapshots/`,
   so output-formatting drift surfaces as a reviewable diff — the suite's only
   oracle for output *quality*, not just presence. After an intentional output
@@ -131,7 +131,7 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   tool** when opted into — they never silently pass. Run them with
   `cargo test -p tydocx -- --ignored`.
 - **Universe/WPS render regressions:** package-free reductions live in
-  [`render_corpus.rs`](crates/tydocx-cli/tests/integration/render_corpus.rs) and
+  [`render_corpus.rs`](tests/integration/render_corpus.rs) and
   [`tests/fixtures/`](tests/fixtures/) (`render_*.typ`). Update the relevant
   assertion when fixing a reduction. Run structural cases with
   `cargo test -p tydocx --test integration render_corpus` and opt in to Windows

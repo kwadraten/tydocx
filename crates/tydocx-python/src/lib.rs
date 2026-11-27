@@ -4,13 +4,13 @@ use std::fs;
 use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
 
+use ::tydocx::{CompatMode, ConvertOptions, TydocxWorld};
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyOSError, PyPermissionError, PyValueError,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3::{create_exception, wrap_pyfunction};
-use tydocx_core::{CompatMode, ConvertOptions, TydocxWorld};
 
 create_exception!(tydocx, TydocxError, PyException);
 create_exception!(tydocx, CompilationError, TydocxError);
@@ -65,12 +65,12 @@ fn conversion_options(
 fn convert_path(input_path: &Path, options: &ConvertOptions) -> PyResult<Vec<u8>> {
     let world = TydocxWorld::new(input_path)
         .map_err(|error| io_error("failed to read input", input_path, &error))?;
-    let outcome = tydocx_core::convert(&world, options).map_err(|diagnostics| {
+    let outcome = ::tydocx::convert(&world, options).map_err(|diagnostics| {
         let input_name = input_path.to_string_lossy();
         let messages = diagnostics
             .iter()
             .map(|diagnostic| {
-                tydocx_core::diag::format_diagnostic(
+                ::tydocx::diag::format_diagnostic(
                     diagnostic,
                     Some((&input_name, world.main_source())),
                 )
@@ -81,7 +81,7 @@ fn convert_path(input_path: &Path, options: &ConvertOptions) -> PyResult<Vec<u8>
     })?;
 
     let mut bytes = Cursor::new(Vec::new());
-    tydocx_ooxml::write_docx(&outcome.document, &mut bytes).map_err(|error| {
+    ::tydocx::ooxml::write_docx(&outcome.document, &mut bytes).map_err(|error| {
         let path = input_path.display();
         ConversionError::new_err(format!("failed to generate DOCX for '{path}': {error}"))
     })?;

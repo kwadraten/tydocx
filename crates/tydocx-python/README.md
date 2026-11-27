@@ -1,7 +1,7 @@
 # tydocx for Python
 
 `tydocx` converts Typst source files to editable Word (`.docx`) documents. The
-extension calls the Rust `tydocx-core` conversion engine directly; it does not
+extension calls the Rust `tydocx` conversion engine directly; it does not
 invoke the CLI or require a separately installed Typst executable.
 
 Python 3.9 and newer are supported. Release wheels use PyO3's stable `abi3`

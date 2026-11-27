@@ -1,10 +1,17 @@
+[package]
+name = "tydocx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+include = ["/src/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE"]
+
 [workspace]
 members = [
-    "crates/tydocx-cli",
-    "crates/tydocx-core",
-    "crates/tydocx-ir",
-    "crates/tydocx-ooxml",
-    "crates/tydocx-math",
+    ".",
     "crates/tydocx-python",
     "crates/tydocx-ffi",
 ]
@@ -23,6 +30,8 @@ repository = "https://github.com/kwadraten/tydocx"
 homepage = "https://github.com/kwadraten/tydocx"
 
 [workspace.dependencies]
+tydocx = { path = "." }
+
 # Typst ecosystem
 typst = "0.15.1"
 typst-library = "0.15.1"
@@ -76,16 +85,39 @@ base64 = "0.22"
 # to the version typst-library 0.15 depends on so no duplicate is resolved.
 codex = "0.3"
 
-# CLI
+# CLI and test utilities
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
-
-# Internal crates
-tydocx-core = { version = "0.1.0", path = "crates/tydocx-core" }
-tydocx-ir = { version = "0.1.0", path = "crates/tydocx-ir" }
-tydocx-ooxml = { version = "0.1.0", path = "crates/tydocx-ooxml" }
-tydocx-math = { version = "0.1.0", path = "crates/tydocx-math" }
 
 # Bibliography — the same version typst-library 0.15 uses, so only one copy
 # resolves (tydocx re-parses .bib/.yaml itself; see convert/bibliography.rs).
 hayagriva = "0.10.1"
+
+[dependencies]
+base64.workspace = true
+clap.workspace = true
+codex.workspace = true
+hayagriva.workspace = true
+image.workspace = true
+quick-xml.workspace = true
+resvg.workspace = true
+time.workspace = true
+tiny-skia.workspace = true
+ttf-parser.workspace = true
+typst.workspace = true
+typst-html.workspace = true
+typst-kit.workspace = true
+typst-layout.workspace = true
+typst-library.workspace = true
+typst-realize.workspace = true
+typst-render.workspace = true
+typst-svg.workspace = true
+typst-syntax.workspace = true
+typst-utils.workspace = true
+unicode-math-class.workspace = true
+unicode-segmentation = "1"
+zip.workspace = true
+
+[dev-dependencies]
+rayon = "1.12"
+typst-pdf.workspace = true

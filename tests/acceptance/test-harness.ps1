@@ -21,28 +21,21 @@ if ($BuildLog) {
         else { $rustArgs += @('-L', $match.Groups[2].Value.TrimEnd('`')) }
     }
 } else {
-    $artifacts = @{
-        tydocx_core = 'b5e1e760cee592b9'
-        tydocx_ir = '7fc8eb5cc5e2dddf'
-        tydocx_ooxml = '657f16d3faf20530'
-        typst = '93acaef90d2439a0'
-        typst_layout = '49f9b4c7ce37a443'
-        typst_pdf = '5a3eeb603774debf'
-        zip = 'c88f93fbf22340d4'
-    }
-    foreach ($crate in $artifacts.Keys) {
-        $artifact = Join-Path $deps "lib${crate}-$($artifacts[$crate]).rlib"
-        if (!(Test-Path $artifact)) { throw "artifact $artifact absent; use -BuildLog" }
-        $rustArgs += @('--extern', "$crate=$artifact")
+    $artifacts = @('tydocx', 'typst', 'typst_layout', 'typst_pdf', 'zip')
+    foreach ($crate in $artifacts) {
+        $artifact = Get-ChildItem $deps -Filter "lib${crate}-*.rlib" |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (!$artifact) { throw "artifact for $crate absent; use -BuildLog" }
+        $rustArgs += @('--extern', "$crate=$($artifact.FullName)")
     }
     foreach ($path in 'stacker-d14fe15233a6b2c6', 'psm-f8159a02719aad32') {
         $rustArgs += @('-L', "native=$root\target\debug\build\$path\out")
     }
 }
-$env:CARGO_MANIFEST_DIR = Join-Path $root 'crates\tydocx-cli'
+$env:CARGO_MANIFEST_DIR = $root
 & "$toolchain\rustc.exe" @rustArgs
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
-Push-Location (Join-Path $root 'crates\tydocx-cli')
+Push-Location $root
 try {
     if ($Visual) { & $exe --include-ignored --test-threads=1 }
     else { & $exe --test-threads=4 }

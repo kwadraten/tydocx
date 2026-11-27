@@ -2725,44 +2725,31 @@ dependencies = [
 name = "tydocx"
 version = "0.1.0"
 dependencies = [
- "clap",
- "rayon",
- "time",
- "tydocx-core",
- "tydocx-ir",
- "tydocx-ooxml",
- "typst",
- "typst-layout",
- "typst-pdf",
- "zip",
-]
-
-[[package]]
-name = "tydocx-core"
-version = "0.1.0"
-dependencies = [
  "base64",
+ "clap",
  "codex",
  "hayagriva",
  "image",
+ "quick-xml 0.37.5",
+ "rayon",
  "resvg",
  "time",
  "tiny-skia",
  "ttf-parser",
- "tydocx-ir",
- "tydocx-math",
- "tydocx-ooxml",
  "typst",
  "typst-html",
  "typst-kit",
  "typst-layout",
  "typst-library",
+ "typst-pdf",
  "typst-realize",
  "typst-render",
  "typst-svg",
  "typst-syntax",
  "typst-utils",
+ "unicode-math-class",
  "unicode-segmentation",
+ "zip",
 ]
 
 [[package]]
@@ -2770,37 +2757,8 @@ name = "tydocx-ffi"
 version = "0.1.0"
 dependencies = [
  "tempfile",
- "tydocx-core",
- "tydocx-ooxml",
+ "tydocx",
  "typst",
- "zip",
-]
-
-[[package]]
-name = "tydocx-ir"
-version = "0.1.0"
-dependencies = [
- "tydocx-ooxml",
- "typst-syntax",
-]
-
-[[package]]
-name = "tydocx-math"
-version = "0.1.0"
-dependencies = [
- "codex",
- "quick-xml 0.37.5",
- "typst",
- "typst-library",
- "unicode-math-class",
-]
-
-[[package]]
-name = "tydocx-ooxml"
-version = "0.1.0"
-dependencies = [
- "quick-xml 0.37.5",
- "typst-syntax",
  "zip",
 ]
 
@@ -2809,8 +2767,7 @@ name = "tydocx-python"
 version = "0.1.0"
 dependencies = [
  "pyo3",
- "tydocx-core",
- "tydocx-ooxml",
+ "tydocx",
 ]
 
 [[package]]

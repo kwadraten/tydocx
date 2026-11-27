@@ -11,7 +11,7 @@ use std::fs::File;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
-use tydocx_core::{CompatMode, ConvertOptions, TydocxWorld};
+use tydocx::{CompatMode, ConvertOptions, TydocxWorld};
 use typst::World as _;
 use typst::diag::SourceDiagnostic;
 use typst::syntax::VirtualRoot;
@@ -203,7 +203,7 @@ fn convert_paths(input: &Path, output: &Path, compat: CompatMode) -> Result<(), 
         )
     })?;
     let options = ConvertOptions::new(compat);
-    let outcome = tydocx_core::convert(&world, &options).map_err(|diagnostics| {
+    let outcome = tydocx::convert(&world, &options).map_err(|diagnostics| {
         let details = diagnostics
             .iter()
             .map(|diagnostic| render_diagnostic(&world, diagnostic))
@@ -216,7 +216,7 @@ fn convert_paths(input: &Path, output: &Path, compat: CompatMode) -> Result<(), 
     })?;
 
     let file = File::create(output).map_err(|error| output_error(output, error))?;
-    tydocx_ooxml::write_docx(&outcome.document, file)
+    tydocx::ooxml::write_docx(&outcome.document, file)
         .map_err(|error| output_error(output, error))?;
     Ok(())
 }
@@ -244,7 +244,7 @@ fn render_diagnostic(world: &TydocxWorld, diagnostic: &SourceDiagnostic) -> Stri
         Some((name, source))
     });
     let file = file.as_ref().map(|(name, source)| (name.as_str(), source));
-    tydocx_core::diag::format_diagnostic(diagnostic, file)
+    tydocx::diag::format_diagnostic(diagnostic, file)
 }
 
 #[cfg(test)]

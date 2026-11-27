@@ -24,7 +24,7 @@ adjacency to distinguish zones. The tabbed number form is a layout
 choice, not a requirement to add an equation number to OMML. Paragraph
 tab stops are WML twips, not DrawingML EMUs.
 
-`writer/math.rs` accepts pre-serialized OMML from `tydocx-math` and writes
+`writer/math.rs` accepts pre-serialized OMML from `tydocx::math` and writes
 it as raw XML. **Input contract for this boundary:** produce one complete,
 balanced OMML root, with no declaration, DTD, unrelated siblings, or
 unbound prefixes. Escape math text as XML text (the `&` alignment

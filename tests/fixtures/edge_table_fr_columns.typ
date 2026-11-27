@@ -4,7 +4,7 @@
 // fell back to equal distribution because `cell.width_pct` was never populated
 // from the Typst column track sizing read off the `TableElem`.
 //
-// Asserted in crates/tydocx-cli/tests/integration.rs
+// Asserted in tests/integration.rs
 // (fr_column_tracks_produce_proportional_widths): the three header cells must
 // carry `w:tcW` percentages near 833 / 1666 / 2500 (fiftieths of a percent of
 // the 5000 = 100% table width), NOT 1666 / 1666 / 1666.

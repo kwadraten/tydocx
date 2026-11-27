@@ -11,6 +11,14 @@ All notable changes to tydocx are documented here. The format follows
   real conversion and error-path tests for both packages.
 - Tag-driven GitHub Actions releases for crates.io, PyPI, and nuget.org.
 
+### Changed
+
+- Consolidated the converter, IR, OOXML, and math modules into the single
+  published `tydocx` crate; only the Python and FFI binding crates remain
+  separate and unpublished.
+- NuGet releases now use nuget.org Trusted Publishing with GitHub OIDC instead
+  of a long-lived API key.
+
 ## [0.1.0] — 2026-11-27
 
 - First independently versioned tydocx release. The version series restarts at

@@ -12,7 +12,7 @@ tydocx evolved from [dianzuan/typort](https://github.com/dianzuan/typort): it is
 
 ```bash
 cargo install tydocx                    # from crates.io
-cargo install --path crates/tydocx-cli  # from a checkout
+cargo install --path .                # from a checkout
 pip install tydocx                      # Python bindings
 dotnet add package Tydocx               # .NET bindings
 ```
@@ -112,13 +112,13 @@ OOXML XML is generated directly via `quick-xml`. No docx-rs, no intermediate for
 
 ```mermaid
 flowchart TD
-    CRATES["crates/"] --> CLI["tydocx-cli/ — CLI binary (clap)"]
-    CRATES --> CORE["tydocx-core/ — Typst compilation + conversion engine"]
-    CRATES --> IR["tydocx-ir/ — Owned realize IR + pure lowering"]
-    CRATES --> OOXML["tydocx-ooxml/ — OOXML document model + XML writer + ZIP packaging"]
-    CRATES --> MATH["tydocx-math/ — Typst math → OMML conversion"]
-    CRATES --> PYTHON["tydocx-python/ — PyO3 Python bindings"]
-    CRATES --> FFI["tydocx-ffi/ — C ABI for .NET"]
+    ROOT["tydocx — single published crate"] --> CLI["src/main.rs — CLI binary (clap)"]
+    ROOT --> CORE["src/convert — Typst compilation + conversion engine"]
+    ROOT --> IR["src/ir — Owned realize IR + pure lowering"]
+    ROOT --> OOXML["src/ooxml — OOXML document model + XML writer + ZIP packaging"]
+    ROOT --> MATH["src/math.rs — Typst math → OMML conversion"]
+    BINDINGS["crates/ — private binding crates"] --> PYTHON["tydocx-python/ — PyO3 Python bindings"]
+    BINDINGS --> FFI["tydocx-ffi/ — C ABI for .NET"]
 ```
 
 ## Prerequisites

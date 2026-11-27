@@ -12,7 +12,7 @@ tydocx 由 [dianzuan/typort](https://github.com/dianzuan/typort) 演进而来，
 
 ```bash
 cargo install tydocx                    # 从 crates.io 安装
-cargo install --path crates/tydocx-cli  # 从 checkout 安装
+cargo install --path .                # 从 checkout 安装
 pip install tydocx                      # Python 绑定
 dotnet add package Tydocx               # .NET 绑定
 ```
@@ -101,13 +101,13 @@ OOXML XML 直接用 `quick-xml` 生成。不用 docx-rs，无中间格式。
 
 ```mermaid
 flowchart TD
-    CRATES["crates/"] --> CLI["tydocx-cli/ — CLI 二进制（clap）"]
-    CRATES --> CORE["tydocx-core/ — Typst 编译 + 转换引擎"]
-    CRATES --> IR["tydocx-ir/ — 自有 realize IR + 纯 lowering"]
-    CRATES --> OOXML["tydocx-ooxml/ — OOXML 文档模型 + XML 写入器 + ZIP 打包"]
-    CRATES --> MATH["tydocx-math/ — Typst 数学 → OMML 转换"]
-    CRATES --> PYTHON["tydocx-python/ — PyO3 Python 绑定"]
-    CRATES --> FFI["tydocx-ffi/ — 面向 .NET 的 C ABI"]
+    ROOT["tydocx — 唯一发布的 crate"] --> CLI["src/main.rs — CLI 二进制（clap）"]
+    ROOT --> CORE["src/convert — Typst 编译 + 转换引擎"]
+    ROOT --> IR["src/ir — 自有 realize IR + 纯 lowering"]
+    ROOT --> OOXML["src/ooxml — OOXML 文档模型 + XML 写入器 + ZIP 打包"]
+    ROOT --> MATH["src/math.rs — Typst 数学 → OMML 转换"]
+    BINDINGS["crates/ — 私有绑定 crate"] --> PYTHON["tydocx-python/ — PyO3 Python 绑定"]
+    BINDINGS --> FFI["tydocx-ffi/ — 面向 .NET 的 C ABI"]
 ```
 
 ## 前置依赖
