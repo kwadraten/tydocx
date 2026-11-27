@@ -37,10 +37,11 @@ fn issue_cjk_font_east_asia() {
 /// display name (`SimSun` → `宋体`, `SimHei` → `黑体`, `KaiTi` → `楷体`).
 ///
 /// This translation reads each font's own name table, so it only fires when the
-/// font is actually installed. CI installs no CJK fonts (see AGENTS.md), so the
-/// test gates each assertion on availability: with the font present it asserts
-/// the localized name; absent, it asserts the documented no-op (the English name
-/// is kept) and notes the skip. Both branches assert — it never silently passes.
+/// font is actually installed. CI does not install these Windows font families,
+/// so the test gates each assertion on availability: with the font present it
+/// asserts the localized name; absent, it asserts the documented no-op (the
+/// English name is kept) and notes the skip. Both branches assert — it never
+/// silently passes.
 #[test]
 fn issue_cjk_font_localized_name() {
     use typst::World as _;
@@ -96,7 +97,7 @@ fn issue_cjk_font_localized_name() {
 /// `Noto Serif SC Light`), clobbering the geometry-detected rendered CJK font
 /// (`NSimSun`). The fix cross-checks the declared list against the detected fonts.
 /// The cross-check needs NSimSun to actually render, so the strong assertion is
-/// gated on it being installed (CI has no CJK fonts — see AGENTS.md, Testing).
+/// gated on it being installed (CI does not install this Windows font family).
 #[test]
 fn issue_cjk_fallback_list_font() {
     use typst::World as _;
@@ -117,8 +118,8 @@ fn issue_cjk_fallback_list_font() {
 
     // Font-DEPENDENT. With NSimSun installed, geometry sees it render, so the
     // cross-check keeps it (localized to 新宋体) and the fallback never reaches
-    // eastAsia. Without NSimSun (CI installs no CJK fonts) geometry cannot tell
-    // this list from a Latin/CJK pair, and `apply_body_font_split` documents
+    // eastAsia. Without NSimSun (as on CI) geometry cannot tell this list from
+    // a Latin/CJK pair, and `apply_body_font_split` documents
     // the positional fallback: the raw declared second entry.
     if nsimsun_installed {
         assert!(

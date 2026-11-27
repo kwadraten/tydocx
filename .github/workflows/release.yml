@@ -192,6 +192,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: auto
+          before-script-linux: yum install -y perl-IPC-Cmd
           args: --release --locked --strip --out dist --manifest-path crates/tydocx-python/Cargo.toml
       - name: Install and test the built wheel
         run: |

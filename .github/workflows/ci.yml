@@ -45,6 +45,16 @@ jobs:
           cache: false
           rustflags: ""
       - uses: Swatinem/rust-cache@v2
+      - name: Install the pinned open-source CJK test font
+        run: |
+          set -euo pipefail
+          font_dir="$HOME/.local/share/fonts"
+          mkdir -p "$font_dir"
+          curl --fail --location --retry 3 \
+            "https://raw.githubusercontent.com/google/fonts/2e61f4355afd22b801791b0df176065082423b87/ofl/notoserifsc/NotoSerifSC%5Bwght%5D.ttf" \
+            --output "$font_dir/NotoSerifSC.ttf"
+          echo "050080d9255a86808f2945bffac582b31ef32bc36411ce29563b4961670c66f9  $font_dir/NotoSerifSC.ttf" | sha256sum --check
+          fc-cache --force
       - run: cargo test --workspace
 
   python-wrapper:
@@ -63,6 +73,7 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
           manylinux: auto
+          before-script-linux: yum install -y perl-IPC-Cmd
           args: --release --locked --out dist --manifest-path crates/tydocx-python/Cargo.toml
       - name: Install and test the wheel
         run: |

@@ -10,14 +10,13 @@
 // source pins the font
 // NAME in the output (environment-independent), but it is NOT sufficient for a
 // byte-exact snapshot: properties DETECTED from rendering — bold weight, size —
-// still require that font to be INSTALLED on the runner. complex_paper declares
-// "Noto Serif SC", yet CI (which installs no CJK fonts) substitutes it and no
-// longer detects the author name as bold, so its snapshot flaked. The set below
-// is therefore limited to fixtures whose fonts are embedded (Libertinus) or
-// constant ("Courier New"). CJK fixtures — whether the font is declared or
-// detected (complex_paper, hello, issue_cjk_heading_numbering,
-// edge_three_line_table) — are excluded; they are covered by the substring-based
-// tests above.
+// still require that font to be INSTALLED on the runner. CI installs a pinned
+// Noto Serif SC for the substring tests, but other CJK declarations still depend
+// on host fonts and font metrics can vary by platform. The set below is therefore
+// limited to fixtures whose fonts are embedded (Libertinus) or constant
+// ("Courier New"). CJK fixtures — whether the font is declared or detected
+// (complex_paper, hello, issue_cjk_heading_numbering, edge_three_line_table) —
+// are excluded; they are covered by the substring-based tests above.
 //
 // Regenerate after an intentional change, then review the diff before committing:
 //   UPDATE_SNAPSHOTS=1 cargo test -p tydocx --test integration golden
