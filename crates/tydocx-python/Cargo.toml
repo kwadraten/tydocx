@@ -1,0 +1,23 @@
+[package]
+name = "tydocx-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "tydocx_python"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Enabled by maturin for wheels, but not by `cargo test`, which needs to link a
+# test executable against Python.
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+pyo3 = { version = "0.24", features = ["abi3-py39"] }
+tydocx-core.workspace = true
+tydocx-ooxml.workspace = true

@@ -1,0 +1,271 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  verify:
+    name: Verify release version
+    runs-on: ubuntu-latest
+    needs: ci
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - run: python scripts/check_release_version.py "${{ github.ref_name }}"
+
+  publish-crates:
+    name: Publish crates.io
+    runs-on: ubuntu-latest
+    needs: [verify, build-native, pack-nuget, build-python-wheels]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - uses: Swatinem/rust-cache@v2
+      - name: Publish public crates in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          publish_crate() {
+            local crate="$1"
+            local output
+
+            if curl --fail --silent --show-error \
+              "https://crates.io/api/v1/crates/${crate}/${VERSION}" > /dev/null; then
+              echo "${crate}@${VERSION} is already published; skipping"
+              return 0
+            fi
+
+            for attempt in 1 2 3 4 5; do
+              if output=$(cargo publish --package "${crate}" \
+                --token "${CARGO_REGISTRY_TOKEN}" 2>&1); then
+                printf '%s\n' "${output}"
+                return 0
+              fi
+              printf '%s\n' "${output}"
+
+              if grep -Eiq 'already (uploaded|exists)' <<< "${output}"; then
+                echo "${crate}@${VERSION} is already published; skipping"
+                return 0
+              fi
+              if (( attempt < 5 )); then
+                echo "Publish attempt ${attempt} failed; retrying after the registry index updates"
+                sleep "$((attempt * 10))"
+              fi
+            done
+            return 1
+          }
+
+          publish_crate tydocx-ooxml
+          publish_crate tydocx-math
+          publish_crate tydocx-ir
+          publish_crate tydocx-core
+          publish_crate tydocx
+
+  build-native:
+    name: Build and test ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+            library: libtydocx_ffi.so
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rid: win-x64
+            library: tydocx_ffi.dll
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            rid: osx-x64
+            library: libtydocx_ffi.dylib
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            rid: osx-arm64
+            library: libtydocx_ffi.dylib
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+          rustflags: ""
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Build native library
+        run: cargo build --locked --package tydocx-ffi --release --target "${{ matrix.target }}"
+      - name: Test C# wrapper against the native library
+        env:
+          TYDOCX_NATIVE_LIBRARY: ${{ github.workspace }}/target/${{ matrix.target }}/release/${{ matrix.library }}
+        run: dotnet test dotnet/Tydocx.sln --configuration Release
+      - name: Stage NuGet native library
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "staging/runtimes/${{ matrix.rid }}/native"
+          cp "target/${{ matrix.target }}/release/${{ matrix.library }}" \
+            "staging/runtimes/${{ matrix.rid }}/native/${{ matrix.library }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: staging/
+          if-no-files-found: error
+
+  pack-nuget:
+    name: Pack and verify NuGet
+    runs-on: ubuntu-latest
+    needs: [verify, build-native]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: dotnet/Tydocx
+          merge-multiple: true
+      - name: Pack managed wrapper and native libraries
+        run: >-
+          dotnet pack dotnet/Tydocx/Tydocx.csproj
+          --configuration Release
+          --output dist
+          -p:PackageVersion=${{ needs.verify.outputs.version }}
+          -p:IncludeSymbols=false
+      - name: Check package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          packages = list(Path("dist").glob("*.nupkg"))
+          assert len(packages) == 1, packages
+          expected = {
+              "lib/net8.0/Tydocx.dll",
+              "runtimes/linux-x64/native/libtydocx_ffi.so",
+              "runtimes/win-x64/native/tydocx_ffi.dll",
+              "runtimes/osx-x64/native/libtydocx_ffi.dylib",
+              "runtimes/osx-arm64/native/libtydocx_ffi.dylib",
+          }
+          with ZipFile(packages[0]) as package:
+              missing = expected.difference(package.namelist())
+          assert not missing, f"missing NuGet native libraries: {sorted(missing)}"
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nuget-package
+          path: dist/*.nupkg
+          if-no-files-found: error
+
+  build-python-wheels:
+    name: Build and test ${{ matrix.target }} wheel
+    runs-on: ${{ matrix.os }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+          rustflags: ""
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --locked --strip --out dist --manifest-path crates/tydocx-python/Cargo.toml
+      - name: Install and test the built wheel
+        run: |
+          python -m pip install pytest
+          python -c "import glob, subprocess, sys; wheels = glob.glob('dist/*.whl'); assert len(wheels) == 1, wheels; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', wheels[0]])"
+          python -m pytest crates/tydocx-python/tests/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish-nuget:
+    name: Publish NuGet
+    runs-on: ubuntu-latest
+    needs: [verify, build-native, pack-nuget, build-python-wheels]
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          name: nuget-package
+          path: dist
+      - name: Push to nuget.org
+        run: >-
+          dotnet nuget push dist/*.nupkg
+          --source https://api.nuget.org/v3/index.json
+          --api-key ${{ secrets.NUGET_API_KEY }}
+          --skip-duplicate
+
+  publish-pypi:
+    name: Publish PyPI
+    runs-on: ubuntu-latest
+    needs: [verify, build-native, pack-nuget, build-python-wheels]
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: python-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true

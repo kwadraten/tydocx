@@ -86,7 +86,11 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   extraction is split under `convert/page/` (`units`, `style`, `source_ast`,
   `hanging_indent`, `reachable`, `margin`, `furniture`, `run_style`, and `language`);
   `convert/text_norm.rs` holds the shared CJK-space normalisation; and the
-  OOXML writer is split by emitted part under `tydocx-ooxml/src/writer/`. Each
+  OOXML writer is split by emitted part under `tydocx-ooxml/src/writer/`.
+  Python bindings live in `crates/tydocx-python`; the panic-contained C ABI for
+  the managed wrapper lives in `crates/tydocx-ffi`, with its .NET projects under
+  `dotnet/`. Both wrappers call the core converter rather than reimplementing
+  conversion. Each
   `mod.rs` is a re-exporting facade. Put a new converter, paged-style
   responsibility, or writer part in its matching module rather than growing an
   entry module. Tests are already split this way:
@@ -142,9 +146,11 @@ third source. Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## What must pass before committing
 
-CI (`.github/workflows/ci.yml`) runs exactly these four jobs. Run the **same**
-commands locally — match them verbatim, because small differences (e.g. adding
-`--all-targets` to clippy) surface lints CI does not gate on and waste time:
+CI (`.github/workflows/ci.yml`) runs these four Rust quality gates, plus jobs
+that install and test the Python wheel and run the C# wrapper tests against the
+real native library. Run the **same** Rust commands locally — match them
+verbatim, because small differences (e.g. adding `--all-targets` to clippy)
+surface lints CI does not gate on and waste time:
 
 ```bash
 cargo check --workspace
@@ -161,6 +167,9 @@ stable and twice turned a green tree red with no code change (2026-05-19,
 code). Bump the pin deliberately, in a commit that also fixes whatever the new
 toolchain flags. If your local rust is not rustup-managed (e.g. a distro
 package), make sure it matches the pinned version before trusting a local green.
+
+Version tags invoke `.github/workflows/release.yml`, which reuses CI and publishes
+only after every native package build and wrapper test passes.
 
 Do not state a specific test count in prose anywhere (README, docs, comments) —
 counts drift and become lies. Let `cargo test` report the number.

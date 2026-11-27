@@ -4,15 +4,17 @@
 
 通用的 Typst 到 Word（.docx）转换器。任何合法的 `.typ` 文件都应能转换为可编辑的 `.docx`。
 
-## 项目演进与计划
+## 项目演进
 
-tydocx 由 [dianzuan/typort](https://github.com/dianzuan/typort) 演进而来，是采用编译后端（compile-backend）技术路线的分支。后续计划独立发布 Rust crate，并使用 pyo3 建立 Python 绑定、做 .NET 绑定，向三个语言各自发布库。
+tydocx 由 [dianzuan/typort](https://github.com/dianzuan/typort) 演进而来，是采用编译后端（compile-backend）技术路线的分支。项目面向三个语言生态发布：Rust crate、使用 PyO3 实现的 Python 绑定，以及通过小型 C ABI 实现的 .NET 绑定。
 
 ## 安装
 
 ```bash
 cargo install tydocx                    # 从 crates.io 安装
 cargo install --path crates/tydocx-cli  # 从 checkout 安装
+pip install tydocx                      # Python 绑定
+dotnet add package Tydocx               # .NET 绑定
 ```
 
 ## 用法
@@ -20,6 +22,26 @@ cargo install --path crates/tydocx-cli  # 从 checkout 安装
 ```bash
 tydocx input.typ -o output.docx
 ```
+
+Python：
+
+```python
+import tydocx
+
+tydocx.convert("input.typ", "output.docx")
+docx_bytes = tydocx.convert_to_bytes("input.typ")
+```
+
+C#（.NET 8+）：
+
+```csharp
+using Tydocx;
+
+TydocxConverter.Convert("input.typ", "output.docx");
+```
+
+错误处理和选项详见 [Python](crates/tydocx-python/README.md) 与
+[.NET](dotnet/Tydocx/README.md) 包指南。
 
 版式（页边距、脚注样式等）完全由 Typst 源码控制（`#set page(margin: …)`、`#set footnote(numbering: …)`），没有外部预设。
 
@@ -84,6 +106,8 @@ flowchart TD
     CRATES --> IR["tydocx-ir/ — 自有 realize IR + 纯 lowering"]
     CRATES --> OOXML["tydocx-ooxml/ — OOXML 文档模型 + XML 写入器 + ZIP 打包"]
     CRATES --> MATH["tydocx-math/ — Typst 数学 → OMML 转换"]
+    CRATES --> PYTHON["tydocx-python/ — PyO3 Python 绑定"]
+    CRATES --> FFI["tydocx-ffi/ — 面向 .NET 的 C ABI"]
 ```
 
 ## 前置依赖
@@ -109,6 +133,11 @@ cargo test --workspace
 cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
 ```
+
+## 发布
+
+推送 `vMAJOR.MINOR.PATCH` 标签会运行 CI，构建并测试 Python 和 .NET 包，
+然后发布到 crates.io、PyPI 和 nuget.org。
 
 ## 已知限制
 

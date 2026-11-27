@@ -5,6 +5,12 @@ All notable changes to tydocx are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- PyO3 Python bindings and a C#/.NET wrapper over a panic-contained C ABI, with
+  real conversion and error-path tests for both packages.
+- Tag-driven GitHub Actions releases for crates.io, PyPI, and nuget.org.
+
 ## [0.1.0] — 2026-11-27
 
 - First independently versioned tydocx release. The version series restarts at

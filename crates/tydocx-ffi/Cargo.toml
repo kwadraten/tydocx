@@ -1,0 +1,21 @@
+[package]
+name = "tydocx-ffi"
+version.workspace = true
+description.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "tydocx_ffi"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tydocx-core.workspace = true
+tydocx-ooxml.workspace = true
+typst.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+zip.workspace = true

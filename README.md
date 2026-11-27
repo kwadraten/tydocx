@@ -4,15 +4,17 @@
 
 Universal Typst to Word (.docx) converter. Any valid `.typ` file should convert to an editable `.docx`.
 
-## Lineage and plans
+## Lineage
 
-tydocx evolved from [dianzuan/typort](https://github.com/dianzuan/typort): it is the branch that takes the compile-backend technical route. The plan going forward is to publish it as an independent Rust crate and to ship libraries for three language ecosystems — the Rust crate itself, Python bindings built with pyo3, and .NET bindings.
+tydocx evolved from [dianzuan/typort](https://github.com/dianzuan/typort): it is the branch that takes the compile-backend technical route. It ships for three language ecosystems — the Rust crate itself, Python bindings built with PyO3, and .NET bindings over a small C ABI.
 
 ## Install
 
 ```bash
 cargo install tydocx                    # from crates.io
 cargo install --path crates/tydocx-cli  # from a checkout
+pip install tydocx                      # Python bindings
+dotnet add package Tydocx               # .NET bindings
 ```
 
 ## Usage
@@ -20,6 +22,26 @@ cargo install --path crates/tydocx-cli  # from a checkout
 ```bash
 tydocx input.typ -o output.docx
 ```
+
+Python:
+
+```python
+import tydocx
+
+tydocx.convert("input.typ", "output.docx")
+docx_bytes = tydocx.convert_to_bytes("input.typ")
+```
+
+C# (.NET 8+):
+
+```csharp
+using Tydocx;
+
+TydocxConverter.Convert("input.typ", "output.docx");
+```
+
+See the [Python](crates/tydocx-python/README.md) and
+[.NET](dotnet/Tydocx/README.md) package guides for errors and options.
 
 `--compat c1|c2|c3` selects the compatibility mode (default `c2`),
 `--degradation-report path.json` writes the full degradation list, and
@@ -95,6 +117,8 @@ flowchart TD
     CRATES --> IR["tydocx-ir/ — Owned realize IR + pure lowering"]
     CRATES --> OOXML["tydocx-ooxml/ — OOXML document model + XML writer + ZIP packaging"]
     CRATES --> MATH["tydocx-math/ — Typst math → OMML conversion"]
+    CRATES --> PYTHON["tydocx-python/ — PyO3 Python bindings"]
+    CRATES --> FFI["tydocx-ffi/ — C ABI for .NET"]
 ```
 
 ## Prerequisites
@@ -121,6 +145,11 @@ cargo test --workspace
 cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
 ```
+
+## Releases
+
+Pushing a `vMAJOR.MINOR.PATCH` tag runs CI, builds and tests the Python and
+.NET packages, and publishes to crates.io, PyPI, and nuget.org.
 
 ## Known limitations
 

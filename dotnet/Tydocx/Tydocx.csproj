@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PackageId>Tydocx</PackageId>
+    <Version>0.1.0</Version>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">$(Version)</PackageVersion>
+    <Authors>tydocx contributors</Authors>
+    <Description>Convert Typst documents to editable Word (.docx) files.</Description>
+    <PackageTags>typst;word;docx;converter</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/kwadraten/tydocx</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/kwadraten/tydocx.git</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <!-- CI copies native artifacts here before `dotnet pack`. The standard
+         NuGet runtimes layout lets the .NET host select the current RID. -->
+    <None Update="runtimes/**/native/**/*"
+          Pack="true"
+          PackagePath="%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

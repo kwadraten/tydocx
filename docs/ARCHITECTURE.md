@@ -196,7 +196,14 @@ flowchart TD
     CRATES --> IR["tydocx-ir/ — The owned realize IR (IrDocument) + its pure lowering to tydocx_ooxml::Document"]
     CRATES --> OOXML["tydocx-ooxml/ — The OOXML document model (IR) + XML writer + ZIP packaging"]
     CRATES --> MATH["tydocx-math/ — Typst math Content tree → OMML"]
+    CRATES --> PYTHON["tydocx-python/ — PyO3 bindings"]
+    CRATES --> FFI["tydocx-ffi/ — C ABI for the .NET wrapper"]
 ```
+
+`tydocx-python` exposes the core converter to Python and is packaged with
+maturin. `tydocx-ffi` is the panic-contained native boundary used by the
+managed wrapper under `dotnet/Tydocx`; neither binding reimplements document
+conversion.
 
 `tydocx-ooxml/src/lib.rs` is the crate's public API index: it contains only module
 declarations and re-exports. Its writer tests live in `tydocx-ooxml/tests/`, where

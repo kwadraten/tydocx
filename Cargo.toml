@@ -5,8 +5,14 @@ members = [
     "crates/tydocx-ir",
     "crates/tydocx-ooxml",
     "crates/tydocx-math",
+    "crates/tydocx-python",
+    "crates/tydocx-ffi",
 ]
 resolver = "2"
+
+# Large Typst-based cdylibs exceed MSVC's PDB capacity with full debug info.
+[profile.dev]
+debug = "line-tables-only"
 
 [workspace.package]
 version = "0.1.0"

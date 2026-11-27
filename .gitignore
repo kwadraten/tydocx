@@ -22,6 +22,11 @@ Thumbs.db
 /tests/acceptance/package-cache/
 /tests/acceptance/thesis-survey/typst/packages/
 __pycache__/
+.pytest_cache/
+
+# Language package builds
+/dist/
+/crates/tydocx-python/dist/
 
 # Development artifacts
 /docs/superpowers/
